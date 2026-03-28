@@ -1,10 +1,11 @@
 import { v4 as uuidv4 } from "uuid";
-import type { AdapterContext, WorkflowDefinition } from "@integration/shared";
+import type { AdapterContext, AdapterCredentials } from "@integration/shared";
 import type { EventQueue } from "./event-queue";
 import type { IncomingEvent } from "./types";
 import type { PluginLoader } from "./plugin-loader";
-import { WorkflowRepository } from "../repositories/workflow-repository";
+import { WorkflowRepository, type WorkflowRecord } from "../repositories/workflow-repository";
 import { RunRepository } from "../repositories/run-repository";
+import { CredentialResolver } from "../auth/credential-resolver";
 
 export class WorkflowEngine {
   constructor(
@@ -12,6 +13,7 @@ export class WorkflowEngine {
     private readonly eventQueue: EventQueue,
     private readonly workflowRepository: WorkflowRepository,
     private readonly runRepository: RunRepository,
+    private readonly credentialResolver: CredentialResolver,
   ) {}
 
   async queueIncomingEvent(event: IncomingEvent): Promise<void> {
@@ -38,21 +40,43 @@ export class WorkflowEngine {
     });
 
     for (const workflowRecord of workflows) {
-      await this.executeWorkflow(workflowRecord.definition_json, event);
+      await this.executeWorkflow(workflowRecord, event);
     }
 
     return true;
   }
 
+  private withResolvedCredentials(
+    config: Record<string, unknown>,
+    credentials: AdapterCredentials | undefined,
+  ): Record<string, unknown> {
+    if (!credentials) {
+      return config;
+    }
+
+    const merged: Record<string, unknown> = { ...config };
+    if (credentials.accessToken && merged.accessToken === undefined) {
+      merged.accessToken = credentials.accessToken;
+    }
+    if (credentials.refreshToken && merged.refreshToken === undefined) {
+      merged.refreshToken = credentials.refreshToken;
+    }
+    if (credentials.expiresAt && merged.expiresAt === undefined) {
+      merged.expiresAt = credentials.expiresAt;
+    }
+    return merged;
+  }
+
   async executeWorkflow(
-    workflow: WorkflowDefinition,
+    workflowRecord: WorkflowRecord,
     event: IncomingEvent,
   ): Promise<void> {
+    const workflow = workflowRecord.definition_json;
     const run = await this.runRepository.createRun({
       tenantId: event.tenantId,
       organizationId: event.organizationId,
       workspaceId: event.workspaceId,
-      workflowId: workflow.id,
+      workflowId: workflowRecord.id,
       triggerPayload: event.payload,
     });
 
@@ -67,8 +91,20 @@ export class WorkflowEngine {
 
     try {
       for (const step of workflow.steps) {
+        const resolvedCredentials = await this.credentialResolver.resolveForAdapter({
+          tenantId: event.tenantId,
+          organizationId: event.organizationId,
+          workspaceId: event.workspaceId,
+          providerKey: step.adapter,
+        });
+
         const adapter = this.pluginLoader.get(step.adapter);
-        const result = await adapter.runAction(step.action, step.config, adapterContext);
+        const stepContext: AdapterContext = {
+          ...adapterContext,
+          credentials: resolvedCredentials,
+        };
+        const stepInput = this.withResolvedCredentials(step.config, resolvedCredentials);
+        const result = await adapter.runAction(step.action, stepInput, stepContext);
         stepResults.push({
           stepId: step.id,
           success: result.success,
@@ -79,11 +115,12 @@ export class WorkflowEngine {
           tenantId: event.tenantId,
           organizationId: event.organizationId,
           workspaceId: event.workspaceId,
-          workflowId: workflow.id,
+          workflowId: workflowRecord.id,
           workflowRunId: run.id,
           eventType: "workflow.step.completed",
           payload: {
-            workflowId: workflow.id,
+            workflowId: workflowRecord.id,
+            workflowExternalId: workflow.id,
             stepId: step.id,
             adapter: step.adapter,
             action: step.action,
@@ -99,7 +136,7 @@ export class WorkflowEngine {
         tenantId: event.tenantId,
         organizationId: event.organizationId,
         workspaceId: event.workspaceId,
-        workflowId: workflow.id,
+        workflowId: workflowRecord.id,
         workflowRunId: run.id,
         eventType: "workflow.failed",
         payload: {
@@ -114,4 +151,3 @@ export class WorkflowEngine {
     }
   }
 }
-

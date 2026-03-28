@@ -1,0 +1,146 @@
+openapi: 3.0.3
+info:
+  title: Integrator Platform API
+  version: 1.0.0
+servers:
+  - url: http://localhost:3000
+paths:
+  /health:
+    get:
+      summary: Service health endpoint
+      responses:
+        "200":
+          description: Service is healthy
+  /api/v1/integrations:
+    get:
+      summary: List integration adapters
+      parameters:
+        - in: header
+          name: x-user-role
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Integrations metadata
+  /api/v1/workflows:
+    get:
+      summary: List supported workflow IDs
+      responses:
+        "200":
+          description: Supported workflows
+  /api/v1/plugins:
+    get:
+      summary: List runtime plugin adapters
+      responses:
+        "200":
+          description: Plugin adapter metadata
+  /api/v1/auth/{provider}/url:
+    get:
+      summary: Build OAuth authorization URL
+      parameters:
+        - in: path
+          name: provider
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: tenantId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OAuth authorize URL
+  /api/v1/auth/{provider}/callback:
+    post:
+      summary: Exchange OAuth authorization code
+      parameters:
+        - in: path
+          name: provider
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - tenantId
+                - code
+              properties:
+                tenantId:
+                  type: string
+                code:
+                  type: string
+                redirectUri:
+                  type: string
+      responses:
+        "201":
+          description: Integration connected
+  /api/v1/sync/{workflowId}:
+    post:
+      summary: Queue sync workflow job
+      parameters:
+        - in: path
+          name: workflowId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                tenantId:
+                  type: string
+      responses:
+        "202":
+          description: Workflow accepted
+  /api/v1/webhooks/{source}:
+    post:
+      summary: Receive inbound webhook events
+      parameters:
+        - in: path
+          name: source
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "202":
+          description: Event accepted
+  /api/v1/sync/jobs:
+    get:
+      summary: List queued/running/completed jobs
+      responses:
+        "200":
+          description: Job list
+  /api/v1/sync/jobs/{jobId}:
+    get:
+      summary: Fetch job status by ID
+      parameters:
+        - in: path
+          name: jobId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Job details
+        "404":
+          description: Job not found
+  /api/v1/audit:
+    get:
+      summary: List audit records
+      responses:
+        "200":
+          description: Audit entries

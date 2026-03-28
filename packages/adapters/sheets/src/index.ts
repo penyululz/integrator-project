@@ -86,7 +86,7 @@ export class SheetsAdapter implements Adapter {
         description: "Append a row to a Google Sheet range.",
         inputSchema: {
           type: "object",
-          required: ["spreadsheetId", "range", "values", "accessToken"],
+          required: ["spreadsheetId", "range", "values"],
           properties: {
             spreadsheetId: { type: "string" },
             range: { type: "string" },
@@ -111,7 +111,7 @@ export class SheetsAdapter implements Adapter {
   async runAction(
     actionKey: string,
     input: Record<string, unknown>,
-    _context: AdapterContext,
+    context: AdapterContext,
   ): Promise<AdapterActionResult> {
     if (actionKey !== "appendRow") {
       throw new Error(`Unsupported action "${actionKey}"`);
@@ -119,7 +119,9 @@ export class SheetsAdapter implements Adapter {
 
     const spreadsheetId = String(input.spreadsheetId || "");
     const range = String(input.range || "");
-    const accessToken = String(input.accessToken || "");
+    const accessToken = String(
+      input.accessToken || context.credentials?.accessToken || "",
+    );
     const values = input.values as unknown[];
 
     if (!spreadsheetId || !range || !accessToken || !Array.isArray(values)) {
@@ -190,4 +192,3 @@ export class SheetsAdapter implements Adapter {
     };
   }
 }
-

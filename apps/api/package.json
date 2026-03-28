@@ -19,6 +19,11 @@
     "dotenv": "^17.2.3",
     "express": "^4.21.2",
     "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/supertest": "^6.0.3",
+    "pg-mem": "^3.0.5",
+    "supertest": "^7.1.4"
   }
 }
 

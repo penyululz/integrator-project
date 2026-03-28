@@ -29,6 +29,17 @@ export type AdapterContext = {
   organizationId: string;
   runId?: string;
   requestId?: string;
+  credentials?: AdapterCredentials;
+};
+
+export type AdapterCredentials = {
+  providerKey: string;
+  integrationId?: string;
+  authType?: string;
+  accessToken?: string;
+  refreshToken?: string;
+  expiresAt?: string;
+  metadata?: Record<string, unknown>;
 };
 
 export type AdapterAuthResult = {
@@ -99,4 +110,3 @@ export interface Adapter {
     context: AdapterContext,
   ): Promise<AdapterTokenRefreshResult>;
 }
-

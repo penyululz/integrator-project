@@ -90,4 +90,28 @@ export class CredentialRepository {
     );
     return inserted.rows[0];
   }
+
+  async findLatestByProvider(input: {
+    tenantId: string;
+    organizationId: string;
+    workspaceId: string;
+    providerKey: string;
+  }): Promise<CredentialRecord | null> {
+    const result = await this.pool.query<CredentialRecord>(
+      `SELECT * FROM credentials
+       WHERE tenant_id = $1
+         AND organization_id = $2
+         AND workspace_id = $3
+         AND provider_key = $4
+       ORDER BY updated_at DESC, created_at DESC
+       LIMIT 1`,
+      [
+        input.tenantId,
+        input.organizationId,
+        input.workspaceId,
+        input.providerKey,
+      ],
+    );
+    return result.rows[0] || null;
+  }
 }

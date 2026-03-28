@@ -10,6 +10,7 @@ import { PluginLoader } from "./engine/plugin-loader";
 import { EventQueue } from "./engine/event-queue";
 import { WorkflowEngine } from "./engine/workflow-engine";
 import { OAuthService } from "./auth/oauth-service";
+import { CredentialResolver } from "./auth/credential-resolver";
 import { validateWorkflowDefinition } from "./workflow/schema";
 import { WebhookAdapter } from "@integration/adapter-webhook";
 import { SheetsAdapter } from "@integration/adapter-sheets";
@@ -23,6 +24,7 @@ export type CoreRuntime = {
   eventQueue: EventQueue;
   workflowEngine: WorkflowEngine;
   oauthService: OAuthService;
+  credentialResolver: CredentialResolver;
   repositories: {
     workspaceRepository: WorkspaceRepository;
     integrationRepository: IntegrationRepository;
@@ -90,11 +92,13 @@ export async function createCoreRuntime(): Promise<CoreRuntime> {
   });
 
   const eventQueue = new EventQueue(redis);
+  const credentialResolver = new CredentialResolver(credentialRepository);
   const workflowEngine = new WorkflowEngine(
     pluginLoader,
     eventQueue,
     workflowRepository,
     runRepository,
+    credentialResolver,
   );
   const oauthService = new OAuthService(credentialRepository);
 
@@ -103,6 +107,7 @@ export async function createCoreRuntime(): Promise<CoreRuntime> {
     eventQueue,
     workflowEngine,
     oauthService,
+    credentialResolver,
     repositories: {
       workspaceRepository,
       integrationRepository,

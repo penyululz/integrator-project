@@ -10,8 +10,8 @@ type Workflow = {
 const defaultWorkflow = {
   id: "wf_shopify_to_slack",
   name: "Shopify -> Slack",
-  workspaceId: localStorage.getItem("workspaceId") || "demo-workspace",
-  organizationId: localStorage.getItem("organizationId") || "demo-org",
+  workspaceId: localStorage.getItem("workspaceId") || "",
+  organizationId: localStorage.getItem("organizationId") || "",
   trigger: {
     adapter: "shopify",
     trigger: "order_created",
@@ -93,4 +93,3 @@ export function WorkflowsPage() {
     </div>
   );
 }
-

@@ -1,0 +1,91 @@
+{
+  "info": {
+    "name": "Integration Platform API",
+    "_postman_id": "d5f18f55-2d2a-4e6f-a0f3-1aab815d7f74",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Health",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/health",
+          "host": ["{{baseUrl}}"],
+          "path": ["health"]
+        }
+      }
+    },
+    {
+      "name": "List Plugins",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "x-user-role",
+            "value": "admin"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/v1/plugins",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "v1", "plugins"]
+        }
+      }
+    },
+    {
+      "name": "Run Shopify -> Sheets + Slack",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "content-type",
+            "value": "application/json"
+          },
+          {
+            "key": "x-user-role",
+            "value": "admin"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"tenantId\": \"sandbox-tenant\",\n  \"since\": \"2026-01-01T00:00:00.000Z\",\n  \"limit\": 25,\n  \"spreadsheetId\": \"sheet-id\",\n  \"range\": \"Orders!A:F\",\n  \"slackChannel\": \"#orders\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/v1/sync/shopify-orders-to-sheets-and-slack",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "v1", "sync", "shopify-orders-to-sheets-and-slack"]
+        }
+      }
+    },
+    {
+      "name": "Inbound Webhook",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "content-type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"eventType\": \"shopify.order.created\",\n  \"payload\": {\"id\": \"demo\"}\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/v1/webhooks/shopify",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "v1", "webhooks", "shopify"]
+        }
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3000"
+    }
+  ]
+}
+

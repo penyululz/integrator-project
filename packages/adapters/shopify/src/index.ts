@@ -104,6 +104,8 @@ export class ShopifyAdapter implements Adapter {
           type: "object",
           properties: {
             orderId: { type: "number" },
+            accessToken: { type: "string" },
+            shopName: { type: "string" },
           },
           required: ["orderId"],
         },
@@ -127,20 +129,33 @@ export class ShopifyAdapter implements Adapter {
   async runAction(
     actionKey: string,
     input: Record<string, unknown>,
-    _context: AdapterContext,
+    context: AdapterContext,
   ): Promise<AdapterActionResult> {
     if (actionKey !== "readOrder") {
       throw new Error(`Unsupported action "${actionKey}"`);
-    }
-    if (!this.client) {
-      throw new Error("Shopify client is not initialized.");
     }
     const orderId = Number(input.orderId);
     if (!Number.isFinite(orderId)) {
       throw new Error("readOrder requires numeric orderId.");
     }
 
-    const order = await this.client.order.get(orderId);
+    const accessToken = String(
+      input.accessToken || context.credentials?.accessToken || this.config.accessToken,
+    );
+    const shopName = String(input.shopName || this.config.shopName);
+    const client =
+      accessToken && shopName
+        ? new Shopify({
+            shopName,
+            accessToken,
+          })
+        : this.client;
+
+    if (!client) {
+      throw new Error("Shopify client is not initialized.");
+    }
+
+    const order = await client.order.get(orderId);
     return {
       success: true,
       output: order as unknown as Record<string, unknown>,

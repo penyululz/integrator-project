@@ -128,12 +128,14 @@ export class SlackAdapter implements Adapter {
   async runAction(
     actionKey: string,
     input: Record<string, unknown>,
-    _context: AdapterContext,
+    context: AdapterContext,
   ): Promise<AdapterActionResult> {
     if (actionKey !== "sendMessage") {
       throw new Error(`Unsupported action "${actionKey}"`);
     }
-    if (!this.client) {
+    const runtimeToken = context.credentials?.accessToken;
+    const client = runtimeToken ? new WebClient(runtimeToken) : this.client;
+    if (!client) {
       throw new Error("Slack client is not initialized.");
     }
     const text = String(input.text || "");
@@ -141,7 +143,7 @@ export class SlackAdapter implements Adapter {
     if (!text || !channel) {
       throw new Error("sendMessage requires channel and text.");
     }
-    const response = await this.client.chat.postMessage({
+    const response = await client.chat.postMessage({
       channel,
       text,
     });
@@ -180,4 +182,3 @@ export class SlackAdapter implements Adapter {
     };
   }
 }
-

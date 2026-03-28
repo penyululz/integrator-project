@@ -1,4 +1,5 @@
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
+import { fetchSetupContext } from "../api";
 
 export function LoginPage() {
   const [tenantId, setTenantId] = useState(localStorage.getItem("tenantId") || "");
@@ -10,6 +11,7 @@ export function LoginPage() {
   );
   const [userId, setUserId] = useState(localStorage.getItem("userId") || "");
   const [saved, setSaved] = useState(false);
+  const [loadingSeed, setLoadingSeed] = useState(false);
 
   function onSubmit(event: FormEvent) {
     event.preventDefault();
@@ -19,6 +21,35 @@ export function LoginPage() {
     localStorage.setItem("userId", userId);
     setSaved(true);
   }
+
+  async function loadSeededContext() {
+    setLoadingSeed(true);
+    try {
+      const context = await fetchSetupContext();
+      if (!context) {
+        return;
+      }
+      setTenantId(context.tenantId);
+      setOrganizationId(context.organizationId);
+      setWorkspaceId(context.workspaceId);
+      setUserId(context.userId || "");
+      localStorage.setItem("tenantId", context.tenantId);
+      localStorage.setItem("organizationId", context.organizationId);
+      localStorage.setItem("workspaceId", context.workspaceId);
+      if (context.userId) {
+        localStorage.setItem("userId", context.userId);
+      }
+      setSaved(true);
+    } finally {
+      setLoadingSeed(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!tenantId || !organizationId || !workspaceId) {
+      void loadSeededContext();
+    }
+  }, []);
 
   return (
     <div>
@@ -48,9 +79,16 @@ export function LoginPage() {
           <input value={userId} onChange={(e) => setUserId(e.target.value)} />
         </p>
         <button type="submit">Save</button>
+        <button
+          type="button"
+          onClick={() => void loadSeededContext()}
+          disabled={loadingSeed}
+          style={{ marginLeft: 8 }}
+        >
+          {loadingSeed ? "Loading..." : "Use Seeded Context"}
+        </button>
       </form>
       {saved ? <p>Saved context headers to local storage.</p> : null}
     </div>
   );
 }
-

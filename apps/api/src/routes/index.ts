@@ -16,6 +16,32 @@ export function createApiRouter(runtime: CoreRuntime): Router {
     res.json({ status: "ok" });
   });
 
+  router.get("/setup/context", async (_req, res, next) => {
+    try {
+      const context = await runtime.repositories.workspaceRepository.getSeededContext();
+      if (!context) {
+        res.status(404).json({
+          error:
+            "No seeded organization/workspace found. Run migrations and seed first.",
+        });
+        return;
+      }
+
+      res.json({
+        context: {
+          tenantId: context.tenant_id,
+          organizationId: context.organization_id,
+          workspaceId: context.workspace_id,
+          userId: context.user_id,
+          organizationSlug: context.organization_slug,
+          workspaceSlug: context.workspace_slug,
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.get("/workspaces", requireContext, async (req, res, next) => {
     try {
       const workspaces = await runtime.repositories.workspaceRepository.list(

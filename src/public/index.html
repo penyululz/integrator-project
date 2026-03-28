@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Integrator Dashboard</title>
+    <style>
+      :root {
+        --bg: #f5f7fb;
+        --card: #ffffff;
+        --text: #132238;
+        --accent: #1f6feb;
+        --accent-soft: #dbeafe;
+        --border: #d8e0eb;
+      }
+
+      body {
+        margin: 0;
+        font-family: "Segoe UI", Tahoma, sans-serif;
+        background: radial-gradient(circle at top right, #e0ecff 0%, var(--bg) 45%);
+        color: var(--text);
+      }
+
+      main {
+        max-width: 980px;
+        margin: 0 auto;
+        padding: 28px 20px 64px;
+      }
+
+      h1 {
+        margin: 0 0 10px;
+        font-size: 1.9rem;
+      }
+
+      p {
+        margin: 0 0 20px;
+      }
+
+      .card {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        padding: 16px;
+        margin: 14px 0;
+        box-shadow: 0 8px 22px rgba(9, 30, 66, 0.07);
+      }
+
+      label {
+        display: block;
+        margin: 10px 0 6px;
+        font-size: 0.9rem;
+      }
+
+      input,
+      select,
+      textarea,
+      button {
+        width: 100%;
+        font-size: 0.95rem;
+        padding: 10px;
+        border-radius: 8px;
+        border: 1px solid var(--border);
+        box-sizing: border-box;
+      }
+
+      button {
+        border: none;
+        cursor: pointer;
+        color: white;
+        background: var(--accent);
+      }
+
+      pre {
+        background: #0f172a;
+        color: #dbeafe;
+        border-radius: 10px;
+        padding: 14px;
+        overflow: auto;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Integration Control Panel</h1>
+      <p>Trigger sync workflows and inspect responses from the API.</p>
+
+      <section class="card">
+        <h2>Run Workflow</h2>
+        <label for="tenant">Tenant ID</label>
+        <input id="tenant" value="demo-tenant" />
+
+        <label for="workflow">Workflow</label>
+        <select id="workflow">
+          <option value="salesforce-contacts-to-snowflake">Salesforce Contacts -> Snowflake</option>
+          <option value="jira-issues-to-servicenow">Jira Issues -> ServiceNow</option>
+          <option value="shopify-orders-to-snowflake">Shopify Orders -> Snowflake</option>
+          <option value="shopify-orders-to-sheets-and-slack">Shopify Orders -> Google Sheets + Slack</option>
+        </select>
+
+        <label for="payload">JSON Payload</label>
+        <textarea id="payload" rows="8">{ "since": "2026-01-01T00:00:00.000Z", "spreadsheetId": "sheet-id", "range": "Orders!A:F", "slackChannel": "#orders" }</textarea>
+
+        <button id="runButton" type="button">Queue Workflow</button>
+      </section>
+
+      <section class="card">
+        <h2>Response</h2>
+        <pre id="output">No request made yet.</pre>
+      </section>
+    </main>
+
+    <script>
+      const button = document.getElementById("runButton");
+      const output = document.getElementById("output");
+
+      button.addEventListener("click", async () => {
+        const tenantId = document.getElementById("tenant").value.trim();
+        const workflow = document.getElementById("workflow").value;
+        let payload = {};
+
+        try {
+          payload = JSON.parse(document.getElementById("payload").value || "{}");
+        } catch (error) {
+          output.textContent = "Payload JSON is invalid: " + error.message;
+          return;
+        }
+
+        const response = await fetch(`/api/v1/sync/${workflow}`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-user-id": "dashboard-user",
+            "x-user-role": "admin",
+            "x-tenant-id": tenantId,
+          },
+          body: JSON.stringify(payload),
+        });
+
+        const body = await response.json();
+        output.textContent = JSON.stringify(body, null, 2);
+      });
+    </script>
+  </body>
+</html>
