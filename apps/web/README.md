@@ -38,6 +38,27 @@ Credential values are never rendered in the UI. The frontend consumes only maske
 
 The Workflows page is now a structured form-driven builder with a JSON-assisted mode.
 
+### Template Library + Create from Template
+
+The Workflows page includes a built-in template browser:
+
+- search templates by title/tags/adapters
+- filter by category
+- inspect template details and setup notes
+- view trigger/action summaries and required adapters
+- detect missing enabled adapters
+- detect adapters that still need credentials
+
+Operator flow:
+
+1. choose template
+2. click `Use Template`
+3. review/edit generated workflow in form or JSON mode
+4. run `Validate DSL`
+5. create workflow
+
+Template-derived workflows are assigned a fresh workflow ID and carry template metadata.
+
 ### Supported v1 authoring features
 
 - trigger adapter and trigger selection
@@ -125,6 +146,32 @@ Run detail now includes a **Durable Wait State** panel sourced from `GET /api/v1
 - password: `dev-password`
 - org slug: `demo-org`
 - workspace slug: `default`
+
+## Onboarding Flow (v1)
+
+A dedicated authenticated onboarding route is available:
+
+- `/onboarding`
+
+The onboarding view provides:
+
+- progress bar for first-success milestones
+- checklist for:
+  - connect integration
+  - pick template
+  - validate/create workflow
+  - trigger first run
+- quick links into integrations/workflows/runs
+- recommended starter templates with deep-links into workflow creation
+
+## Empty-state Guidance
+
+Key pages now include guided empty states:
+
+- dashboard: first-run guidance with links to onboarding/integrations/workflows
+- integrations: guidance when no integrations/credentials exist
+- workflows: guidance when no workflows exist
+- runs: guidance to create and test first workflow
 
 ## Known v1 UX limits
 

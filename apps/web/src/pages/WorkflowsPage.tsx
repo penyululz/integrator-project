@@ -1,11 +1,18 @@
-﻿import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import {
   createWorkflow,
   getAuthSession,
+  getWorkflowTemplate,
   listAdapters,
+  listCredentials,
+  listWorkflowTemplates,
   listWorkflows,
   type AdapterMetadata,
+  type CredentialRecord,
   type WorkflowRecord,
+  type WorkflowTemplate,
+  type WorkflowTemplateSummary,
   validateWorkflow,
 } from "../api";
 import { StepCardEditor } from "../components/StepCardEditor";
@@ -13,6 +20,9 @@ import { ValidationErrorPanel } from "../components/ValidationErrorPanel";
 import {
   buildDefaultWorkflow,
   buildReferenceHints,
+  buildWorkflowFromTemplate,
+  filterWorkflowTemplates,
+  getTemplateMissingAdapters,
   parseJsonObject,
 } from "./workflow-builder-helpers";
 import {
@@ -27,8 +37,19 @@ import {
 
 export function WorkflowsPage() {
   const session = getAuthSession();
+  const [searchParams] = useSearchParams();
+  const requestedTemplateId = searchParams.get("templateId");
   const [adapters, setAdapters] = useState<AdapterMetadata[]>([]);
+  const [credentials, setCredentials] = useState<CredentialRecord[]>([]);
   const [workflows, setWorkflows] = useState<WorkflowRecord[]>([]);
+  const [templates, setTemplates] = useState<WorkflowTemplateSummary[]>([]);
+  const [templateCache, setTemplateCache] = useState<Record<string, WorkflowTemplate>>({});
+  const [templateSearch, setTemplateSearch] = useState("");
+  const [templateCategory, setTemplateCategory] = useState("all");
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(
+    requestedTemplateId,
+  );
+  const [autoLoadedTemplateId, setAutoLoadedTemplateId] = useState<string | null>(null);
   const [name, setName] = useState("New Workflow");
   const [definition, setDefinition] = useState<WorkflowDefinition>(() =>
     buildDefaultWorkflow([], {
@@ -43,20 +64,27 @@ export function WorkflowsPage() {
   const [contextDraft, setContextDraft] = useState("{}");
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
   const [serverError, setServerError] = useState<string | null>(null);
+  const [infoMessage, setInfoMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
   async function load() {
     setLoading(true);
     try {
-      const [{ adapters: adapterMetadata }, workflowRecords] = await Promise.all([
-        listAdapters(),
-        listWorkflows(),
-      ]);
+      const [{ adapters: adapterMetadata }, workflowRecords, templateRecords, credentialRecords] =
+        await Promise.all([
+          listAdapters(),
+          listWorkflows(),
+          listWorkflowTemplates(),
+          listCredentials(),
+        ]);
 
       setAdapters(adapterMetadata);
       setWorkflows(workflowRecords);
+      setTemplates(templateRecords);
+      setCredentials(credentialRecords);
 
-      if (adapterMetadata.length > 0 && definition.trigger.adapter === "webhook" && definition.steps.length === 1 && definition.steps[0].id === "step_action_1") {
+      const defaultAdapterKey = adapterMetadata[0]?.key || "";
+      if (!definition.trigger.adapter && defaultAdapterKey) {
         const nextDefault = buildDefaultWorkflow(adapterMetadata, {
           workspaceId: session?.scope.workspaceId || "",
           organizationId: session?.scope.organizationId || "",
@@ -76,6 +104,25 @@ export function WorkflowsPage() {
   }, []);
 
   useEffect(() => {
+    if (!selectedTemplateId) {
+      return;
+    }
+    void ensureTemplateLoaded(selectedTemplateId);
+  }, [selectedTemplateId]);
+
+  useEffect(() => {
+    if (!requestedTemplateId) {
+      return;
+    }
+    if (autoLoadedTemplateId === requestedTemplateId) {
+      return;
+    }
+    void onUseTemplate(requestedTemplateId).then(() => {
+      setAutoLoadedTemplateId(requestedTemplateId);
+    });
+  }, [requestedTemplateId, autoLoadedTemplateId]);
+
+  useEffect(() => {
     if (editorMode === "form") {
       setJsonDraft(JSON.stringify(definition, null, 2));
     }
@@ -83,10 +130,41 @@ export function WorkflowsPage() {
 
   const referenceHints = useMemo(() => buildReferenceHints(definition), [definition]);
 
+  const templateCategories = useMemo(() => {
+    return ["all", ...new Set(templates.map((template) => template.category))];
+  }, [templates]);
+
+  const filteredTemplates = useMemo(
+    () => filterWorkflowTemplates(templates, templateSearch, templateCategory),
+    [templates, templateSearch, templateCategory],
+  );
+
+  const selectedTemplate = useMemo(() => {
+    if (!selectedTemplateId) {
+      return null;
+    }
+    return (
+      templateCache[selectedTemplateId] ||
+      templates.find((template) => template.id === selectedTemplateId) ||
+      null
+    );
+  }, [selectedTemplateId, templateCache, templates]);
+
+  const enabledAdapterKeys = useMemo(() => adapters.map((adapter) => adapter.key), [adapters]);
+
+  const validCredentialProviders = useMemo(() => {
+    return new Set(
+      credentials
+        .filter((credential) => credential.credential_status === "valid")
+        .map((credential) => credential.provider_key),
+    );
+  }, [credentials]);
+
   function updateDefinition(nextDefinition: WorkflowDefinition) {
     setDefinition(nextDefinition);
     setValidationErrors([]);
     setServerError(null);
+    setInfoMessage(null);
   }
 
   function createStep(type: "action" | "branch" | "delay"): WorkflowStep {
@@ -99,7 +177,10 @@ export function WorkflowsPage() {
     }
 
     const adapterWithActions = adapters.find((adapter) => adapter.supportedActions.length > 0);
-    const nextStep = createEmptyActionStep(nextId, adapterWithActions?.key || adapters[0]?.key || "webhook");
+    const nextStep = createEmptyActionStep(
+      nextId,
+      adapterWithActions?.key || adapters[0]?.key || "webhook",
+    );
     nextStep.action = adapterWithActions?.supportedActions[0] || "";
     return nextStep;
   }
@@ -113,9 +194,51 @@ export function WorkflowsPage() {
     return result.valid;
   }
 
+  async function ensureTemplateLoaded(templateId: string): Promise<WorkflowTemplate | null> {
+    if (templateCache[templateId]) {
+      return templateCache[templateId];
+    }
+
+    try {
+      const template = await getWorkflowTemplate(templateId);
+      setTemplateCache((current) => ({
+        ...current,
+        [templateId]: template,
+      }));
+      return template;
+    } catch (error) {
+      setServerError((error as Error).message || "Failed to load template detail.");
+      return null;
+    }
+  }
+
+  async function onUseTemplate(templateId: string) {
+    setServerError(null);
+    setInfoMessage(null);
+    const template = await ensureTemplateLoaded(templateId);
+    if (!template) {
+      return;
+    }
+
+    const nextDefinition = buildWorkflowFromTemplate(template, {
+      workspaceId: session?.scope.workspaceId || "",
+      organizationId: session?.scope.organizationId || "",
+    });
+    updateDefinition(nextDefinition);
+    setName(`${template.title} Workflow`);
+    setSelectedTemplateId(template.id);
+    setTriggerConfigDraft(JSON.stringify(nextDefinition.trigger.config || {}, null, 2));
+    setContextDraft(JSON.stringify(nextDefinition.context || {}, null, 2));
+    setEditorMode("form");
+    setInfoMessage(
+      `Loaded template "${template.title}". You can review and edit before creating.`,
+    );
+  }
+
   async function onCreate(event: FormEvent) {
     event.preventDefault();
     setServerError(null);
+    setInfoMessage(null);
 
     let candidate = definition;
 
@@ -150,6 +273,7 @@ export function WorkflowsPage() {
       setTriggerConfigDraft(JSON.stringify(nextDefault.trigger.config || {}, null, 2));
       setContextDraft(JSON.stringify(nextDefault.context || {}, null, 2));
       setValidationErrors([]);
+      setInfoMessage("Workflow created successfully.");
     } catch (error) {
       const maybeAxiosError = error as {
         response?: {
@@ -165,18 +289,148 @@ export function WorkflowsPage() {
         setValidationErrors(maybeAxiosError.response.data.details);
       }
       setServerError(
-        maybeAxiosError.response?.data?.error || maybeAxiosError.message || "Failed to create workflow.",
+        maybeAxiosError.response?.data?.error ||
+          maybeAxiosError.message ||
+          "Failed to create workflow.",
       );
     }
   }
 
   return (
-    <div>
+    <div style={{ display: "grid", gap: 16 }}>
       <h2>Workflows</h2>
       <p>
-        Use Form mode for guided editing. Switch to JSON mode for advanced edits. Both modes are
-        synchronized.
+        Start from a template for fast onboarding, then refine in Form mode or JSON mode.
       </p>
+
+      <section style={{ border: "1px solid #d0d0d0", borderRadius: 10, padding: 12 }}>
+        <h3 style={{ marginTop: 0 }}>Template Library</h3>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <label>
+            Search
+            <input
+              value={templateSearch}
+              onChange={(event) => setTemplateSearch(event.target.value)}
+              placeholder="Search templates, tags, adapters..."
+              style={{ marginLeft: 8, minWidth: 250 }}
+            />
+          </label>
+          <label>
+            Category
+            <select
+              value={templateCategory}
+              onChange={(event) => setTemplateCategory(event.target.value)}
+              style={{ marginLeft: 8 }}
+            >
+              {templateCategories.map((category) => (
+                <option key={category} value={category}>
+                  {category}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+
+        {filteredTemplates.length === 0 ? (
+          <p style={{ marginTop: 12 }}>No templates matched your filters.</p>
+        ) : null}
+
+        <div style={{ display: "grid", gap: 10, marginTop: 12 }}>
+          {filteredTemplates.map((template) => {
+            const missingAdapters = getTemplateMissingAdapters(template, enabledAdapterKeys);
+            const adaptersNeedingConnection = template.requiredAdapters.filter((adapterKey) => {
+              if (missingAdapters.includes(adapterKey)) {
+                return false;
+              }
+              const adapter = adapters.find((item) => item.key === adapterKey);
+              if (!adapter || adapter.authType === "none") {
+                return false;
+              }
+              return !validCredentialProviders.has(adapterKey);
+            });
+
+            return (
+              <article
+                key={template.id}
+                style={{
+                  border: "1px solid #ececec",
+                  borderRadius: 8,
+                  padding: 10,
+                  background: selectedTemplateId === template.id ? "#f7f9fc" : "white",
+                }}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+                  <div>
+                    <strong>{template.title}</strong>
+                    <div style={{ fontSize: 12, color: "#555" }}>
+                      {template.category} | {template.difficulty} | {template.stepCount} top-level
+                      step(s)
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedTemplateId(template.id)}
+                    >
+                      Inspect
+                    </button>
+                    <button type="button" onClick={() => void onUseTemplate(template.id)}>
+                      Use Template
+                    </button>
+                  </div>
+                </div>
+
+                <p style={{ margin: "8px 0 4px" }}>{template.description}</p>
+                <div style={{ fontSize: 12 }}>
+                  <div>
+                    <strong>Trigger:</strong> {template.triggerSummary}
+                  </div>
+                  <div>
+                    <strong>Actions:</strong> {template.actionSummary}
+                  </div>
+                  <div>
+                    <strong>Required adapters:</strong> {template.requiredAdapters.join(", ")}
+                  </div>
+                </div>
+
+                {missingAdapters.length > 0 ? (
+                  <div style={{ marginTop: 8, color: "#b42318", fontSize: 13 }}>
+                    Missing enabled adapters: {missingAdapters.join(", ")}
+                  </div>
+                ) : null}
+
+                {adaptersNeedingConnection.length > 0 ? (
+                  <div style={{ marginTop: 4, color: "#8a5100", fontSize: 13 }}>
+                    Adapter credentials needed: {adaptersNeedingConnection.join(", ")}.{" "}
+                    <Link to="/integrations">Connect in Integrations</Link>.
+                  </div>
+                ) : null}
+              </article>
+            );
+          })}
+        </div>
+      </section>
+
+      {selectedTemplate ? (
+        <section style={{ border: "1px solid #d0d0d0", borderRadius: 10, padding: 12 }}>
+          <h3 style={{ marginTop: 0 }}>Template Details: {selectedTemplate.title}</h3>
+          <p>{selectedTemplate.description}</p>
+          <div style={{ fontSize: 13 }}>
+            <div>
+              <strong>Tags:</strong>{" "}
+              {"tags" in selectedTemplate ? selectedTemplate.tags.join(", ") : "none"}
+            </div>
+            <div>
+              <strong>Setup notes:</strong>
+            </div>
+            <ul style={{ marginTop: 4 }}>
+              {"setupNotes" in selectedTemplate
+                ? selectedTemplate.setupNotes.map((note) => <li key={note}>{note}</li>)
+                : null}
+            </ul>
+          </div>
+        </section>
+      ) : null}
 
       <form onSubmit={onCreate} style={{ display: "grid", gap: 12 }}>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
@@ -442,20 +696,29 @@ export function WorkflowsPage() {
         </div>
       </form>
 
+      {infoMessage ? <div style={{ color: "#0f5132" }}>{infoMessage}</div> : null}
       {serverError ? (
         <div style={{ color: "#b42318", marginTop: 10 }}>{serverError}</div>
       ) : null}
       <ValidationErrorPanel errors={validationErrors} />
 
-      <h3 style={{ marginTop: 20 }}>Existing Workflows</h3>
-      {loading ? <p>Loading...</p> : null}
-      <ul>
-        {workflows.map((workflow) => (
-          <li key={workflow.id}>
-            {workflow.name} ({workflow.status}) - updated {workflow.updated_at}
-          </li>
-        ))}
-      </ul>
+      <section style={{ border: "1px solid #d0d0d0", borderRadius: 10, padding: 12 }}>
+        <h3 style={{ marginTop: 0 }}>Existing Workflows</h3>
+        {loading ? <p>Loading...</p> : null}
+        {!loading && workflows.length === 0 ? (
+          <p style={{ marginBottom: 0 }}>
+            No workflows yet. Start from a template above or use the{" "}
+            <Link to="/onboarding">onboarding guide</Link> for your first workflow run.
+          </p>
+        ) : null}
+        <ul>
+          {workflows.map((workflow) => (
+            <li key={workflow.id}>
+              {workflow.name} ({workflow.status}) - updated {workflow.updated_at}
+            </li>
+          ))}
+        </ul>
+      </section>
     </div>
   );
 }

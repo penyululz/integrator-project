@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import {
   getAdapterAnalytics,
   getAnalyticsOverview,
@@ -103,6 +104,28 @@ export function DashboardPage() {
 
       {overview ? (
         <>
+          {overview.totalRuns === 0 ? (
+            <section
+              style={{
+                border: "1px dashed #9ca3af",
+                borderRadius: 10,
+                padding: 12,
+                background: "#f8fafc",
+              }}
+            >
+              <h3 style={{ marginTop: 0 }}>No Runs Yet</h3>
+              <p style={{ marginBottom: 8 }}>
+                Start with onboarding, connect an integration, and create a workflow from a
+                template to generate your first operational metrics.
+              </p>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                <Link to="/onboarding">Open Onboarding</Link>
+                <Link to="/integrations">Connect Integrations</Link>
+                <Link to="/workflows">Create Workflow</Link>
+              </div>
+            </section>
+          ) : null}
+
           <section
             style={{
               border: "1px solid #d0d0d0",

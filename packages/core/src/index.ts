@@ -71,6 +71,18 @@ export type {
   LoginResponse,
 } from "./auth/types";
 export { AuthError, UnauthenticatedError, UnauthorizedError } from "./auth/errors";
+export {
+  listWorkflowTemplates,
+  listWorkflowTemplateSummaries,
+  getWorkflowTemplateById,
+  validateWorkflowTemplates,
+} from "./templates";
+export type {
+  WorkflowTemplate,
+  WorkflowTemplateSummary,
+  WorkflowTemplateCategory,
+  WorkflowTemplateDifficulty,
+} from "./templates";
 
 export async function createCoreRuntime(): Promise<CoreRuntime> {
   const env = getCoreEnv();

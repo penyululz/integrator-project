@@ -1,4 +1,4 @@
-import type { AdapterMetadata } from "../api";
+import type { AdapterMetadata, WorkflowTemplate, WorkflowTemplateSummary } from "../api";
 import { collectStepIds, createEmptyActionStep, type WorkflowDefinition } from "../types/workflow";
 
 type SessionScope = {
@@ -55,4 +55,72 @@ export function buildReferenceHints(definition: WorkflowDefinition): string[] {
     refs.push(`steps.${stepId}.output`);
   }
   return refs;
+}
+
+function normalizeWorkflowIdSeed(input: string): string {
+  const normalized = input
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+/, "")
+    .replace(/_+$/, "");
+  return normalized || "workflow";
+}
+
+export function buildWorkflowFromTemplate(
+  template: WorkflowTemplate,
+  scope?: SessionScope,
+  seed = Date.now(),
+): WorkflowDefinition {
+  const clone = JSON.parse(JSON.stringify(template.workflow)) as WorkflowDefinition;
+  return {
+    ...clone,
+    id: `wf_${normalizeWorkflowIdSeed(template.id)}_${seed}`,
+    name: template.title,
+    workspaceId: scope?.workspaceId || clone.workspaceId,
+    organizationId: scope?.organizationId || clone.organizationId,
+    metadata: {
+      ...(clone.metadata || {}),
+      templateId: template.id,
+      createdFromTemplateAt: new Date(seed).toISOString(),
+    },
+  };
+}
+
+export function filterWorkflowTemplates(
+  templates: WorkflowTemplateSummary[],
+  query: string,
+  category: string,
+): WorkflowTemplateSummary[] {
+  const normalizedQuery = query.trim().toLowerCase();
+  return templates.filter((template) => {
+    if (category !== "all" && template.category !== category) {
+      return false;
+    }
+
+    if (!normalizedQuery) {
+      return true;
+    }
+
+    const haystack = [
+      template.title,
+      template.description,
+      template.category,
+      template.difficulty,
+      template.triggerSummary,
+      template.actionSummary,
+      ...template.tags,
+      ...template.requiredAdapters,
+    ]
+      .join(" ")
+      .toLowerCase();
+    return haystack.includes(normalizedQuery);
+  });
+}
+
+export function getTemplateMissingAdapters(
+  template: WorkflowTemplateSummary,
+  enabledAdapterKeys: string[],
+): string[] {
+  const enabled = new Set(enabledAdapterKeys);
+  return template.requiredAdapters.filter((adapterKey) => !enabled.has(adapterKey));
 }

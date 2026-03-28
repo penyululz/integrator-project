@@ -4,6 +4,7 @@ import { getAuthSession, logout } from "./api";
 import { LoginPage } from "./pages/LoginPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { IntegrationsPage } from "./pages/IntegrationsPage";
+import { OnboardingPage } from "./pages/OnboardingPage";
 import { WorkflowsPage } from "./pages/WorkflowsPage";
 import { RunsPage } from "./pages/RunsPage";
 
@@ -30,6 +31,7 @@ export default function App() {
       <nav style={{ display: "flex", gap: 12, marginBottom: 20 }}>
         <Link to="/login">Login</Link>
         <Link to="/dashboard">Dashboard</Link>
+        <Link to="/onboarding">Onboarding</Link>
         <Link to="/integrations">Integrations</Link>
         <Link to="/workflows">Workflows</Link>
         <Link to="/runs">Runs</Link>
@@ -67,6 +69,14 @@ export default function App() {
           element={
             <ProtectedRoute>
               <IntegrationsPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/onboarding"
+          element={
+            <ProtectedRoute>
+              <OnboardingPage />
             </ProtectedRoute>
           }
         />

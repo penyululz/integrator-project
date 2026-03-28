@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import {
   getRun,
   listLogs,
@@ -182,7 +183,18 @@ export function RunsPage() {
         <section style={{ border: "1px solid #d0d0d0", borderRadius: 10, padding: 12 }}>
           <h3 style={{ marginTop: 0 }}>Run List</h3>
           {loadingRuns ? <p>Loading runs...</p> : null}
-          {runs.length === 0 ? <p>No runs yet.</p> : null}
+          {runs.length === 0 ? (
+            <div>
+              <p>No runs yet.</p>
+              <p style={{ marginTop: 0 }}>
+                Create a workflow from a template, trigger a test event, then inspect results here.
+              </p>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                <Link to="/workflows">Create Workflow</Link>
+                <Link to="/onboarding">Open Onboarding</Link>
+              </div>
+            </div>
+          ) : null}
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr>

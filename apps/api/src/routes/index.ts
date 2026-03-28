@@ -1,7 +1,9 @@
 import { Router } from "express";
 import {
   evaluateAlertSignals,
+  getWorkflowTemplateById,
   getDefaultAlertThresholds,
+  listWorkflowTemplateSummaries,
   validateWorkflowDefinition,
   type CoreRuntime,
 } from "@integration/core";
@@ -339,6 +341,25 @@ export function createApiRouter(runtime: CoreRuntime): Router {
     } catch (error) {
       next(error);
     }
+  });
+
+  router.get("/templates", requireAuth, (_req, res) => {
+    res.json({
+      templates: listWorkflowTemplateSummaries(),
+    });
+  });
+
+  router.get("/templates/:id", requireAuth, (req, res) => {
+    const templateId = resolveRouteParam(req.params.id);
+    const template = getWorkflowTemplateById(templateId);
+    if (!template) {
+      res.status(404).json({ error: "Not found." });
+      return;
+    }
+
+    res.json({
+      template,
+    });
   });
 
   router.post(

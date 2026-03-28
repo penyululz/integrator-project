@@ -193,6 +193,24 @@ export type AnalyticsFilters = {
   limit?: number;
 };
 
+export type WorkflowTemplateSummary = {
+  id: string;
+  title: string;
+  description: string;
+  category: string;
+  difficulty: string;
+  requiredAdapters: string[];
+  tags: string[];
+  setupNotes: string[];
+  triggerSummary: string;
+  actionSummary: string;
+  stepCount: number;
+};
+
+export type WorkflowTemplate = Omit<WorkflowTemplateSummary, "triggerSummary" | "actionSummary" | "stepCount"> & {
+  workflow: WorkflowDefinition;
+};
+
 type LoginInput = {
   email: string;
   password: string;
@@ -358,6 +376,16 @@ export async function createWorkflow(input: {
 }): Promise<WorkflowRecord> {
   const response = await apiClient().post("/workflows", input);
   return response.data.workflow;
+}
+
+export async function listWorkflowTemplates(): Promise<WorkflowTemplateSummary[]> {
+  const response = await apiClient().get("/templates");
+  return response.data.templates || [];
+}
+
+export async function getWorkflowTemplate(templateId: string): Promise<WorkflowTemplate> {
+  const response = await apiClient().get(`/templates/${templateId}`);
+  return response.data.template;
 }
 
 export async function listRuns(): Promise<RunRecord[]> {

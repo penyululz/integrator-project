@@ -240,6 +240,18 @@ Roles: `owner`, `admin`, `member`
 
 `GET /api/v1/integrations` also includes loaded adapter keys.
 
+## Template Library Endpoints (v1)
+
+Authenticated template endpoints:
+
+- `GET /api/v1/templates`
+  - returns built-in template summaries for browse/filter UX
+  - includes metadata such as category, difficulty, required adapters, tags, and setup notes
+- `GET /api/v1/templates/:id`
+  - returns full template detail including workflow definition payload for create-from-template flow
+
+Template workflow definitions are validated against the same workflow DSL validator used for user-created workflows.
+
 ## Plugin Loading (Manifest-driven)
 
 Core runtime discovers adapters from `packages/adapters/*/manifest.json`.

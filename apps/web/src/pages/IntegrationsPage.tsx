@@ -1,4 +1,5 @@
-﻿import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import {
   completeAdapterAuth,
   createIntegration,
@@ -97,7 +98,9 @@ export function IntegrationsPage() {
       });
       if (response.authUrl) {
         window.open(response.authUrl, "_blank", "noopener,noreferrer");
-        setMessage(`Opened auth URL for ${adapter}. Complete provider auth, then submit callback code below.`);
+        setMessage(
+          `Opened auth URL for ${adapter}. Complete provider auth, then submit callback code below.`,
+        );
       } else {
         setMessage(`Auth started for ${adapter}.`);
       }
@@ -152,9 +155,9 @@ export function IntegrationsPage() {
           <input
             placeholder="Integration name"
             value={name}
-            onChange={(e) => setName(e.target.value)}
+            onChange={(event) => setName(event.target.value)}
           />
-          <select value={adapterKey} onChange={(e) => setAdapterKey(e.target.value)}>
+          <select value={adapterKey} onChange={(event) => setAdapterKey(event.target.value)}>
             {adapters.map((adapter) => (
               <option key={adapter.key} value={adapter.key}>
                 {adapter.displayName}
@@ -170,7 +173,7 @@ export function IntegrationsPage() {
         <p style={{ marginTop: 0 }}>Redirect URI: {redirectUri}</p>
 
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-          <select value={authAdapterKey} onChange={(e) => setAuthAdapterKey(e.target.value)}>
+          <select value={authAdapterKey} onChange={(event) => setAuthAdapterKey(event.target.value)}>
             {adapters.map((adapter) => (
               <option key={adapter.key} value={adapter.key}>
                 {adapter.displayName}
@@ -184,13 +187,19 @@ export function IntegrationsPage() {
 
         <form
           onSubmit={onCompleteOAuth}
-          style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}
+          style={{
+            marginTop: 10,
+            display: "flex",
+            gap: 8,
+            flexWrap: "wrap",
+            alignItems: "center",
+          }}
         >
           <label>
             Callback code
             <input
               value={authCode}
-              onChange={(e) => setAuthCode(e.target.value)}
+              onChange={(event) => setAuthCode(event.target.value)}
               style={{ marginLeft: 8, minWidth: 240 }}
             />
           </label>
@@ -234,8 +243,14 @@ export function IntegrationsPage() {
                   <td>{runtimeMetadata?.displayName || installed.manifest.displayName}</td>
                   <td>{installed.enabled ? "enabled" : "disabled"}</td>
                   <td>{authType}</td>
-                  <td>{(runtimeMetadata?.supportedTriggers || installed.manifest.supportedTriggers).join(", ") || "none"}</td>
-                  <td>{(runtimeMetadata?.supportedActions || installed.manifest.supportedActions).join(", ") || "none"}</td>
+                  <td>
+                    {(runtimeMetadata?.supportedTriggers || installed.manifest.supportedTriggers).join(", ") ||
+                      "none"}
+                  </td>
+                  <td>
+                    {(runtimeMetadata?.supportedActions || installed.manifest.supportedActions).join(", ") ||
+                      "none"}
+                  </td>
                   <td>
                     <div>{statusLabel}</div>
                     {credential?.validation_error ? (
@@ -267,6 +282,12 @@ export function IntegrationsPage() {
 
       <section style={{ border: "1px solid #d0d0d0", borderRadius: 10, padding: 12 }}>
         <h3 style={{ marginTop: 0 }}>Configured Integrations</h3>
+        {integrations.length === 0 ? (
+          <p style={{ marginTop: 0 }}>
+            No integrations configured yet. Connect an adapter, then create your first workflow from
+            a template.
+          </p>
+        ) : null}
         <ul>
           {integrations.map((integration) => (
             <li key={integration.id}>
@@ -274,6 +295,30 @@ export function IntegrationsPage() {
             </li>
           ))}
         </ul>
+        {integrations.length === 0 ? (
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <Link to="/workflows">Browse Templates</Link>
+            <Link to="/onboarding">Open Onboarding</Link>
+          </div>
+        ) : null}
+      </section>
+
+      <section style={{ border: "1px solid #d0d0d0", borderRadius: 10, padding: 12 }}>
+        <h3 style={{ marginTop: 0 }}>Credential Health</h3>
+        {credentials.length === 0 ? (
+          <p style={{ marginBottom: 0 }}>
+            No provider credentials connected yet. Use adapter auth controls above to connect and
+            validate credentials.
+          </p>
+        ) : (
+          <ul style={{ marginBottom: 0 }}>
+            {credentials.map((credential) => (
+              <li key={credential.id}>
+                {credential.provider_key}: {credential.credential_status}
+              </li>
+            ))}
+          </ul>
+        )}
       </section>
     </div>
   );
