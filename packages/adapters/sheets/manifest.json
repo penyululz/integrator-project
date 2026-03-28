@@ -1,9 +1,19 @@
 {
+  "schemaVersion": "1.0",
   "key": "sheets",
-  "name": "Google Sheets Adapter",
+  "displayName": "Google Sheets Adapter",
   "version": "1.0.0",
   "description": "Executes Google Sheets actions using Google APIs.",
-  "triggers": [],
-  "actions": ["appendRow"]
+  "entry": "./src/index.ts",
+  "exportName": "SheetsAdapter",
+  "auth": {
+    "type": "oauth2"
+  },
+  "supportedTriggers": [],
+  "supportedActions": ["appendRow"],
+  "defaultEnabled": true,
+  "platform": {
+    "apiVersion": "v1",
+    "minCoreVersion": "1.0.0"
+  }
 }
-

@@ -15,12 +15,8 @@ import { AuthService } from "./auth/auth-service";
 import { AuthRepository } from "./repositories/auth-repository";
 import { validateWorkflowDefinition } from "./workflow/schema";
 import { getCoreEnv } from "./db/env";
-import { WebhookAdapter } from "@integration/adapter-webhook";
-import { SheetsAdapter } from "@integration/adapter-sheets";
-import { EmailAdapter } from "@integration/adapter-email";
-import { ShopifyAdapter } from "@integration/adapter-shopify";
-import { SlackAdapter } from "@integration/adapter-slack";
-import type { Adapter } from "@integration/shared";
+import { parseEnabledAdapterSetFromEnv } from "./engine/plugin-loader";
+import path from "node:path";
 
 export type CoreRuntime = {
   pluginLoader: PluginLoader;
@@ -50,16 +46,6 @@ export type {
 } from "./auth/types";
 export { AuthError, UnauthenticatedError, UnauthorizedError } from "./auth/errors";
 
-function createAdapterInstances(): Adapter[] {
-  return [
-    new WebhookAdapter(),
-    new SheetsAdapter(),
-    new EmailAdapter(),
-    new ShopifyAdapter(),
-    new SlackAdapter(),
-  ];
-}
-
 export async function createCoreRuntime(): Promise<CoreRuntime> {
   const env = getCoreEnv();
   const pool = getPostgresPool();
@@ -73,8 +59,28 @@ export async function createCoreRuntime(): Promise<CoreRuntime> {
   const authRepository = new AuthRepository(pool);
 
   const pluginLoader = new PluginLoader();
-  for (const adapter of createAdapterInstances()) {
-    pluginLoader.register(adapter);
+  const discovered = await pluginLoader.loadFromManifests({
+    baseDir:
+      process.env.ADAPTER_MANIFESTS_DIR ||
+      path.resolve(__dirname, "../../../packages/adapters"),
+    platformVersion: "1.0.0",
+    enabledKeys: parseEnabledAdapterSetFromEnv(process.env.ENABLED_ADAPTER_KEYS),
+    disabledKeys: parseEnabledAdapterSetFromEnv(process.env.DISABLED_ADAPTER_KEYS),
+    continueOnError: true,
+  });
+  const loadedCount = discovered.filter((result) => result.status === "loaded").length;
+  if (loadedCount === 0) {
+    throw new Error("No adapters were loaded from manifests.");
+  }
+  for (const issue of discovered.filter((result) => result.status === "invalid")) {
+    console.warn(
+      `[plugin-loader] skipped invalid plugin manifest at ${issue.manifestPath}: ${issue.reason || "invalid manifest"}`,
+    );
+  }
+  for (const skipped of discovered.filter((result) => result.status === "disabled")) {
+    console.info(
+      `[plugin-loader] adapter "${skipped.key || "unknown"}" is disabled (${skipped.manifestPath}).`,
+    );
   }
 
   await pluginLoader.initAll({

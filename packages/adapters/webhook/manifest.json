@@ -1,9 +1,19 @@
 {
+  "schemaVersion": "1.0",
   "key": "webhook",
-  "name": "Webhook Adapter",
+  "displayName": "Webhook Adapter",
   "version": "1.0.0",
   "description": "Receives HTTP POST webhook payloads and forwards them to workflow engine.",
-  "triggers": ["http_post"],
-  "actions": ["forward_payload"]
+  "entry": "./src/index.ts",
+  "exportName": "WebhookAdapter",
+  "auth": {
+    "type": "none"
+  },
+  "supportedTriggers": ["http_post"],
+  "supportedActions": ["forward_payload"],
+  "defaultEnabled": true,
+  "platform": {
+    "apiVersion": "v1",
+    "minCoreVersion": "1.0.0"
+  }
 }
-

@@ -1,9 +1,19 @@
 {
+  "schemaVersion": "1.0",
   "key": "slack",
-  "name": "Slack Adapter",
+  "displayName": "Slack Adapter",
   "version": "1.0.0",
   "description": "Sends Slack messages via Web API.",
-  "triggers": [],
-  "actions": ["sendMessage"]
+  "entry": "./src/index.ts",
+  "exportName": "SlackAdapter",
+  "auth": {
+    "type": "oauth2"
+  },
+  "supportedTriggers": ["dummy_test_trigger"],
+  "supportedActions": ["sendMessage"],
+  "defaultEnabled": true,
+  "platform": {
+    "apiVersion": "v1",
+    "minCoreVersion": "1.0.0"
+  }
 }
-

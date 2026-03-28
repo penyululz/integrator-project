@@ -1,9 +1,19 @@
 {
+  "schemaVersion": "1.0",
   "key": "email",
-  "name": "Email Adapter",
+  "displayName": "Email Adapter",
   "version": "1.0.0",
   "description": "Sends email via SMTP using nodemailer.",
-  "triggers": [],
-  "actions": ["sendEmail"]
+  "entry": "./src/index.ts",
+  "exportName": "EmailAdapter",
+  "auth": {
+    "type": "smtp"
+  },
+  "supportedTriggers": [],
+  "supportedActions": ["sendEmail"],
+  "defaultEnabled": true,
+  "platform": {
+    "apiVersion": "v1",
+    "minCoreVersion": "1.0.0"
+  }
 }
-

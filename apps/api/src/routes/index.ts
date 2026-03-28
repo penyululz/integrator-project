@@ -121,13 +121,40 @@ export function createApiRouter(runtime: CoreRuntime): Router {
         organizationId: scope.organizationId,
         workspaceId: scope.workspaceId,
       });
+      const adapterMetadata = runtime.pluginLoader.listMetadata();
       res.json({
         integrations,
-        adapters: runtime.pluginLoader.list().map((adapter) => adapter.key),
+        adapters: adapterMetadata.map((adapter) => adapter.key),
       });
     } catch (error) {
       next(error);
     }
+  });
+
+  router.get("/adapters", requireAuth, (_req, res) => {
+    const enabledAdapters = runtime.pluginLoader.listMetadata();
+    const installedAdapters = runtime.pluginLoader.listInstalledManifests().map((entry) => ({
+      key: entry.key,
+      enabled: entry.enabled,
+      manifestPath: entry.manifestPath,
+      manifest: {
+        schemaVersion: entry.manifest.schemaVersion,
+        displayName: entry.manifest.displayName,
+        version: entry.manifest.version,
+        description: entry.manifest.description,
+        auth: entry.manifest.auth,
+        supportedTriggers: entry.manifest.supportedTriggers,
+        supportedActions: entry.manifest.supportedActions,
+        defaultEnabled: entry.manifest.defaultEnabled,
+        platform: entry.manifest.platform,
+      },
+    }));
+
+    res.json({
+      adapters: enabledAdapters,
+      installedAdapters,
+      loadResults: runtime.pluginLoader.getLoadResults(),
+    });
   });
 
   router.post(

@@ -18,6 +18,7 @@ import { WorkflowRepository } from "../../../packages/core/src/repositories/work
 import { RunRepository } from "../../../packages/core/src/repositories/run-repository";
 import { AuthRepository } from "../../../packages/core/src/repositories/auth-repository";
 import type { CoreEnv } from "../../../packages/core/src/db/env";
+import { WebhookAdapter } from "../../../packages/adapters/webhook/src";
 
 class InMemoryRedisQueue {
   private readonly events: string[] = [];
@@ -192,6 +193,7 @@ async function createAuthRuntime() {
   });
 
   const pluginLoader = new PluginLoader();
+  pluginLoader.register(new WebhookAdapter());
   await pluginLoader.initAll({});
 
   const redisClient = new InMemoryRedisQueue();
@@ -278,6 +280,18 @@ describe("Auth + tenant isolation hardening", () => {
       expect(response.status).toBe(200);
       expect(response.body.integrations).toHaveLength(1);
       expect(response.body.integrations[0].name).toBe("Org A Integration");
+
+      const adapters = await request(app)
+        .get("/api/v1/adapters")
+        .set("authorization", `Bearer ${login.accessToken}`);
+      expect(adapters.status).toBe(200);
+      expect(adapters.body.adapters).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            key: "webhook",
+          }),
+        ]),
+      );
     } finally {
       await runtime.close();
     }

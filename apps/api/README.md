@@ -129,6 +129,33 @@ Roles: `owner`, `admin`, `member`
 - `GET /api/v1/retries` returns retry queue state
 - `GET /api/v1/logs` returns retry lifecycle events
 
+## Adapter Plugin Endpoints
+
+- `GET /api/v1/adapters`
+  - enabled/loaded adapter metadata
+  - installed manifest metadata
+  - plugin loader discovery results (loaded/disabled/invalid)
+
+`GET /api/v1/integrations` also includes loaded adapter keys.
+
+## Plugin Loading (Manifest-driven)
+
+Core runtime discovers adapters from `packages/adapters/*/manifest.json`.
+
+At startup it validates:
+
+- manifest schema
+- duplicate keys
+- entry path/module resolution
+- platform compatibility metadata
+- manifest trigger/action declarations against adapter implementation
+
+Environment controls:
+
+- `ADAPTER_MANIFESTS_DIR` optional custom discovery root
+- `ENABLED_ADAPTER_KEYS` optional allowlist
+- `DISABLED_ADAPTER_KEYS` optional denylist
+
 ## Migrations Added
 
 - `004_membership_tables.sql`

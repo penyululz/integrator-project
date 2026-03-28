@@ -1,9 +1,19 @@
 {
+  "schemaVersion": "1.0",
   "key": "shopify",
-  "name": "Shopify Adapter",
+  "displayName": "Shopify Adapter",
   "version": "1.0.0",
   "description": "Handles Shopify order webhooks and order reads.",
-  "triggers": ["order_created"],
-  "actions": ["readOrder"]
+  "entry": "./src/index.ts",
+  "exportName": "ShopifyAdapter",
+  "auth": {
+    "type": "oauth2"
+  },
+  "supportedTriggers": ["order_created"],
+  "supportedActions": ["readOrder"],
+  "defaultEnabled": true,
+  "platform": {
+    "apiVersion": "v1",
+    "minCoreVersion": "1.0.0"
+  }
 }
-

@@ -1,8 +1,20 @@
 {
+  "schemaVersion": "1.0",
   "key": "http-api",
-  "name": "HTTP API Adapter",
+  "displayName": "HTTP API Adapter",
   "version": "0.1.0",
   "description": "TODO placeholder for v1 future adapter.",
-  "status": "todo"
+  "entry": "./src/index.ts",
+  "exportName": "HttpApiAdapterPlaceholder",
+  "auth": {
+    "type": "custom"
+  },
+  "supportedTriggers": [],
+  "supportedActions": [],
+  "defaultEnabled": false,
+  "enabled": false,
+  "platform": {
+    "apiVersion": "v1",
+    "minCoreVersion": "1.0.0"
+  }
 }
-

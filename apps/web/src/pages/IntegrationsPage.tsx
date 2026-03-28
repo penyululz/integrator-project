@@ -8,17 +8,35 @@ type Integration = {
   status: string;
 };
 
+type AdapterMetadata = {
+  key: string;
+  displayName: string;
+  description: string;
+  authType: string;
+  supportedTriggers: string[];
+  supportedActions: string[];
+};
+
 export function IntegrationsPage() {
   const [integrations, setIntegrations] = useState<Integration[]>([]);
+  const [adapters, setAdapters] = useState<AdapterMetadata[]>([]);
   const [name, setName] = useState("");
-  const [adapterKey, setAdapterKey] = useState("webhook");
+  const [adapterKey, setAdapterKey] = useState("");
   const [loading, setLoading] = useState(false);
 
   async function load() {
     setLoading(true);
     try {
-      const response = await apiClient().get("/integrations");
-      setIntegrations(response.data.integrations || []);
+      const [integrationsResponse, adaptersResponse] = await Promise.all([
+        apiClient().get("/integrations"),
+        apiClient().get("/adapters"),
+      ]);
+      setIntegrations(integrationsResponse.data.integrations || []);
+      const metadata = (adaptersResponse.data.adapters || []) as AdapterMetadata[];
+      setAdapters(metadata);
+      if (!adapterKey && metadata[0]?.key) {
+        setAdapterKey(metadata[0].key);
+      }
     } finally {
       setLoading(false);
     }
@@ -30,6 +48,9 @@ export function IntegrationsPage() {
 
   async function onCreate(event: FormEvent) {
     event.preventDefault();
+    if (!adapterKey) {
+      return;
+    }
     await apiClient().post("/integrations", {
       name,
       adapterKey,
@@ -49,11 +70,11 @@ export function IntegrationsPage() {
           onChange={(e) => setName(e.target.value)}
         />
         <select value={adapterKey} onChange={(e) => setAdapterKey(e.target.value)}>
-          <option value="webhook">webhook</option>
-          <option value="sheets">sheets</option>
-          <option value="email">email</option>
-          <option value="shopify">shopify</option>
-          <option value="slack">slack</option>
+          {adapters.map((adapter) => (
+            <option key={adapter.key} value={adapter.key}>
+              {adapter.key}
+            </option>
+          ))}
         </select>
         <button type="submit">Create</button>
       </form>
@@ -66,7 +87,17 @@ export function IntegrationsPage() {
           </li>
         ))}
       </ul>
+
+      <h3>Enabled Adapters</h3>
+      <ul>
+        {adapters.map((adapter) => (
+          <li key={adapter.key}>
+            {adapter.displayName} ({adapter.key}) - auth: {adapter.authType} - actions:{" "}
+            {adapter.supportedActions.join(", ") || "none"} - triggers:{" "}
+            {adapter.supportedTriggers.join(", ") || "none"}
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
-
