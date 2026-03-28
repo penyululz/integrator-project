@@ -100,6 +100,8 @@ export type RunRecord = {
   max_attempts: number;
   last_error: string | null;
   dead_lettered_at: string | null;
+  started_at: string | null;
+  finished_at: string | null;
   created_at: string;
   result_json: Record<string, unknown>;
 };
@@ -121,6 +123,57 @@ export type EventLogRecord = {
   created_at: string;
   workflow_run_id: string | null;
   payload_json: Record<string, unknown>;
+};
+
+export type AnalyticsAlertSignal = {
+  key: string;
+  severity: "warn" | "critical";
+  message: string;
+  value: number;
+  threshold: number;
+};
+
+export type AnalyticsOverview = {
+  totalRuns: number;
+  successRuns: number;
+  failedRuns: number;
+  deadLetterRuns: number;
+  retryingRuns: number;
+  retryEvents: number;
+  queuePendingJobs: number;
+  queueDueJobs: number;
+  queueLagSeconds: number;
+  credentialValidationFailures: number;
+  avgRunDurationSeconds: number;
+};
+
+export type WorkflowAnalyticsRow = {
+  workflowId: string;
+  workflowKey: string;
+  workflowName: string;
+  totalRuns: number;
+  successRuns: number;
+  failedRuns: number;
+  deadLetterRuns: number;
+  retryEvents: number;
+  avgDurationSeconds: number;
+};
+
+export type AdapterAnalyticsRow = {
+  adapterKey: string;
+  actionAttempts: number;
+  actionFailures: number;
+  avgActionDurationMs: number;
+};
+
+export type AnalyticsFilters = {
+  from?: string;
+  to?: string;
+  workflowId?: string;
+  status?: string;
+  adapter?: string;
+  workspaceId?: string;
+  limit?: number;
 };
 
 type LoginInput = {
@@ -316,4 +369,35 @@ export async function listLogs(input?: {
     },
   });
   return response.data.logs || [];
+}
+
+export async function getAnalyticsOverview(input: AnalyticsFilters = {}): Promise<{
+  overview: AnalyticsOverview;
+  alerts: AnalyticsAlertSignal[];
+}> {
+  const response = await apiClient().get("/analytics/overview", {
+    params: input,
+  });
+  return {
+    overview: response.data.overview,
+    alerts: response.data.alerts || [],
+  };
+}
+
+export async function getWorkflowAnalytics(
+  input: AnalyticsFilters = {},
+): Promise<WorkflowAnalyticsRow[]> {
+  const response = await apiClient().get("/analytics/workflows", {
+    params: input,
+  });
+  return response.data.workflows || [];
+}
+
+export async function getAdapterAnalytics(
+  input: AnalyticsFilters = {},
+): Promise<AdapterAnalyticsRow[]> {
+  const response = await apiClient().get("/analytics/adapters", {
+    params: input,
+  });
+  return response.data.adapters || [];
 }

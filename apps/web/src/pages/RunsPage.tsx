@@ -11,6 +11,9 @@ import {
 import { RunStatusBadge } from "../components/RunStatusBadge";
 import {
   compactPayload,
+  getActionTimingSummary,
+  getFailureClassification,
+  getRunDurationMs,
   getRunStepTimeline,
   RUN_EVENT_FILTER_OPTIONS,
   toRunLogHighlights,
@@ -36,6 +39,16 @@ export function RunsPage() {
 
   const timeline = useMemo(() => getRunStepTimeline(selectedRun), [selectedRun]);
   const logHighlights = useMemo(() => toRunLogHighlights(logs), [logs]);
+  const runDurationMs = useMemo(() => getRunDurationMs(selectedRun), [selectedRun]);
+  const failureClassification = useMemo(
+    () => getFailureClassification(selectedRun),
+    [selectedRun],
+  );
+  const actionTiming = useMemo(
+    () => getActionTimingSummary(logHighlights),
+    [logHighlights],
+  );
+  const retryCount = selectedRun ? Math.max(0, selectedRun.attempt_count - 1) : 0;
 
   const branchSelections = useMemo(
     () => logHighlights.filter((entry) => entry.eventType === "workflow.branch.selected"),
@@ -206,6 +219,22 @@ export function RunsPage() {
                 </div>
                 <div>
                   <strong>Attempts:</strong> {selectedRun.attempt_count}/{selectedRun.max_attempts}
+                </div>
+                <div>
+                  <strong>Retry Count:</strong> {retryCount}
+                </div>
+                <div>
+                  <strong>Run Duration:</strong>{" "}
+                  {runDurationMs !== null ? `${runDurationMs}ms` : "not available"}
+                </div>
+                <div>
+                  <strong>Failure Classification:</strong> {failureClassification || "-"}
+                </div>
+                <div>
+                  <strong>Adapter Timing:</strong>{" "}
+                  {actionTiming.count > 0
+                    ? `avg ${Math.round(actionTiming.avgMs)}ms, max ${Math.round(actionTiming.maxMs)}ms`
+                    : "not available"}
                 </div>
                 {selectedRun.last_error ? (
                   <div style={{ color: "#b42318" }}>

@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   compactPayload,
+  getActionTimingSummary,
+  getFailureClassification,
+  getRunDurationMs,
   getRunStepTimeline,
   toRunLogHighlights,
 } from "./runs-helpers";
@@ -15,6 +18,8 @@ describe("runs-helpers", () => {
       max_attempts: 3,
       last_error: "boom",
       dead_lettered_at: null,
+      started_at: "2026-03-29T10:00:00.000Z",
+      finished_at: "2026-03-29T10:00:05.000Z",
       created_at: "2026-03-29T10:00:00.000Z",
       result_json: {
         steps: [
@@ -56,6 +61,7 @@ describe("runs-helpers", () => {
           stepPath: "1",
           selectedBranch: "then",
           attempt: 1,
+          adapterActionDurationMs: 45,
         },
       },
     ]);
@@ -63,6 +69,54 @@ describe("runs-helpers", () => {
     expect(highlights).toHaveLength(1);
     expect(highlights[0].selectedBranch).toBe("then");
     expect(highlights[0].stepId).toBe("branch_1");
+    expect(highlights[0].adapterActionDurationMs).toBe(45);
+  });
+
+  it("computes run duration, failure classification, and action timing summaries", () => {
+    const run = {
+      id: "run-1",
+      workflow_id: "wf-1",
+      status: "failed",
+      attempt_count: 2,
+      max_attempts: 3,
+      last_error: "boom",
+      dead_lettered_at: null,
+      started_at: "2026-03-29T10:00:00.000Z",
+      finished_at: "2026-03-29T10:00:05.000Z",
+      created_at: "2026-03-29T10:00:00.000Z",
+      result_json: {
+        classification: "validation_error",
+      },
+    };
+
+    const highlights = toRunLogHighlights([
+      {
+        id: "log-1",
+        event_type: "workflow.step.completed",
+        created_at: "2026-03-29T10:00:01.000Z",
+        workflow_run_id: "run-1",
+        payload_json: {
+          adapterActionDurationMs: 50,
+        },
+      },
+      {
+        id: "log-2",
+        event_type: "workflow.step.completed",
+        created_at: "2026-03-29T10:00:02.000Z",
+        workflow_run_id: "run-1",
+        payload_json: {
+          adapterActionDurationMs: 150,
+        },
+      },
+    ]);
+
+    expect(getRunDurationMs(run)).toBe(5000);
+    expect(getFailureClassification(run)).toBe("validation_error");
+    expect(getActionTimingSummary(highlights)).toEqual({
+      count: 2,
+      avgMs: 100,
+      maxMs: 150,
+    });
   });
 
   it("redacts known token fields from payload summaries", () => {

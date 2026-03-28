@@ -8,6 +8,7 @@ export type IncomingEvent = {
   triggerKey: string;
   payload: Record<string, unknown>;
   receivedAt: string;
+  correlationId?: string;
 };
 
 export type ExecutionContext = {

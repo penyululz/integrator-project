@@ -2,15 +2,23 @@ import express from "express";
 import cors from "cors";
 import { ZodError } from "zod";
 import { sanitizeSensitiveMessage } from "@integration/shared";
-import type { CoreRuntime } from "@integration/core";
+import {
+  getGlobalObservabilityRuntime,
+  type CoreRuntime,
+} from "@integration/core";
 import { withAuth } from "./middleware/auth";
 import { createApiRouter } from "./routes";
 
 export function createApp(runtime: CoreRuntime) {
   const app = express();
+  const observability = runtime.observability || getGlobalObservabilityRuntime();
 
   app.use(cors());
   app.use(express.json({ limit: "2mb" }));
+  app.get("/metrics", (_req, res) => {
+    res.setHeader("Content-Type", observability.metrics.contentType);
+    res.status(200).send(observability.metrics.render());
+  });
   app.use(withAuth(runtime));
   app.use("/api/v1", createApiRouter(runtime));
 

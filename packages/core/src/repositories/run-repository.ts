@@ -64,8 +64,133 @@ export type RetryQueueRecord = {
   updated_at: string;
 };
 
+export type AnalyticsFilter = {
+  tenantId: string;
+  organizationId: string;
+  workspaceId: string;
+  from?: string;
+  to?: string;
+  workflowId?: string;
+  status?: WorkflowRunStatus;
+  adapterKey?: string;
+  limit?: number;
+};
+
+export type AnalyticsOverview = {
+  totalRuns: number;
+  successRuns: number;
+  failedRuns: number;
+  deadLetterRuns: number;
+  retryingRuns: number;
+  retryEvents: number;
+  queuePendingJobs: number;
+  queueDueJobs: number;
+  queueLagSeconds: number;
+  credentialValidationFailures: number;
+  avgRunDurationSeconds: number;
+};
+
+export type WorkflowAnalyticsRow = {
+  workflowId: string;
+  workflowKey: string;
+  workflowName: string;
+  totalRuns: number;
+  successRuns: number;
+  failedRuns: number;
+  deadLetterRuns: number;
+  retryEvents: number;
+  avgDurationSeconds: number;
+};
+
+export type AdapterAnalyticsRow = {
+  adapterKey: string;
+  actionAttempts: number;
+  actionFailures: number;
+  avgActionDurationMs: number;
+};
+
 export class RunRepository {
   constructor(private readonly pool: Pool) {}
+
+  private buildRunFilter(
+    input: AnalyticsFilter,
+    tableAlias = "",
+  ): {
+    predicates: string[];
+    values: unknown[];
+  } {
+    const prefix = tableAlias ? `${tableAlias}.` : "";
+    const predicates = [
+      `${prefix}tenant_id = $1`,
+      `${prefix}organization_id = $2`,
+      `${prefix}workspace_id = $3`,
+    ];
+    const values: unknown[] = [
+      input.tenantId,
+      input.organizationId,
+      input.workspaceId,
+    ];
+
+    if (input.from) {
+      values.push(input.from);
+      predicates.push(`${prefix}created_at >= $${values.length}`);
+    }
+    if (input.to) {
+      values.push(input.to);
+      predicates.push(`${prefix}created_at <= $${values.length}`);
+    }
+    if (input.workflowId) {
+      values.push(input.workflowId);
+      predicates.push(`${prefix}workflow_id = $${values.length}`);
+    }
+    if (input.status) {
+      values.push(input.status);
+      predicates.push(`${prefix}status = $${values.length}`);
+    }
+
+    return {
+      predicates,
+      values,
+    };
+  }
+
+  private buildEventFilter(input: AnalyticsFilter): {
+    predicates: string[];
+    values: unknown[];
+  } {
+    const predicates = [
+      "tenant_id = $1",
+      "organization_id = $2",
+      "workspace_id = $3",
+    ];
+    const values: unknown[] = [
+      input.tenantId,
+      input.organizationId,
+      input.workspaceId,
+    ];
+
+    if (input.from) {
+      values.push(input.from);
+      predicates.push(`created_at >= $${values.length}`);
+    }
+    if (input.to) {
+      values.push(input.to);
+      predicates.push(`created_at <= $${values.length}`);
+    }
+    if (input.workflowId) {
+      values.push(input.workflowId);
+      predicates.push(`workflow_id = $${values.length}`);
+    }
+    if (input.adapterKey) {
+      values.push(input.adapterKey);
+      predicates.push(`payload_json->>'adapter' = $${values.length}`);
+    }
+
+    return {
+      predicates,
+      values,
+    };
+  }
 
   async createRun(input: {
     tenantId: string;
@@ -438,6 +563,270 @@ export class RunRepository {
       [input.tenantId, input.organizationId, input.workspaceId],
     );
     return result.rows;
+  }
+
+  async getAnalyticsOverview(input: AnalyticsFilter): Promise<AnalyticsOverview> {
+    const runFilter = this.buildRunFilter(input);
+    const runs = await this.pool.query<{
+      total_runs: string;
+      success_runs: string;
+      failed_runs: string;
+      dead_letter_runs: string;
+      retrying_runs: string;
+      avg_run_duration_seconds: string | null;
+    }>(
+      `SELECT
+         COUNT(*)::bigint AS total_runs,
+         SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END)::bigint AS success_runs,
+         SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END)::bigint AS failed_runs,
+         SUM(CASE WHEN status = 'dead_lettered' THEN 1 ELSE 0 END)::bigint AS dead_letter_runs,
+         SUM(CASE WHEN status = 'retrying' THEN 1 ELSE 0 END)::bigint AS retrying_runs,
+         AVG(
+           EXTRACT(EPOCH FROM COALESCE(finished_at, NOW())) -
+           EXTRACT(EPOCH FROM COALESCE(started_at, created_at))
+         ) AS avg_run_duration_seconds
+       FROM workflow_runs
+       WHERE ${runFilter.predicates.join("\n         AND ")}`,
+      runFilter.values,
+    );
+
+    const queue = await this.pool.query<{
+      pending_jobs: string;
+      due_jobs: string;
+      queue_lag_seconds: string | null;
+    }>(
+      `SELECT
+         SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END)::bigint AS pending_jobs,
+         SUM(CASE WHEN status = 'pending' AND next_run_at <= NOW() THEN 1 ELSE 0 END)::bigint AS due_jobs,
+         COALESCE(
+           EXTRACT(EPOCH FROM NOW()) -
+           EXTRACT(EPOCH FROM MIN(CASE WHEN status = 'pending' THEN next_run_at ELSE NULL END)),
+           0
+         ) AS queue_lag_seconds
+       FROM retry_queue
+       WHERE tenant_id = $1
+         AND organization_id = $2
+         AND workspace_id = $3`,
+      [input.tenantId, input.organizationId, input.workspaceId],
+    );
+
+    const eventFilter = this.buildEventFilter(input);
+    const retryEventValues = [...eventFilter.values];
+    const retryEvents = await this.pool.query<{ retry_events: string }>(
+      `SELECT COUNT(*)::bigint AS retry_events
+       FROM event_logs
+       WHERE ${eventFilter.predicates.join("\n         AND ")}
+         AND event_type = 'workflow.retry.scheduled'`,
+      retryEventValues,
+    );
+
+    const credentialPredicates = [
+      "tenant_id = $1",
+      "organization_id = $2",
+      "workspace_id = $3",
+      "credential_status = 'invalid'",
+    ];
+    const credentialValues: unknown[] = [
+      input.tenantId,
+      input.organizationId,
+      input.workspaceId,
+    ];
+    if (input.from) {
+      credentialValues.push(input.from);
+      credentialPredicates.push(`updated_at >= $${credentialValues.length}`);
+    }
+    if (input.to) {
+      credentialValues.push(input.to);
+      credentialPredicates.push(`updated_at <= $${credentialValues.length}`);
+    }
+    if (input.adapterKey) {
+      credentialValues.push(input.adapterKey);
+      credentialPredicates.push(`provider_key = $${credentialValues.length}`);
+    }
+
+    const credentialValidationFailures = await this.pool.query<{
+      failures: string;
+    }>(
+      `SELECT COUNT(*)::bigint AS failures
+       FROM credentials
+       WHERE ${credentialPredicates.join("\n         AND ")}`,
+      credentialValues,
+    );
+
+    const runRow = runs.rows[0];
+    const queueRow = queue.rows[0];
+    const retryRow = retryEvents.rows[0];
+    const credentialRow = credentialValidationFailures.rows[0];
+
+    return {
+      totalRuns: Number(runRow?.total_runs || 0),
+      successRuns: Number(runRow?.success_runs || 0),
+      failedRuns: Number(runRow?.failed_runs || 0),
+      deadLetterRuns: Number(runRow?.dead_letter_runs || 0),
+      retryingRuns: Number(runRow?.retrying_runs || 0),
+      retryEvents: Number(retryRow?.retry_events || 0),
+      queuePendingJobs: Number(queueRow?.pending_jobs || 0),
+      queueDueJobs: Number(queueRow?.due_jobs || 0),
+      queueLagSeconds: Number(queueRow?.queue_lag_seconds || 0),
+      credentialValidationFailures: Number(credentialRow?.failures || 0),
+      avgRunDurationSeconds: Number(runRow?.avg_run_duration_seconds || 0),
+    };
+  }
+
+  async getWorkflowAnalytics(input: AnalyticsFilter): Promise<WorkflowAnalyticsRow[]> {
+    const runFilter = this.buildRunFilter(input);
+    const values = [...runFilter.values];
+    const limit = Math.max(1, Math.min(input.limit || 20, 100));
+    values.push(limit);
+    const limitPosition = values.length;
+
+    const result = await this.pool.query<{
+      workflow_id: string;
+      total_runs: string;
+      success_runs: string;
+      failed_runs: string;
+      dead_letter_runs: string;
+      avg_duration_seconds: string | null;
+    }>(
+      `SELECT
+         workflow_id,
+         COUNT(*)::bigint AS total_runs,
+         SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END)::bigint AS success_runs,
+         SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END)::bigint AS failed_runs,
+         SUM(CASE WHEN status = 'dead_lettered' THEN 1 ELSE 0 END)::bigint AS dead_letter_runs,
+         AVG(
+           EXTRACT(EPOCH FROM COALESCE(finished_at, NOW())) -
+           EXTRACT(EPOCH FROM COALESCE(started_at, created_at))
+         ) AS avg_duration_seconds
+       FROM workflow_runs
+       WHERE ${runFilter.predicates.join("\n         AND ")}
+       GROUP BY workflow_id
+       ORDER BY dead_letter_runs DESC, failed_runs DESC, total_runs DESC
+       LIMIT $${limitPosition}`,
+      values,
+    );
+
+    const workflowIds = result.rows.map((row) => row.workflow_id);
+    if (workflowIds.length === 0) {
+      return [];
+    }
+
+    const workflowIdPlaceholders = workflowIds
+      .map((_, index) => `$${index + 1}`)
+      .join(", ");
+
+    const workflowMeta = await this.pool.query<{
+      id: string;
+      workflow_key: string;
+      name: string;
+    }>(
+      `SELECT
+         id,
+         COALESCE(definition_json->>'id', id::text) AS workflow_key,
+         name
+       FROM workflows
+       WHERE id IN (${workflowIdPlaceholders})`,
+      workflowIds,
+    );
+
+    const workflowMetaById = new Map(
+      workflowMeta.rows.map((row) => [
+        row.id,
+        {
+          workflowKey: row.workflow_key,
+          workflowName: row.name,
+        },
+      ]),
+    );
+
+    const retryPredicates = [
+      "tenant_id = $1",
+      "organization_id = $2",
+      "workspace_id = $3",
+      "event_type = 'workflow.retry.scheduled'",
+    ];
+    const retryValues: unknown[] = [
+      input.tenantId,
+      input.organizationId,
+      input.workspaceId,
+    ];
+    if (input.from) {
+      retryValues.push(input.from);
+      retryPredicates.push(`created_at >= $${retryValues.length}`);
+    }
+    if (input.to) {
+      retryValues.push(input.to);
+      retryPredicates.push(`created_at <= $${retryValues.length}`);
+    }
+
+    const retryWorkflowPlaceholders = workflowIds
+      .map((_, index) => `$${retryValues.length + index + 1}`)
+      .join(", ");
+    retryValues.push(...workflowIds);
+    retryPredicates.push(`workflow_id IN (${retryWorkflowPlaceholders})`);
+
+    const retryCounts = await this.pool.query<{
+      workflow_id: string;
+      retry_events: string;
+    }>(
+      `SELECT
+         workflow_id,
+         COUNT(*)::bigint AS retry_events
+       FROM event_logs
+       WHERE ${retryPredicates.join("\n         AND ")}
+       GROUP BY workflow_id`,
+      retryValues,
+    );
+    const retryCountByWorkflow = new Map(
+      retryCounts.rows.map((row) => [row.workflow_id, Number(row.retry_events || 0)]),
+    );
+
+    return result.rows.map((row) => ({
+      workflowId: row.workflow_id,
+      workflowKey: workflowMetaById.get(row.workflow_id)?.workflowKey || row.workflow_id,
+      workflowName: workflowMetaById.get(row.workflow_id)?.workflowName || row.workflow_id,
+      totalRuns: Number(row.total_runs || 0),
+      successRuns: Number(row.success_runs || 0),
+      failedRuns: Number(row.failed_runs || 0),
+      deadLetterRuns: Number(row.dead_letter_runs || 0),
+      retryEvents: retryCountByWorkflow.get(row.workflow_id) || 0,
+      avgDurationSeconds: Number(row.avg_duration_seconds || 0),
+    }));
+  }
+
+  async getAdapterAnalytics(input: AnalyticsFilter): Promise<AdapterAnalyticsRow[]> {
+    const eventFilter = this.buildEventFilter(input);
+    const values = [...eventFilter.values];
+    const limit = Math.max(1, Math.min(input.limit || 20, 100));
+    values.push(limit);
+    const limitPosition = values.length;
+
+    const result = await this.pool.query<{
+      adapter_key: string;
+      action_attempts: string;
+      action_failures: string;
+      avg_action_duration_ms: string | null;
+    }>(
+      `SELECT
+         COALESCE(payload_json->>'adapter', 'unknown') AS adapter_key,
+         SUM(CASE WHEN event_type IN ('workflow.step.completed', 'workflow.step.failed') THEN 1 ELSE 0 END)::bigint AS action_attempts,
+         SUM(CASE WHEN event_type = 'workflow.step.failed' THEN 1 ELSE 0 END)::bigint AS action_failures,
+         AVG((payload_json->>'adapterActionDurationMs')::numeric) AS avg_action_duration_ms
+       FROM event_logs
+       WHERE ${eventFilter.predicates.join("\n         AND ")}
+         AND event_type IN ('workflow.step.completed', 'workflow.step.failed')
+       GROUP BY adapter_key
+       ORDER BY action_failures DESC, action_attempts DESC
+       LIMIT $${limitPosition}`,
+      values,
+    );
+
+    return result.rows.map((row) => ({
+      adapterKey: row.adapter_key,
+      actionAttempts: Number(row.action_attempts || 0),
+      actionFailures: Number(row.action_failures || 0),
+      avgActionDurationMs: Number(row.avg_action_duration_ms || 0),
+    }));
   }
 
   async appendAuditLog(input: {

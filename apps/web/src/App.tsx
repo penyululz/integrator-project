@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link, Navigate, Route, Routes } from "react-router-dom";
 import { getAuthSession, logout } from "./api";
 import { LoginPage } from "./pages/LoginPage";
+import { DashboardPage } from "./pages/DashboardPage";
 import { IntegrationsPage } from "./pages/IntegrationsPage";
 import { WorkflowsPage } from "./pages/WorkflowsPage";
 import { RunsPage } from "./pages/RunsPage";
@@ -28,6 +29,7 @@ export default function App() {
       <h1>Integration Platform v1</h1>
       <nav style={{ display: "flex", gap: 12, marginBottom: 20 }}>
         <Link to="/login">Login</Link>
+        <Link to="/dashboard">Dashboard</Link>
         <Link to="/integrations">Integrations</Link>
         <Link to="/workflows">Workflows</Link>
         <Link to="/runs">Runs</Link>
@@ -42,10 +44,18 @@ export default function App() {
           path="/"
           element={
             session ? (
-              <Navigate to="/integrations" replace />
+              <Navigate to="/dashboard" replace />
             ) : (
               <Navigate to="/login" replace />
             )
+          }
+        />
+        <Route
+          path="/dashboard"
+          element={
+            <ProtectedRoute>
+              <DashboardPage />
+            </ProtectedRoute>
           }
         />
         <Route

@@ -3,6 +3,48 @@
 const workflowReferencePattern =
   /^(trigger|context|steps\.[A-Za-z0-9_-]+\.output)(\.[A-Za-z0-9_-]+)*$/;
 
+const isoDateTimeSchema = z
+  .string()
+  .min(1)
+  .refine((value) => Number.isFinite(Date.parse(value)), {
+    message: "must be a valid ISO-8601 datetime value",
+  });
+
+export const workflowRunStatusSchema = z.enum([
+  "queued",
+  "running",
+  "retrying",
+  "success",
+  "failed",
+  "dead_lettered",
+]);
+
+export const analyticsQuerySchema = z
+  .object({
+    from: isoDateTimeSchema.optional(),
+    to: isoDateTimeSchema.optional(),
+    workflowId: z.string().min(1).optional(),
+    status: workflowRunStatusSchema.optional(),
+    adapter: z.string().min(1).optional(),
+    workspaceId: z.string().min(1).optional(),
+    limit: z.coerce.number().int().min(1).max(100).optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (!value.from || !value.to) {
+      return;
+    }
+    const from = Date.parse(value.from);
+    const to = Date.parse(value.to);
+    if (Number.isFinite(from) && Number.isFinite(to) && from > to) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["from"],
+        message: "`from` must be less than or equal to `to`.",
+      });
+    }
+  });
+
 export const loginSchema = z.object({
   email: z.string().email(),
   password: z.string().min(1),

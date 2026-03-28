@@ -28,6 +28,10 @@ import {
   type WorkflowRunRecord,
 } from "../repositories/run-repository";
 import { CredentialResolver } from "../auth/credential-resolver";
+import {
+  type ObservabilityRuntime,
+  getGlobalObservabilityRuntime,
+} from "../observability/runtime";
 
 type FailureClassification =
   | "network_timeout"
@@ -353,6 +357,11 @@ function computeWorkflowMaxAttempts(workflow: WorkflowRecord): number {
   return Math.max(1, ...stepMaxAttempts);
 }
 
+function getWorkflowKey(workflow: WorkflowRecord): string {
+  const key = workflow.definition_json.id;
+  return typeof key === "string" && key ? key : workflow.id;
+}
+
 function normalizeConditionBlock(block: WorkflowConditionBlock): WorkflowConditionGroup {
   if (isObject(block) && Array.isArray((block as WorkflowConditionGroup).conditions)) {
     return {
@@ -548,6 +557,7 @@ export class WorkflowEngine {
     private readonly workflowRepository: WorkflowRepository,
     private readonly runRepository: RunRepository,
     private readonly credentialResolver: CredentialResolver,
+    private readonly observability: ObservabilityRuntime = getGlobalObservabilityRuntime(),
   ) {}
 
   async queueIncomingEvent(event: IncomingEvent): Promise<void> {
@@ -558,6 +568,19 @@ export class WorkflowEngine {
       eventType: "event.received",
       payload: event,
     });
+    this.observability.logger.info(
+      "workflow.event.queued",
+      {
+        correlationId: event.correlationId,
+        tenantId: event.tenantId,
+        organizationId: event.organizationId,
+        workspaceId: event.workspaceId,
+      },
+      {
+        adapterKey: event.adapterKey,
+        triggerKey: event.triggerKey,
+      },
+    );
     await this.eventQueue.enqueue(event);
   }
 
@@ -589,9 +612,22 @@ export class WorkflowEngine {
     if (!retryJob) {
       return false;
     }
+    this.observability.metrics.queueJobsProcessedTotal.inc({
+      queue: "retry_queue",
+    });
+    const nextRunAt = Date.parse(retryJob.next_run_at);
+    if (Number.isFinite(nextRunAt)) {
+      this.observability.metrics.queueWaitTimeSeconds.observe(
+        { queue: "retry_queue" },
+        Math.max(0, (Date.now() - nextRunAt) / 1000),
+      );
+    }
 
     const payload = parseRetryPayload(retryJob.payload_json);
     if (!payload) {
+      this.observability.metrics.queueJobsFailedTotal.inc({
+        queue: "retry_queue",
+      });
       await this.runRepository.markRetryJobDeadLettered({
         jobId: retryJob.id,
         attempts: retryJob.attempts,
@@ -608,6 +644,9 @@ export class WorkflowEngine {
       workspaceId: retryJob.workspace_id || "",
     });
     if (!workflowRecord) {
+      this.observability.metrics.queueJobsFailedTotal.inc({
+        queue: "retry_queue",
+      });
       await this.runRepository.markRetryJobDeadLettered({
         jobId: retryJob.id,
         attempts: retryJob.attempts,
@@ -624,6 +663,9 @@ export class WorkflowEngine {
       workspaceId: retryJob.workspace_id || "",
     });
     if (!run) {
+      this.observability.metrics.queueJobsFailedTotal.inc({
+        queue: "retry_queue",
+      });
       await this.runRepository.markRetryJobDeadLettered({
         jobId: retryJob.id,
         attempts: retryJob.attempts,
@@ -697,12 +739,65 @@ export class WorkflowEngine {
       eventType,
       payload,
     });
+    this.observability.logger.info(
+      eventType,
+      {
+        correlationId: state.triggerEvent.correlationId,
+        workflowRunId: state.run.id,
+        workflowId: state.workflowRecord.id,
+        stepId: typeof payload.stepId === "string" ? payload.stepId : undefined,
+        adapterKey:
+          typeof payload.adapter === "string"
+            ? payload.adapter
+            : typeof payload.adapterKey === "string"
+              ? payload.adapterKey
+              : undefined,
+        retryAttempt: typeof payload.attempt === "number" ? payload.attempt : undefined,
+        tenantId: state.triggerEvent.tenantId,
+        organizationId: state.triggerEvent.organizationId,
+        workspaceId: state.triggerEvent.workspaceId,
+      },
+      payload,
+    );
+  }
+
+  private observeRunCompletion(
+    state: ExecutionState,
+    status: "success" | "failed" | "dead_lettered",
+  ): void {
+    const workflowKey = getWorkflowKey(state.workflowRecord);
+    const started = Date.parse(state.run.created_at);
+    const durationSeconds = Number.isFinite(started)
+      ? Math.max(0, (Date.now() - started) / 1000)
+      : 0;
+    this.observability.metrics.workflowRunDurationSeconds.observe(
+      { workflow_key: workflowKey, status },
+      durationSeconds,
+    );
+
+    if (status === "success") {
+      this.observability.metrics.workflowRunsSuccessTotal.inc({
+        workflow_key: workflowKey,
+      });
+    } else if (status === "dead_lettered") {
+      this.observability.metrics.workflowRunsDeadLetteredTotal.inc({
+        workflow_key: workflowKey,
+      });
+    } else {
+      this.observability.metrics.workflowRunsFailedTotal.inc({
+        workflow_key: workflowKey,
+      });
+    }
   }
 
   async executeWorkflow(
     workflowRecord: WorkflowRecord,
     event: IncomingEvent,
   ): Promise<void> {
+    const workflowKey = getWorkflowKey(workflowRecord);
+    this.observability.metrics.workflowRunsTotal.inc({
+      workflow_key: workflowKey,
+    });
     const workflowMaxAttempts = computeWorkflowMaxAttempts(workflowRecord);
     const run = await this.runRepository.createRun({
       tenantId: event.tenantId,
@@ -1043,6 +1138,13 @@ export class WorkflowEngine {
       validationError: reason || null,
     });
 
+    if (status !== "valid") {
+      this.observability.metrics.credentialValidationFailuresTotal.inc({
+        adapter_key: input.step.adapter,
+        status,
+      });
+    }
+
     return {
       status,
       reason,
@@ -1084,6 +1186,22 @@ export class WorkflowEngine {
         reason: "condition_false",
       });
 
+      this.observability.metrics.workflowStepsTotal.inc({
+        workflow_key: getWorkflowKey(state.workflowRecord),
+        adapter_key: step.adapter,
+        step_type: "action",
+        status: "skipped",
+      });
+      this.observability.metrics.workflowStepDurationSeconds.observe(
+        {
+          workflow_key: getWorkflowKey(state.workflowRecord),
+          adapter_key: step.adapter,
+          step_type: "action",
+          status: "skipped",
+        },
+        0,
+      );
+
       await this.markActiveRetryResolved(state, mutableState, step, stepPath, attempt);
       return {
         halted: false,
@@ -1097,6 +1215,10 @@ export class WorkflowEngine {
     });
 
     const retryPolicy = resolveRetryPolicy(step);
+    const workflowKey = getWorkflowKey(state.workflowRecord);
+    const stepStartedAt = Date.now();
+    let actionAttempted = false;
+    let adapterActionStartedAt: number | null = null;
 
     try {
       const resolvedCredentials = await this.credentialResolver.resolveForAdapter({
@@ -1157,6 +1279,8 @@ export class WorkflowEngine {
         stepInput.idempotencyKey = stepIdempotencyKey;
       }
 
+      actionAttempted = true;
+      adapterActionStartedAt = Date.now();
       const result = await adapter.runAction(step.action, stepInput, stepContext);
       if (!result.success) {
         throw new AdapterError("Adapter action returned unsuccessful result.", {
@@ -1182,7 +1306,41 @@ export class WorkflowEngine {
         adapter: step.adapter,
         action: step.action,
         attempt,
+        stepDurationMs: Date.now() - stepStartedAt,
+        adapterActionDurationMs:
+          adapterActionStartedAt !== null ? Date.now() - adapterActionStartedAt : undefined,
       });
+
+      this.observability.metrics.workflowStepsTotal.inc({
+        workflow_key: workflowKey,
+        adapter_key: step.adapter,
+        step_type: "action",
+        status: "completed",
+      });
+      this.observability.metrics.workflowStepDurationSeconds.observe(
+        {
+          workflow_key: workflowKey,
+          adapter_key: step.adapter,
+          step_type: "action",
+          status: "completed",
+        },
+        Math.max(0, (Date.now() - stepStartedAt) / 1000),
+      );
+      this.observability.metrics.adapterActionsTotal.inc({
+        adapter_key: step.adapter,
+        action_key: step.action,
+        status: "success",
+      });
+      if (adapterActionStartedAt !== null) {
+        this.observability.metrics.adapterActionDurationSeconds.observe(
+          {
+            adapter_key: step.adapter,
+            action_key: step.action,
+            status: "success",
+          },
+          Math.max(0, (Date.now() - adapterActionStartedAt) / 1000),
+        );
+      }
 
       await this.markActiveRetryResolved(state, mutableState, step, stepPath, attempt);
 
@@ -1225,7 +1383,51 @@ export class WorkflowEngine {
         retryable: shouldRetry,
         classification: failure.classification,
         message: failure.message,
+        stepDurationMs: Date.now() - stepStartedAt,
+        adapterActionDurationMs:
+          adapterActionStartedAt !== null ? Date.now() - adapterActionStartedAt : undefined,
       });
+
+      this.observability.metrics.workflowStepsTotal.inc({
+        workflow_key: workflowKey,
+        adapter_key: step.adapter,
+        step_type: "action",
+        status: "failed",
+      });
+      this.observability.metrics.workflowStepFailuresTotal.inc({
+        workflow_key: workflowKey,
+        adapter_key: step.adapter,
+      });
+      this.observability.metrics.workflowStepDurationSeconds.observe(
+        {
+          workflow_key: workflowKey,
+          adapter_key: step.adapter,
+          step_type: "action",
+          status: "failed",
+        },
+        Math.max(0, (Date.now() - stepStartedAt) / 1000),
+      );
+      if (actionAttempted) {
+        this.observability.metrics.adapterActionsTotal.inc({
+          adapter_key: step.adapter,
+          action_key: step.action,
+          status: "failed",
+        });
+        this.observability.metrics.adapterActionFailuresTotal.inc({
+          adapter_key: step.adapter,
+          action_key: step.action,
+        });
+        if (adapterActionStartedAt !== null) {
+          this.observability.metrics.adapterActionDurationSeconds.observe(
+            {
+              adapter_key: step.adapter,
+              action_key: step.action,
+              status: "failed",
+            },
+            Math.max(0, (Date.now() - adapterActionStartedAt) / 1000),
+          );
+        }
+      }
 
       if (shouldRetry) {
         const delayMs = calculateExponentialBackoffMs(attempt, retryPolicy);
@@ -1271,6 +1473,11 @@ export class WorkflowEngine {
           });
           retryJobId = retryRecord.id;
         }
+
+        this.observability.metrics.workflowRetriesTotal.inc({
+          workflow_key: workflowKey,
+          adapter_key: step.adapter,
+        });
 
         await this.runRepository.markRunRetrying({
           runId: state.run.id,
@@ -1390,6 +1597,7 @@ export class WorkflowEngine {
         lastError: failure.message,
         deadLetteredAt: status === "dead_lettered" ? new Date().toISOString() : null,
       });
+      this.observeRunCompletion(state, status);
       return {
         halted: true,
       };
@@ -1411,6 +1619,8 @@ export class WorkflowEngine {
       stepPath,
       attempt,
     );
+    const stepStartedAt = Date.now();
+    const workflowKey = getWorkflowKey(state.workflowRecord);
     if (!conditionDecision.shouldRun) {
       mutableState.stepResults.push({
         stepId: step.id,
@@ -1428,6 +1638,22 @@ export class WorkflowEngine {
         attempt,
         reason: "condition_false",
       });
+
+      this.observability.metrics.workflowStepsTotal.inc({
+        workflow_key: workflowKey,
+        adapter_key: "delay",
+        step_type: "delay",
+        status: "skipped",
+      });
+      this.observability.metrics.workflowStepDurationSeconds.observe(
+        {
+          workflow_key: workflowKey,
+          adapter_key: "delay",
+          step_type: "delay",
+          status: "skipped",
+        },
+        0,
+      );
 
       await this.markActiveRetryResolved(state, mutableState, step, stepPath, attempt);
       return {
@@ -1465,6 +1691,7 @@ export class WorkflowEngine {
       stepPath,
       attempt,
       delayMs,
+      stepDurationMs: Date.now() - stepStartedAt,
     });
 
     mutableState.stepResults.push({
@@ -1477,6 +1704,22 @@ export class WorkflowEngine {
       },
       attempt,
     });
+
+    this.observability.metrics.workflowStepsTotal.inc({
+      workflow_key: workflowKey,
+      adapter_key: "delay",
+      step_type: "delay",
+      status: "completed",
+    });
+    this.observability.metrics.workflowStepDurationSeconds.observe(
+      {
+        workflow_key: workflowKey,
+        adapter_key: "delay",
+        step_type: "delay",
+        status: "completed",
+      },
+      Math.max(0, (Date.now() - stepStartedAt) / 1000),
+    );
 
     await this.markActiveRetryResolved(state, mutableState, step, stepPath, attempt);
 
@@ -1495,6 +1738,8 @@ export class WorkflowEngine {
   ): Promise<{
     halted: boolean;
   }> {
+    const stepStartedAt = Date.now();
+    const workflowKey = getWorkflowKey(state.workflowRecord);
     let selectedBranch: "then" | "else" | null = null;
 
     if (forcedBranch) {
@@ -1539,6 +1784,21 @@ export class WorkflowEngine {
         skippedReason: "branch_no_match",
         attempt,
       });
+      this.observability.metrics.workflowStepsTotal.inc({
+        workflow_key: workflowKey,
+        adapter_key: "branch",
+        step_type: "branch",
+        status: "skipped",
+      });
+      this.observability.metrics.workflowStepDurationSeconds.observe(
+        {
+          workflow_key: workflowKey,
+          adapter_key: "branch",
+          step_type: "branch",
+          status: "skipped",
+        },
+        Math.max(0, (Date.now() - stepStartedAt) / 1000),
+      );
       return {
         halted: false,
       };
@@ -1554,6 +1814,22 @@ export class WorkflowEngine {
       },
       attempt,
     });
+
+    this.observability.metrics.workflowStepsTotal.inc({
+      workflow_key: workflowKey,
+      adapter_key: "branch",
+      step_type: "branch",
+      status: "completed",
+    });
+    this.observability.metrics.workflowStepDurationSeconds.observe(
+      {
+        workflow_key: workflowKey,
+        adapter_key: "branch",
+        step_type: "branch",
+        status: "completed",
+      },
+      Math.max(0, (Date.now() - stepStartedAt) / 1000),
+    );
 
     const branchSteps = selectedBranch === "then" ? step.then : step.else || [];
     return this.executeStepSequence(
@@ -1703,6 +1979,7 @@ export class WorkflowEngine {
         lastError: message,
         deadLetteredAt: null,
       });
+      this.observeRunCompletion(state, "failed");
       return;
     }
 
@@ -1721,5 +1998,6 @@ export class WorkflowEngine {
       lastError: null,
       deadLetteredAt: null,
     });
+    this.observeRunCompletion(state, "success");
   }
 }

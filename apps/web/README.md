@@ -121,3 +121,45 @@ The Runs page now includes an operational detail view:
 - No drag-and-drop graph canvas (intentional v1 non-goal)
 - Builder still includes JSON areas for trigger/context and advanced edits
 - No screenshot assets are stored in this repository yet; use the running UI for current views
+
+## Operations Dashboard (v1)
+
+A new authenticated dashboard route is available:
+
+- `/dashboard`
+
+The dashboard consumes:
+
+- `GET /api/v1/analytics/overview`
+- `GET /api/v1/analytics/workflows`
+- `GET /api/v1/analytics/adapters`
+
+### Dashboard Views
+
+- workflow execution summary (success/failure/dead-letter counts)
+- failure rate and average run duration
+- retry/dead-letter indicators
+- queue health snapshot (pending, due, lag)
+- alerting-ready signals from backend thresholds
+- recent failing workflows
+- top retrying workflows
+- recent failing adapters
+
+### Time Window Filters
+
+The dashboard supports prebuilt windows:
+
+- last 24h
+- last 7 days
+- last 30 days
+
+Each window applies `from` / `to` filters to analytics APIs.
+
+## Runs Detail Observability Enhancements
+
+Runs detail now includes additional operational context:
+
+- run duration (`started_at` / `finished_at`)
+- retry count
+- failure classification (from persisted run result)
+- adapter action timing summary (average/max from event logs)

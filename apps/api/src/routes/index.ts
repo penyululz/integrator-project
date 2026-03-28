@@ -1,7 +1,13 @@
 import { Router } from "express";
-import { validateWorkflowDefinition, type CoreRuntime } from "@integration/core";
+import {
+  evaluateAlertSignals,
+  getDefaultAlertThresholds,
+  validateWorkflowDefinition,
+  type CoreRuntime,
+} from "@integration/core";
 import { requireAuth, requireRole } from "../middleware/auth";
 import {
+  analyticsQuerySchema,
   createIntegrationSchema,
   createWorkspaceSchema,
   createWorkflowSchema,
@@ -25,6 +31,12 @@ function resolveOptionalQueryParam(
     return undefined;
   }
   return Array.isArray(value) ? value[0] : value;
+}
+
+function createHttpError(statusCode: number, message: string): Error & { statusCode: number } {
+  const error = new Error(message) as Error & { statusCode: number };
+  error.statusCode = statusCode;
+  return error;
 }
 
 export function createApiRouter(runtime: CoreRuntime): Router {
@@ -460,6 +472,140 @@ export function createApiRouter(runtime: CoreRuntime): Router {
     }
   });
 
+  router.get("/analytics/overview", requireAuth, async (req, res, next) => {
+    try {
+      const scope = req.auth!.scope;
+      const query = analyticsQuerySchema.parse({
+        from: resolveOptionalQueryParam(req.query.from as string | string[] | undefined),
+        to: resolveOptionalQueryParam(req.query.to as string | string[] | undefined),
+        workflowId: resolveOptionalQueryParam(
+          req.query.workflowId as string | string[] | undefined,
+        ),
+        status: resolveOptionalQueryParam(req.query.status as string | string[] | undefined),
+        adapter: resolveOptionalQueryParam(req.query.adapter as string | string[] | undefined),
+        workspaceId: resolveOptionalQueryParam(
+          req.query.workspaceId as string | string[] | undefined,
+        ),
+        limit: resolveOptionalQueryParam(req.query.limit as string | string[] | undefined),
+      });
+
+      if (query.workspaceId && query.workspaceId !== scope.workspaceId) {
+        throw createHttpError(403, "Unauthorized.");
+      }
+
+      const filter = {
+        tenantId: scope.tenantId,
+        organizationId: scope.organizationId,
+        workspaceId: scope.workspaceId,
+        from: query.from,
+        to: query.to,
+        workflowId: query.workflowId,
+        status: query.status,
+        adapterKey: query.adapter,
+        limit: query.limit,
+      };
+
+      const overview = await runtime.repositories.runRepository.getAnalyticsOverview(filter);
+      const thresholds = getDefaultAlertThresholds();
+      const alerts = evaluateAlertSignals(
+        {
+          totalRuns: overview.totalRuns,
+          failedRuns: overview.failedRuns,
+          deadLetterRuns: overview.deadLetterRuns,
+          queueLagSeconds: overview.queueLagSeconds,
+          credentialValidationFailures: overview.credentialValidationFailures,
+        },
+        thresholds,
+      );
+
+      res.json({
+        overview,
+        alerts,
+        thresholds,
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get("/analytics/workflows", requireAuth, async (req, res, next) => {
+    try {
+      const scope = req.auth!.scope;
+      const query = analyticsQuerySchema.parse({
+        from: resolveOptionalQueryParam(req.query.from as string | string[] | undefined),
+        to: resolveOptionalQueryParam(req.query.to as string | string[] | undefined),
+        workflowId: resolveOptionalQueryParam(
+          req.query.workflowId as string | string[] | undefined,
+        ),
+        status: resolveOptionalQueryParam(req.query.status as string | string[] | undefined),
+        adapter: resolveOptionalQueryParam(req.query.adapter as string | string[] | undefined),
+        workspaceId: resolveOptionalQueryParam(
+          req.query.workspaceId as string | string[] | undefined,
+        ),
+        limit: resolveOptionalQueryParam(req.query.limit as string | string[] | undefined),
+      });
+
+      if (query.workspaceId && query.workspaceId !== scope.workspaceId) {
+        throw createHttpError(403, "Unauthorized.");
+      }
+
+      const workflows = await runtime.repositories.runRepository.getWorkflowAnalytics({
+        tenantId: scope.tenantId,
+        organizationId: scope.organizationId,
+        workspaceId: scope.workspaceId,
+        from: query.from,
+        to: query.to,
+        workflowId: query.workflowId,
+        status: query.status,
+        adapterKey: query.adapter,
+        limit: query.limit,
+      });
+
+      res.json({ workflows });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get("/analytics/adapters", requireAuth, async (req, res, next) => {
+    try {
+      const scope = req.auth!.scope;
+      const query = analyticsQuerySchema.parse({
+        from: resolveOptionalQueryParam(req.query.from as string | string[] | undefined),
+        to: resolveOptionalQueryParam(req.query.to as string | string[] | undefined),
+        workflowId: resolveOptionalQueryParam(
+          req.query.workflowId as string | string[] | undefined,
+        ),
+        status: resolveOptionalQueryParam(req.query.status as string | string[] | undefined),
+        adapter: resolveOptionalQueryParam(req.query.adapter as string | string[] | undefined),
+        workspaceId: resolveOptionalQueryParam(
+          req.query.workspaceId as string | string[] | undefined,
+        ),
+        limit: resolveOptionalQueryParam(req.query.limit as string | string[] | undefined),
+      });
+
+      if (query.workspaceId && query.workspaceId !== scope.workspaceId) {
+        throw createHttpError(403, "Unauthorized.");
+      }
+
+      const adapters = await runtime.repositories.runRepository.getAdapterAnalytics({
+        tenantId: scope.tenantId,
+        organizationId: scope.organizationId,
+        workspaceId: scope.workspaceId,
+        from: query.from,
+        to: query.to,
+        workflowId: query.workflowId,
+        status: query.status,
+        adapterKey: query.adapter,
+        limit: query.limit,
+      });
+
+      res.json({ adapters });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.post(
     "/webhook/:adapterKey/:triggerKey",
     requireAuth,
@@ -494,6 +640,10 @@ export function createApiRouter(runtime: CoreRuntime): Router {
             triggerKey,
             payload: event,
             receivedAt: new Date().toISOString(),
+            correlationId:
+              req.header("x-correlation-id") ||
+              req.header("x-request-id") ||
+              undefined,
           });
         }
 

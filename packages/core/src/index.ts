@@ -16,12 +16,17 @@ import { AuthRepository } from "./repositories/auth-repository";
 import { validateWorkflowDefinition } from "./workflow/schema";
 import { getCoreEnv } from "./db/env";
 import { parseEnabledAdapterSetFromEnv } from "./engine/plugin-loader";
+import {
+  createObservabilityRuntime,
+  type ObservabilityRuntime,
+} from "./observability/runtime";
 import path from "node:path";
 
 export type CoreRuntime = {
   pluginLoader: PluginLoader;
   eventQueue: EventQueue;
   workflowEngine: WorkflowEngine;
+  observability: ObservabilityRuntime;
   oauthService: OAuthService;
   authService: AuthService;
   credentialResolver: CredentialResolver;
@@ -38,6 +43,22 @@ export type CoreRuntime = {
 
 export { validateWorkflowDefinition };
 export { AuthService } from "./auth/auth-service";
+export { PlatformMetrics } from "./observability/metrics";
+export { StructuredLogger } from "./observability/logger";
+export {
+  createObservabilityRuntime,
+  getGlobalObservabilityRuntime,
+} from "./observability/runtime";
+export type { ObservabilityRuntime } from "./observability/runtime";
+export {
+  evaluateAlertSignals,
+  getDefaultAlertThresholds,
+} from "./observability/alerting";
+export type {
+  AlertSignal,
+  AlertThresholds,
+  AnalyticsOverviewSnapshot,
+} from "./observability/alerting";
 export {
   CredentialCrypto,
   CredentialCryptoError,
@@ -55,6 +76,7 @@ export async function createCoreRuntime(): Promise<CoreRuntime> {
   const env = getCoreEnv();
   const pool = getPostgresPool();
   const redis = await getRedisClient();
+  const observability = createObservabilityRuntime();
 
   const workspaceRepository = new WorkspaceRepository(pool);
   const integrationRepository = new IntegrationRepository(pool);
@@ -117,7 +139,7 @@ export async function createCoreRuntime(): Promise<CoreRuntime> {
     },
   });
 
-  const eventQueue = new EventQueue(redis);
+  const eventQueue = new EventQueue(redis, "integration:events", observability);
   const credentialResolver = new CredentialResolver(credentialRepository);
   const workflowEngine = new WorkflowEngine(
     pluginLoader,
@@ -125,6 +147,7 @@ export async function createCoreRuntime(): Promise<CoreRuntime> {
     workflowRepository,
     runRepository,
     credentialResolver,
+    observability,
   );
   const oauthService = new OAuthService(credentialRepository);
   const authService = new AuthService(authRepository, env);
@@ -133,6 +156,7 @@ export async function createCoreRuntime(): Promise<CoreRuntime> {
     pluginLoader,
     eventQueue,
     workflowEngine,
+    observability,
     oauthService,
     authService,
     credentialResolver,

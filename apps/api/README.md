@@ -286,3 +286,108 @@ Set security env vars (example):
    - `npm run seed -w @integration/core`
 3. Start API and web:
    - `npm run dev`
+
+## Observability + Metrics (v1)
+
+### Metrics Endpoint
+
+- `GET /metrics`
+- response content-type: `text/plain; version=0.0.4; charset=utf-8`
+- Prometheus-compatible exposition format
+
+### Core Counters
+
+- `workflow_runs_total`
+- `workflow_runs_success_total`
+- `workflow_runs_failed_total`
+- `workflow_runs_dead_lettered_total`
+- `workflow_retries_total`
+- `workflow_steps_total`
+- `workflow_step_failures_total`
+- `adapter_actions_total`
+- `adapter_action_failures_total`
+- `credential_validation_failures_total`
+- `queue_jobs_enqueued_total`
+- `queue_jobs_processed_total`
+- `queue_jobs_failed_total`
+
+### Core Duration Histograms
+
+- `workflow_run_duration_seconds`
+- `workflow_step_duration_seconds`
+- `queue_wait_time_seconds`
+- `adapter_action_duration_seconds`
+
+### Labeling Strategy
+
+Metrics use low-cardinality labels only:
+
+- workflow labels: `workflow_key`, `status`
+- adapter labels: `adapter_key`, `action_key`
+- queue labels: `queue`
+- step labels: `step_type`
+
+No credential values, payload fields, or raw user identifiers are used as labels.
+
+## Analytics Endpoints (v1)
+
+Authenticated endpoints:
+
+- `GET /api/v1/analytics/overview`
+- `GET /api/v1/analytics/workflows`
+- `GET /api/v1/analytics/adapters`
+
+Supported query filters:
+
+- `from` / `to` (ISO datetime)
+- `workflowId`
+- `status`
+- `adapter`
+- `limit`
+- `workspaceId` (must match authenticated scope, otherwise `403`)
+
+### Overview Response
+
+Returns aggregated operations snapshot:
+
+- run counts (success/failed/dead-lettered/retrying)
+- retry event totals
+- retry queue snapshot (`queuePendingJobs`, `queueDueJobs`, `queueLagSeconds`)
+- credential validation failures
+- average run duration
+- alerting-ready signals (`alerts`) computed from thresholds:
+  - `ALERT_FAILURE_RATE_WARN`
+  - `ALERT_DEAD_LETTER_RATE_WARN`
+  - `ALERT_QUEUE_LAG_SECONDS_WARN`
+  - `ALERT_CREDENTIAL_FAILURES_WARN`
+
+## Structured Execution Logging
+
+Execution logs are emitted as structured JSON with safe redaction:
+
+- `correlation_id`
+- `workflow_run_id`
+- `workflow_id`
+- `step_id`
+- `adapter_key`
+- `retry_attempt`
+- tenant scope identifiers
+
+Sensitive values (tokens, API keys, secrets) are masked before emission.
+
+## Prometheus Scrape Example
+
+```yaml
+scrape_configs:
+  - job_name: integration-platform-api
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["api:4000"]
+```
+
+## Recommended Starter Alerts
+
+- Workflow failure rate above threshold (`workflow_runs_failed_total` + dead-letter ratio)
+- Dead-letter run growth (`workflow_runs_dead_lettered_total`)
+- Elevated queue lag (`queue_wait_time_seconds`)
+- Credential validation failure spikes (`credential_validation_failures_total`)

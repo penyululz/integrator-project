@@ -22,6 +22,8 @@ export type RunLogHighlight = {
   classification?: string;
   selectedBranch?: string;
   delayMs?: number;
+  stepDurationMs?: number;
+  adapterActionDurationMs?: number;
   payload: Record<string, unknown>;
 };
 
@@ -152,9 +154,57 @@ export function toRunLogHighlights(logs: EventLogRecord[]): RunLogHighlight[] {
       classification: toStringValue(payload.classification),
       selectedBranch: toStringValue(payload.selectedBranch),
       delayMs: toNumberValue(payload.delayMs),
+      stepDurationMs: toNumberValue(payload.stepDurationMs),
+      adapterActionDurationMs: toNumberValue(payload.adapterActionDurationMs),
       payload,
     } satisfies RunLogHighlight;
   });
+}
+
+export function getRunDurationMs(run: RunRecord | null): number | null {
+  if (!run?.started_at) {
+    return null;
+  }
+  const started = Date.parse(run.started_at);
+  if (!Number.isFinite(started)) {
+    return null;
+  }
+  const finished = run.finished_at ? Date.parse(run.finished_at) : Date.now();
+  if (!Number.isFinite(finished)) {
+    return null;
+  }
+  return Math.max(0, finished - started);
+}
+
+export function getFailureClassification(run: RunRecord | null): string | null {
+  if (!run) {
+    return null;
+  }
+  const payload = toRecord(run.result_json);
+  return toStringValue(payload.classification) || null;
+}
+
+export function getActionTimingSummary(logs: RunLogHighlight[]): {
+  count: number;
+  avgMs: number;
+  maxMs: number;
+} {
+  const durations = logs
+    .map((entry) => entry.adapterActionDurationMs)
+    .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+  if (durations.length === 0) {
+    return {
+      count: 0,
+      avgMs: 0,
+      maxMs: 0,
+    };
+  }
+  const total = durations.reduce((sum, value) => sum + value, 0);
+  return {
+    count: durations.length,
+    avgMs: total / durations.length,
+    maxMs: Math.max(...durations),
+  };
 }
 
 export function compactPayload(payload: Record<string, unknown>): string {
