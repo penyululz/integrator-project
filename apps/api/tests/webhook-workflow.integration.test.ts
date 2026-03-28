@@ -180,6 +180,7 @@ async function createTestRuntime() {
   await pool.query(
     fs.readFileSync(migrationPath("006_credential_encryption_hardening.sql"), "utf8"),
   );
+  await pool.query(fs.readFileSync(migrationPath("007_durable_delay_scheduler.sql"), "utf8"));
 
   const workspaceRepository = new WorkspaceRepository(pool);
   const integrationRepository = new IntegrationRepository(pool);

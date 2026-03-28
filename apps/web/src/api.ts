@@ -117,6 +117,23 @@ export type RetryQueueRecord = {
   failure_classification: string | null;
 };
 
+export type ScheduledWaitRecord = {
+  id: string;
+  workflow_run_id: string;
+  workflow_id: string;
+  step_id: string;
+  step_path: string;
+  status: "pending" | "processing" | "completed" | "failed" | "cancelled";
+  attempt_count: number;
+  max_attempts: number;
+  scheduled_for: string;
+  claimed_at: string | null;
+  completed_at: string | null;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 export type EventLogRecord = {
   id: string;
   event_type: string;
@@ -356,6 +373,17 @@ export async function getRun(runId: string): Promise<RunRecord> {
 export async function listRetryJobs(): Promise<RetryQueueRecord[]> {
   const response = await apiClient().get("/retries");
   return response.data.retries || [];
+}
+
+export async function listScheduledWaits(input?: {
+  runId?: string;
+}): Promise<ScheduledWaitRecord[]> {
+  const response = await apiClient().get("/delays", {
+    params: {
+      runId: input?.runId,
+    },
+  });
+  return response.data.delays || [];
 }
 
 export async function listLogs(input?: {

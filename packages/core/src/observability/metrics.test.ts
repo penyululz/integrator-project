@@ -39,6 +39,8 @@ describe("PlatformMetrics", () => {
     metrics.queueJobsEnqueuedTotal.inc({ queue: "integration:events" });
     metrics.queueJobsProcessedTotal.inc({ queue: "integration:events" });
     metrics.queueJobsFailedTotal.inc({ queue: "integration:events" });
+    metrics.workflowDelaysScheduledTotal.inc({ workflow_key: "wf_observe" });
+    metrics.workflowDelaysResumedTotal.inc({ workflow_key: "wf_observe" });
 
     const output = metrics.render();
     expect(output).toContain(`workflow_runs_total{workflow_key="wf_observe"} 1`);
@@ -49,6 +51,12 @@ describe("PlatformMetrics", () => {
       `workflow_retries_total{workflow_key="wf_observe",adapter_key="shopify"} 1`,
     );
     expect(output).toContain(`queue_jobs_enqueued_total{queue="integration:events"} 1`);
+    expect(output).toContain(
+      `workflow_delays_scheduled_total{workflow_key="wf_observe"} 1`,
+    );
+    expect(output).toContain(
+      `workflow_delays_resumed_total{workflow_key="wf_observe"} 1`,
+    );
     expect(output).toContain(`credential_validation_failures_total`);
   });
 
@@ -76,6 +84,10 @@ describe("PlatformMetrics", () => {
       },
       0.21,
     );
+    metrics.workflowDelaySchedulerLagSeconds.observe(
+      { workflow_key: "wf_a" },
+      1.5,
+    );
 
     const output = metrics.render();
     expect(output).toContain(
@@ -87,6 +99,9 @@ describe("PlatformMetrics", () => {
     expect(output).toContain(`queue_wait_time_seconds_count{queue="retry_queue"} 1`);
     expect(output).toContain(
       `adapter_action_duration_seconds_count{adapter_key="shopify",action_key="readOrder",status="success"} 1`,
+    );
+    expect(output).toContain(
+      `workflow_delay_scheduler_lag_seconds_count{workflow_key="wf_a"} 1`,
     );
   });
 });

@@ -2,6 +2,8 @@
   const color =
     status === "success"
       ? "#0f7b0f"
+      : status === "waiting"
+        ? "#005f8d"
       : status === "retrying"
         ? "#9a6b00"
         : status === "dead_lettered"
@@ -13,6 +15,8 @@
   const background =
     status === "success"
       ? "#e8f8ea"
+      : status === "waiting"
+        ? "#e8f4fb"
       : status === "retrying"
         ? "#fff6df"
         : status === "dead_lettered"

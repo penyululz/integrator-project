@@ -450,6 +450,24 @@ export function createApiRouter(runtime: CoreRuntime): Router {
     }
   });
 
+  router.get("/delays", requireAuth, async (req, res, next) => {
+    try {
+      const scope = req.auth!.scope;
+      const runId = resolveOptionalQueryParam(
+        req.query.runId as string | string[] | undefined,
+      );
+      const delays = await runtime.repositories.runRepository.listScheduledWaits({
+        tenantId: scope.tenantId,
+        organizationId: scope.organizationId,
+        workspaceId: scope.workspaceId,
+        runId,
+      });
+      res.json({ delays });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.get("/logs", requireAuth, async (req, res, next) => {
     try {
       const scope = req.auth!.scope;

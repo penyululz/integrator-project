@@ -39,3 +39,16 @@ export type RetryPayload = {
   triggerEvent: IncomingEvent;
   stepResults: StepResult[];
 };
+
+export type ScheduledDelayPayload = {
+  runId: string;
+  workflowId: string;
+  workflowExternalId: string;
+  stepId: string;
+  stepPath: string;
+  stepAttempt: number;
+  delayMs: number;
+  scheduledFor: string;
+  triggerEvent: IncomingEvent;
+  stepResults: StepResult[];
+};

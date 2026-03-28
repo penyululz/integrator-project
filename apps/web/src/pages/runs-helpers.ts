@@ -22,6 +22,9 @@ export type RunLogHighlight = {
   classification?: string;
   selectedBranch?: string;
   delayMs?: number;
+  scheduledFor?: string;
+  resumedAfterMs?: number;
+  scheduledWaitId?: string;
   stepDurationMs?: number;
   adapterActionDurationMs?: number;
   payload: Record<string, unknown>;
@@ -36,7 +39,11 @@ export const RUN_EVENT_FILTER_OPTIONS = [
   "workflow.condition.evaluated",
   "workflow.branch.selected",
   "workflow.delay.scheduled",
+  "workflow.delay.persisted",
+  "workflow.delay.claimed",
+  "workflow.delay.resumed",
   "workflow.delay.completed",
+  "workflow.delay.failed",
   "workflow.retry.started",
   "workflow.retry.scheduled",
   "workflow.retry.succeeded",
@@ -154,6 +161,9 @@ export function toRunLogHighlights(logs: EventLogRecord[]): RunLogHighlight[] {
       classification: toStringValue(payload.classification),
       selectedBranch: toStringValue(payload.selectedBranch),
       delayMs: toNumberValue(payload.delayMs),
+      scheduledFor: toStringValue(payload.scheduledFor),
+      resumedAfterMs: toNumberValue(payload.resumedAfterMs),
+      scheduledWaitId: toStringValue(payload.scheduledWaitId),
       stepDurationMs: toNumberValue(payload.stepDurationMs),
       adapterActionDurationMs: toNumberValue(payload.adapterActionDurationMs),
       payload,

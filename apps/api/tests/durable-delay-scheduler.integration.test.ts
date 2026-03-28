@@ -30,6 +30,7 @@ import { CredentialRepository } from "../../../packages/core/src/repositories/cr
 import { WorkflowRepository } from "../../../packages/core/src/repositories/workflow-repository";
 import { RunRepository } from "../../../packages/core/src/repositories/run-repository";
 import { AuthRepository } from "../../../packages/core/src/repositories/auth-repository";
+import { createObservabilityRuntime } from "../../../packages/core/src/observability/runtime";
 import type { CoreEnv } from "../../../packages/core/src/db/env";
 
 class InMemoryRedisQueue {
@@ -48,7 +49,6 @@ class InMemoryRedisQueue {
     if (!element) {
       return null;
     }
-
     return {
       key,
       element,
@@ -56,17 +56,14 @@ class InMemoryRedisQueue {
   }
 }
 
-type AdapterCall = {
-  actionKey: string;
-  input: Record<string, unknown>;
-  context: AdapterContext;
-};
-
-class DslProbeAdapter implements Adapter {
-  readonly key = "dsl-probe";
+class DelayProbeAdapter implements Adapter {
+  readonly key = "delay-probe";
   readonly version = "1.0.0";
 
-  calls: AdapterCall[] = [];
+  calls: Array<{
+    runId: string;
+    input: Record<string, unknown>;
+  }> = [];
 
   async init(_config: Record<string, unknown>): Promise<void> {}
 
@@ -81,15 +78,9 @@ class DslProbeAdapter implements Adapter {
   async listActions(): Promise<ActionDefinition[]> {
     return [
       {
-        key: "capture",
-        name: "Capture",
-        description: "Returns step input as output for DSL tests.",
-        inputSchema: { type: "object" },
-      },
-      {
         key: "record",
         name: "Record",
-        description: "Records step input for assertions.",
+        description: "Records run input for durable delay assertions.",
         inputSchema: { type: "object" },
       },
     ];
@@ -100,7 +91,9 @@ class DslProbeAdapter implements Adapter {
     _input: Record<string, unknown>,
     _context: AdapterContext,
   ): Promise<AdapterTriggerResult> {
-    return { events: [] };
+    return {
+      events: [],
+    };
   }
 
   async runAction(
@@ -108,32 +101,21 @@ class DslProbeAdapter implements Adapter {
     input: Record<string, unknown>,
     context: AdapterContext,
   ): Promise<AdapterActionResult> {
+    if (actionKey !== "record") {
+      throw new Error(`Unsupported action "${actionKey}"`);
+    }
+
     this.calls.push({
-      actionKey,
+      runId: context.runId || "",
       input,
-      context,
     });
 
-    if (actionKey === "capture") {
-      return {
-        success: true,
-        output: {
-          ...input,
-        },
-      };
-    }
-
-    if (actionKey === "record") {
-      return {
-        success: true,
-        output: {
-          recorded: true,
-          ...input,
-        },
-      };
-    }
-
-    throw new Error(`Unsupported action \"${actionKey}\"`);
+    return {
+      success: true,
+      output: {
+        acknowledged: true,
+      },
+    };
   }
 
   async validateConfig(): Promise<{ valid: boolean; errors?: string[] }> {
@@ -155,7 +137,10 @@ function migrationPath(file: string): string {
   return path.join(__dirname, "../../../packages/core/src/migrations", file);
 }
 
-async function createDslRuntime(definition: WorkflowDefinition) {
+async function createDurableDelayRuntime(input: {
+  delayMs: number;
+  inlineDelayThresholdMs: number;
+}) {
   const db = newDb({
     autoCreateForeignKeyIndices: true,
   });
@@ -180,7 +165,7 @@ async function createDslRuntime(definition: WorkflowDefinition) {
 
   const organization = await pool.query<{ id: string; tenant_id: string }>(
     `INSERT INTO organizations (name, slug)
-     VALUES ('DSL Org', 'dsl-org')
+     VALUES ('Delay Org', 'delay-org')
      RETURNING id, tenant_id`,
   );
   const organizationId = organization.rows[0].id;
@@ -188,7 +173,7 @@ async function createDslRuntime(definition: WorkflowDefinition) {
 
   const user = await pool.query<{ id: string }>(
     `INSERT INTO users (tenant_id, organization_id, email, password_hash, role)
-     VALUES ($1, $2, 'dsl@example.com', 'dsl-password', 'admin')
+     VALUES ($1, $2, 'delay@example.com', 'delay-password', 'admin')
      RETURNING id`,
     [tenantId, organizationId],
   );
@@ -196,7 +181,7 @@ async function createDslRuntime(definition: WorkflowDefinition) {
 
   const workspace = await pool.query<{ id: string }>(
     `INSERT INTO workspaces (tenant_id, organization_id, name, slug, created_by)
-     VALUES ($1, $2, 'DSL Workspace', 'default', $3)
+     VALUES ($1, $2, 'Delay Workspace', 'default', $3)
      RETURNING id`,
     [tenantId, organizationId, userId],
   );
@@ -223,31 +208,59 @@ async function createDslRuntime(definition: WorkflowDefinition) {
     role: "admin",
   });
 
+  const definition: WorkflowDefinition = {
+    id: "wf_durable_delay",
+    name: "Durable Delay Workflow",
+    workspaceId,
+    organizationId,
+    trigger: {
+      adapter: "webhook",
+      trigger: "http_post",
+      config: {},
+    },
+    steps: [
+      {
+        id: "wait_step",
+        type: "delay",
+        delayMs: input.delayMs,
+      },
+      {
+        id: "after_wait",
+        adapter: "delay-probe",
+        action: "record",
+        config: {
+          source: "durable-wait",
+        },
+      },
+    ],
+    enabled: true,
+  };
+
   const workflow = await workflowRepository.create({
     tenantId,
     organizationId,
     workspaceId,
     name: definition.name,
-    definition: {
-      ...definition,
-      workspaceId,
-      organizationId,
-    },
     createdBy: userId,
+    definition,
   });
 
   const pluginLoader = new PluginLoader();
-  const webhookAdapter = new WebhookAdapter();
-  const probeAdapter = new DslProbeAdapter();
-  pluginLoader.register(webhookAdapter);
+  const probeAdapter = new DelayProbeAdapter();
+  pluginLoader.register(new WebhookAdapter());
   pluginLoader.register(probeAdapter);
   await pluginLoader.initAll({
     webhook: {},
-    "dsl-probe": {},
+    "delay-probe": {},
   });
 
+  const observability = createObservabilityRuntime();
   const redisClient = new InMemoryRedisQueue();
-  const eventQueue = new EventQueue(redisClient as never);
+  const eventQueue = new EventQueue(
+    redisClient as never,
+    "integration:events",
+    observability,
+  );
   const credentialResolver = new CredentialResolver(credentialRepository);
   const workflowEngine = new WorkflowEngine(
     pluginLoader,
@@ -255,6 +268,10 @@ async function createDslRuntime(definition: WorkflowDefinition) {
     workflowRepository,
     runRepository,
     credentialResolver,
+    observability,
+    {
+      inlineDelayThresholdMs: input.inlineDelayThresholdMs,
+    },
   );
 
   const authService = new AuthService(authRepository, {
@@ -269,6 +286,7 @@ async function createDslRuntime(definition: WorkflowDefinition) {
     pluginLoader,
     eventQueue,
     workflowEngine,
+    observability,
     credentialResolver,
     oauthService: {
       beginAuth: async () => ({ authUrl: "https://example.com/auth" }),
@@ -297,7 +315,6 @@ async function createDslRuntime(definition: WorkflowDefinition) {
       tenantId,
       organizationId,
       workspaceId,
-      userId,
     },
   };
 }
@@ -308,252 +325,44 @@ async function queueWebhookEvent(input: {
   payload: Record<string, unknown>;
 }) {
   const login = await input.runtime.authService.login({
-    email: "dsl@example.com",
-    password: "dsl-password",
-    organizationSlug: "dsl-org",
+    email: "delay@example.com",
+    password: "delay-password",
+    organizationSlug: "delay-org",
     workspaceSlug: "default",
   });
 
   const response = await request(input.app)
     .post("/api/v1/webhook/webhook/http_post")
     .set("authorization", `Bearer ${login.accessToken}`)
-    .send({ payload: input.payload });
+    .send({
+      payload: input.payload,
+    });
 
   expect(response.status).toBe(202);
   expect(response.body.queuedEvents).toBe(1);
 }
 
-describe("Workflow DSL integration", () => {
-  it("resolves trigger + previous-step mappings and routes branch=true path", async () => {
-    const definition: WorkflowDefinition = {
-      id: "wf_dsl_mapping_branch_true",
-      name: "DSL Mapping Branch True",
-      workspaceId: "unused",
-      organizationId: "unused",
-      trigger: {
-        adapter: "webhook",
-        trigger: "http_post",
-        config: {},
-      },
-      context: {
-        threshold: 100,
-      },
-      steps: [
-        {
-          id: "extract",
-          adapter: "dsl-probe",
-          action: "capture",
-          config: {},
-          input: {
-            orderId: {
-              $ref: "trigger.payload.order.id",
-            },
-            amount: {
-              $ref: "trigger.payload.order.amount",
-            },
-          },
-        },
-        {
-          id: "record_prepared",
-          adapter: "dsl-probe",
-          action: "record",
-          config: {},
-          input: {
-            fromStep: {
-              $ref: "steps.extract.output.orderId",
-            },
-            note: {
-              $literal: "prepared",
-            },
-          },
-        },
-        {
-          id: "route_by_amount",
-          type: "branch",
-          condition: {
-            left: {
-              $ref: "steps.extract.output.amount",
-            },
-            operator: "greaterThan",
-            right: {
-              $ref: "context.threshold",
-            },
-          },
-          then: [
-            {
-              id: "high_path",
-              adapter: "dsl-probe",
-              action: "record",
-              config: {},
-              input: {
-                branch: {
-                  $literal: "then",
-                },
-              },
-            },
-          ],
-          else: [
-            {
-              id: "low_path",
-              adapter: "dsl-probe",
-              action: "record",
-              config: {},
-              input: {
-                branch: {
-                  $literal: "else",
-                },
-              },
-            },
-          ],
-        },
-      ],
-      enabled: true,
-    };
-
-    const { app, runtime, probeAdapter, scope } = await createDslRuntime(definition);
+describe("Durable delay scheduler", () => {
+  it("persists long delays instead of blocking worker execution", async () => {
+    const { app, runtime, scope, probeAdapter } = await createDurableDelayRuntime({
+      delayMs: 250,
+      inlineDelayThresholdMs: 10,
+    });
 
     try {
       await queueWebhookEvent({
         app,
         runtime,
         payload: {
-          order: {
-            id: "order-1000",
-            amount: 150,
-          },
+          orderId: "persist-check",
         },
       });
 
+      const startedAt = Date.now();
       expect(await runtime.workflowEngine.processNextEvent()).toBe(true);
-
-      const callsByAction = probeAdapter.calls.filter((call) => call.actionKey === "record");
-      expect(callsByAction.some((call) => call.input.fromStep === "order-1000")).toBe(true);
-      expect(callsByAction.some((call) => call.input.branch === "then")).toBe(true);
-      expect(callsByAction.some((call) => call.input.branch === "else")).toBe(false);
-
-      const logs = await runtime.repositories.runRepository.listLogs({
-        tenantId: scope.tenantId,
-        organizationId: scope.organizationId,
-        workspaceId: scope.workspaceId,
-      });
-      expect(logs.some((entry) => entry.event_type === "workflow.branch.selected")).toBe(true);
-      expect(logs.some((entry) => entry.event_type === "workflow.condition.evaluated")).toBe(
-        true,
-      );
-    } finally {
-      await runtime.close();
-    }
-  });
-
-  it("routes branch=false and persists skipped step metadata", async () => {
-    const definition: WorkflowDefinition = {
-      id: "wf_dsl_branch_false_skipped",
-      name: "DSL Branch False + Skipped",
-      workspaceId: "unused",
-      organizationId: "unused",
-      trigger: {
-        adapter: "webhook",
-        trigger: "http_post",
-        config: {},
-      },
-      steps: [
-        {
-          id: "extract",
-          adapter: "dsl-probe",
-          action: "capture",
-          config: {},
-          input: {
-            amount: {
-              $ref: "trigger.payload.order.amount",
-            },
-          },
-        },
-        {
-          id: "route_amount",
-          type: "branch",
-          condition: {
-            left: {
-              $ref: "steps.extract.output.amount",
-            },
-            operator: "greaterThan",
-            right: {
-              $literal: 100,
-            },
-          },
-          then: [
-            {
-              id: "then_step",
-              adapter: "dsl-probe",
-              action: "record",
-              config: {},
-              input: {
-                branch: {
-                  $literal: "then",
-                },
-              },
-            },
-          ],
-          else: [
-            {
-              id: "else_step",
-              adapter: "dsl-probe",
-              action: "record",
-              config: {},
-              input: {
-                branch: {
-                  $literal: "else",
-                },
-              },
-            },
-          ],
-        },
-        {
-          id: "conditional_follow_up",
-          adapter: "dsl-probe",
-          action: "record",
-          config: {},
-          condition: {
-            left: {
-              $ref: "trigger.payload.flags.executeFollowUp",
-            },
-            operator: "equals",
-            right: {
-              $literal: true,
-            },
-          },
-          input: {
-            followUp: {
-              $literal: "should-not-run",
-            },
-          },
-        },
-      ],
-      enabled: true,
-    };
-
-    const { app, runtime, probeAdapter, scope } = await createDslRuntime(definition);
-
-    try {
-      await queueWebhookEvent({
-        app,
-        runtime,
-        payload: {
-          order: {
-            amount: 20,
-          },
-          flags: {
-            executeFollowUp: false,
-          },
-        },
-      });
-
-      expect(await runtime.workflowEngine.processNextEvent()).toBe(true);
-
-      expect(probeAdapter.calls.some((call) => call.input.branch === "else")).toBe(true);
-      expect(probeAdapter.calls.some((call) => call.input.branch === "then")).toBe(false);
-      expect(
-        probeAdapter.calls.some((call) => call.input.followUp === "should-not-run"),
-      ).toBe(false);
+      const elapsedMs = Date.now() - startedAt;
+      expect(elapsedMs).toBeLessThan(150);
+      expect(probeAdapter.calls).toHaveLength(0);
 
       const runs = await runtime.repositories.runRepository.listRuns({
         tenantId: scope.tenantId,
@@ -561,84 +370,145 @@ describe("Workflow DSL integration", () => {
         workspaceId: scope.workspaceId,
       });
       expect(runs).toHaveLength(1);
-      const runResult = runs[0].result_json as {
-        steps?: Array<{ stepId?: string; status?: string }>;
-      };
-      expect(
-        runResult.steps?.some(
-          (step) => step.stepId === "conditional_follow_up" && step.status === "skipped",
-        ),
-      ).toBe(true);
+      expect(runs[0].status).toBe("waiting");
+
+      const waits = await runtime.repositories.runRepository.listScheduledWaits({
+        tenantId: scope.tenantId,
+        organizationId: scope.organizationId,
+        workspaceId: scope.workspaceId,
+      });
+      expect(waits).toHaveLength(1);
+      expect(waits[0].status).toBe("pending");
+      expect(waits[0].step_id).toBe("wait_step");
 
       const logs = await runtime.repositories.runRepository.listLogs({
         tenantId: scope.tenantId,
         organizationId: scope.organizationId,
         workspaceId: scope.workspaceId,
+        runId: runs[0].id,
       });
-      expect(logs.some((entry) => entry.event_type === "workflow.step.skipped")).toBe(true);
+      expect(logs.some((entry) => entry.event_type === "workflow.delay.persisted")).toBe(
+        true,
+      );
+      expect(
+        runtime.observability.metrics
+          .render()
+          .includes('workflow_delays_scheduled_total{workflow_key="wf_durable_delay"} 1'),
+      ).toBe(true);
     } finally {
       await runtime.close();
     }
   });
 
-  it("executes delay steps and emits delay lifecycle logs", async () => {
-    const definition: WorkflowDefinition = {
-      id: "wf_dsl_delay",
-      name: "DSL Delay",
-      workspaceId: "unused",
-      organizationId: "unused",
-      trigger: {
-        adapter: "webhook",
-        trigger: "http_post",
-        config: {},
-      },
-      steps: [
-        {
-          id: "wait_short",
-          type: "delay",
-          delayMs: 20,
-        },
-        {
-          id: "after_wait",
-          adapter: "dsl-probe",
-          action: "record",
-          config: {},
-          input: {
-            waited: {
-              $literal: true,
-            },
-          },
-        },
-      ],
-      enabled: true,
-    };
-
-    const { app, runtime, scope } = await createDslRuntime(definition);
+  it("resumes due delayed runs with same workflow_run_id and delay lifecycle logs", async () => {
+    const { app, runtime, scope, probeAdapter } = await createDurableDelayRuntime({
+      delayMs: 120,
+      inlineDelayThresholdMs: 10,
+    });
 
     try {
       await queueWebhookEvent({
         app,
         runtime,
         payload: {
-          ping: true,
+          orderId: "resume-check",
         },
       });
 
-      const startedAt = Date.now();
       expect(await runtime.workflowEngine.processNextEvent()).toBe(true);
-      const elapsedMs = Date.now() - startedAt;
-      expect(elapsedMs).toBeGreaterThanOrEqual(15);
+      expect(
+        await runtime.workflowEngine.processNextScheduledDelay(
+          new Date("2100-01-01T00:00:00.000Z"),
+        ),
+      ).toBe(true);
+
+      const runs = await runtime.repositories.runRepository.listRuns({
+        tenantId: scope.tenantId,
+        organizationId: scope.organizationId,
+        workspaceId: scope.workspaceId,
+      });
+      expect(runs).toHaveLength(1);
+      expect(runs[0].status).toBe("success");
+      expect(probeAdapter.calls).toHaveLength(1);
+      expect(probeAdapter.calls[0].runId).toBe(runs[0].id);
+
+      const waits = await runtime.repositories.runRepository.listScheduledWaits({
+        tenantId: scope.tenantId,
+        organizationId: scope.organizationId,
+        workspaceId: scope.workspaceId,
+      });
+      expect(waits).toHaveLength(1);
+      expect(waits[0].status).toBe("completed");
 
       const logs = await runtime.repositories.runRepository.listLogs({
         tenantId: scope.tenantId,
         organizationId: scope.organizationId,
         workspaceId: scope.workspaceId,
+        runId: runs[0].id,
       });
-      expect(logs.some((entry) => entry.event_type === "workflow.delay.scheduled")).toBe(true);
-      expect(logs.some((entry) => entry.event_type === "workflow.delay.completed")).toBe(true);
+      expect(logs.some((entry) => entry.event_type === "workflow.delay.claimed")).toBe(true);
+      expect(logs.some((entry) => entry.event_type === "workflow.delay.resumed")).toBe(true);
+      expect(logs.some((entry) => entry.event_type === "workflow.delay.completed")).toBe(
+        true,
+      );
+      expect(
+        runtime.observability.metrics
+          .render()
+          .includes('workflow_delays_resumed_total{workflow_key="wf_durable_delay"} 1'),
+      ).toBe(true);
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  it("supports restart-safe resume and prevents duplicate scheduler claims", async () => {
+    const { app, runtime, scope, probeAdapter } = await createDurableDelayRuntime({
+      delayMs: 100,
+      inlineDelayThresholdMs: 10,
+    });
+
+    try {
+      await queueWebhookEvent({
+        app,
+        runtime,
+        payload: {
+          orderId: "restart-safe-check",
+        },
+      });
+      expect(await runtime.workflowEngine.processNextEvent()).toBe(true);
+
+      const restartedEngine = new WorkflowEngine(
+        runtime.pluginLoader,
+        runtime.eventQueue,
+        runtime.repositories.workflowRepository,
+        runtime.repositories.runRepository,
+        runtime.credentialResolver,
+        runtime.observability,
+        {
+          inlineDelayThresholdMs: 10,
+        },
+      );
+
+      expect(
+        await restartedEngine.processNextScheduledDelay(
+          new Date("2100-01-01T00:00:00.000Z"),
+        ),
+      ).toBe(true);
+      expect(
+        await runtime.workflowEngine.processNextScheduledDelay(
+          new Date("2100-01-01T00:00:00.000Z"),
+        ),
+      ).toBe(false);
+
+      const runs = await runtime.repositories.runRepository.listRuns({
+        tenantId: scope.tenantId,
+        organizationId: scope.organizationId,
+        workspaceId: scope.workspaceId,
+      });
+      expect(runs[0].status).toBe("success");
+      expect(probeAdapter.calls).toHaveLength(1);
     } finally {
       await runtime.close();
     }
   });
 });
-

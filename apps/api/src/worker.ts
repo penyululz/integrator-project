@@ -7,6 +7,11 @@ async function runWorker(): Promise<void> {
 
   while (true) {
     try {
+      const handledScheduledDelay =
+        await runtime.workflowEngine.processNextScheduledDelay();
+      if (handledScheduledDelay) {
+        continue;
+      }
       const handledRetry = await runtime.workflowEngine.processNextRetry();
       if (handledRetry) {
         continue;

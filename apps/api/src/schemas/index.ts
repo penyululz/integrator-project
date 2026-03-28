@@ -13,6 +13,7 @@ const isoDateTimeSchema = z
 export const workflowRunStatusSchema = z.enum([
   "queued",
   "running",
+  "waiting",
   "retrying",
   "success",
   "failed",

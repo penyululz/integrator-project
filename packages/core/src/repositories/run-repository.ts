@@ -7,6 +7,7 @@ import {
 export type WorkflowRunStatus =
   | "queued"
   | "running"
+  | "waiting"
   | "retrying"
   | "success"
   | "failed"
@@ -60,6 +61,35 @@ export type RetryQueueRecord = {
   failure_classification: string | null;
   resolved_at: string | null;
   dead_lettered_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ScheduledWaitStatus =
+  | "pending"
+  | "processing"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export type ScheduledWaitRecord = {
+  id: string;
+  tenant_id: string;
+  organization_id: string;
+  workspace_id: string;
+  workflow_run_id: string;
+  workflow_id: string;
+  step_id: string;
+  step_path: string;
+  schedule_key: string;
+  payload_json: Record<string, unknown>;
+  scheduled_for: string;
+  status: ScheduledWaitStatus;
+  attempt_count: number;
+  max_attempts: number;
+  last_error: string | null;
+  claimed_at: string | null;
+  completed_at: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -268,6 +298,44 @@ export class RunRepository {
         sanitizeSensitiveMessage(input.lastError),
         JSON.stringify(redactSensitiveRecord(input.result)),
       ],
+    );
+  }
+
+  async markRunWaiting(input: {
+    runId: string;
+    attemptCount: number;
+    maxAttempts: number;
+    result: Record<string, unknown>;
+    lastError?: string | null;
+  }): Promise<void> {
+    await this.pool.query(
+      `UPDATE workflow_runs
+       SET status = 'waiting',
+           attempt_count = $2,
+           max_attempts = $3,
+           result_json = $4,
+           last_error = $5,
+           finished_at = NULL
+       WHERE id = $1`,
+      [
+        input.runId,
+        input.attemptCount,
+        input.maxAttempts,
+        JSON.stringify(redactSensitiveRecord(input.result)),
+        input.lastError ? sanitizeSensitiveMessage(input.lastError) : null,
+      ],
+    );
+  }
+
+  async markRunRunning(input: {
+    runId: string;
+  }): Promise<void> {
+    await this.pool.query(
+      `UPDATE workflow_runs
+       SET status = 'running',
+           finished_at = NULL
+       WHERE id = $1`,
+      [input.runId],
     );
   }
 
@@ -561,6 +629,188 @@ export class RunRepository {
          AND workspace_id = $3
        ORDER BY created_at DESC`,
       [input.tenantId, input.organizationId, input.workspaceId],
+    );
+    return result.rows;
+  }
+
+  async upsertScheduledWait(input: {
+    tenantId: string;
+    organizationId: string;
+    workspaceId: string;
+    workflowRunId: string;
+    workflowId: string;
+    stepId: string;
+    stepPath: string;
+    scheduleKey: string;
+    payload: Record<string, unknown>;
+    scheduledFor: string;
+    maxAttempts?: number;
+  }): Promise<ScheduledWaitRecord> {
+    const result = await this.pool.query<ScheduledWaitRecord>(
+      `INSERT INTO scheduled_waits (
+         tenant_id,
+         organization_id,
+         workspace_id,
+         workflow_run_id,
+         workflow_id,
+         step_id,
+         step_path,
+         schedule_key,
+         payload_json,
+         scheduled_for,
+         status,
+         attempt_count,
+         max_attempts,
+         last_error,
+         claimed_at,
+         completed_at
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pending', 0, $11, NULL, NULL, NULL)
+       ON CONFLICT (schedule_key)
+       DO UPDATE SET
+         payload_json = EXCLUDED.payload_json,
+         scheduled_for = EXCLUDED.scheduled_for,
+         status = 'pending',
+         max_attempts = EXCLUDED.max_attempts,
+         last_error = NULL,
+         claimed_at = NULL,
+         completed_at = NULL,
+         updated_at = NOW()
+       RETURNING *`,
+      [
+        input.tenantId,
+        input.organizationId,
+        input.workspaceId,
+        input.workflowRunId,
+        input.workflowId,
+        input.stepId,
+        input.stepPath,
+        input.scheduleKey,
+        JSON.stringify(redactSensitiveRecord(input.payload)),
+        input.scheduledFor,
+        Math.max(1, input.maxAttempts || 5),
+      ],
+    );
+    return result.rows[0];
+  }
+
+  async claimDueScheduledWait(input: {
+    dueBefore: string;
+    reclaimProcessingBefore: string;
+  }): Promise<ScheduledWaitRecord | null> {
+    const candidate = await this.pool.query<ScheduledWaitRecord>(
+      `SELECT *
+       FROM scheduled_waits
+       WHERE (status = 'pending' AND scheduled_for <= $1)
+          OR (
+            status = 'processing'
+            AND claimed_at IS NOT NULL
+            AND claimed_at <= $2
+          )
+       ORDER BY scheduled_for ASC
+       LIMIT 1`,
+      [input.dueBefore, input.reclaimProcessingBefore],
+    );
+    const next = candidate.rows[0];
+    if (!next) {
+      return null;
+    }
+
+    const claimed = await this.pool.query<ScheduledWaitRecord>(
+      `UPDATE scheduled_waits
+       SET status = 'processing',
+           attempt_count = attempt_count + 1,
+           claimed_at = NOW(),
+           updated_at = NOW()
+       WHERE id = $1
+         AND (
+           (status = 'pending' AND scheduled_for <= $2)
+           OR (
+             status = 'processing'
+             AND claimed_at IS NOT NULL
+             AND claimed_at <= $3
+           )
+         )
+       RETURNING *`,
+      [next.id, input.dueBefore, input.reclaimProcessingBefore],
+    );
+
+    return claimed.rows[0] || null;
+  }
+
+  async markScheduledWaitPending(input: {
+    waitId: string;
+    scheduledFor: string;
+    lastError: string;
+  }): Promise<void> {
+    await this.pool.query(
+      `UPDATE scheduled_waits
+       SET status = 'pending',
+           scheduled_for = $2,
+           last_error = $3,
+           updated_at = NOW()
+       WHERE id = $1`,
+      [input.waitId, input.scheduledFor, sanitizeSensitiveMessage(input.lastError)],
+    );
+  }
+
+  async markScheduledWaitCompleted(input: {
+    waitId: string;
+  }): Promise<void> {
+    await this.pool.query(
+      `UPDATE scheduled_waits
+       SET status = 'completed',
+           completed_at = NOW(),
+           last_error = NULL,
+           updated_at = NOW()
+       WHERE id = $1`,
+      [input.waitId],
+    );
+  }
+
+  async markScheduledWaitFailed(input: {
+    waitId: string;
+    lastError: string;
+  }): Promise<void> {
+    await this.pool.query(
+      `UPDATE scheduled_waits
+       SET status = 'failed',
+           completed_at = NOW(),
+           last_error = $2,
+           updated_at = NOW()
+       WHERE id = $1`,
+      [input.waitId, sanitizeSensitiveMessage(input.lastError)],
+    );
+  }
+
+  async listScheduledWaits(input: {
+    tenantId: string;
+    organizationId: string;
+    workspaceId: string;
+    runId?: string;
+  }): Promise<ScheduledWaitRecord[]> {
+    const values: unknown[] = [
+      input.tenantId,
+      input.organizationId,
+      input.workspaceId,
+    ];
+    const predicates = [
+      "tenant_id = $1",
+      "organization_id = $2",
+      "workspace_id = $3",
+    ];
+
+    if (input.runId) {
+      values.push(input.runId);
+      predicates.push(`workflow_run_id = $${values.length}`);
+    }
+
+    const result = await this.pool.query<ScheduledWaitRecord>(
+      `SELECT *
+       FROM scheduled_waits
+       WHERE ${predicates.join("\n         AND ")}
+       ORDER BY created_at DESC`,
+      values,
     );
     return result.rows;
   }

@@ -19,12 +19,18 @@ import {
   type WorkflowStepRetryPolicy,
 } from "@integration/shared";
 import type { EventQueue } from "./event-queue";
-import type { IncomingEvent, RetryPayload, StepResult } from "./types";
+import type {
+  IncomingEvent,
+  RetryPayload,
+  ScheduledDelayPayload,
+  StepResult,
+} from "./types";
 import type { PluginLoader } from "./plugin-loader";
 import { WorkflowRepository, type WorkflowRecord } from "../repositories/workflow-repository";
 import {
   RunRepository,
   type RetryQueueRecord,
+  type ScheduledWaitRecord,
   type WorkflowRunRecord,
 } from "../repositories/run-repository";
 import { CredentialResolver } from "../auth/credential-resolver";
@@ -66,6 +72,7 @@ type ExecutionState = {
   currentAttempt: number;
   resumeStepPath?: string;
   activeRetryJob?: RetryQueueRecord;
+  activeScheduledWait?: ScheduledWaitRecord;
 };
 
 type ResumeState = {
@@ -77,6 +84,7 @@ type ResumeState = {
 type MutableExecutionState = {
   stepResults: StepResult[];
   activeRetryJob?: RetryQueueRecord;
+  activeScheduledWait?: ScheduledWaitRecord;
   resume: ResumeState;
   workflowContext: Record<string, unknown>;
 };
@@ -119,8 +127,42 @@ const DEFAULT_RETRY_POLICY: Omit<ResolvedRetryPolicy, "enabled"> = {
   jitter: true,
 };
 
+const DEFAULT_INLINE_DELAY_THRESHOLD_MS = 2_000;
+const DEFAULT_SCHEDULED_WAIT_LEASE_MS = 60_000;
+const DEFAULT_SCHEDULED_WAIT_RETRY_BASE_DELAY_MS = 1_000;
+const MAX_SCHEDULED_WAIT_RETRY_DELAY_MS = 300_000;
+
 function clampNumber(input: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, input));
+}
+
+function readPositiveIntegerEnv(
+  name: string,
+  fallback: number,
+  maxValue: number,
+): number {
+  const raw = process.env[name];
+  if (!raw) {
+    return fallback;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return clampNumber(parsed, 0, maxValue);
+}
+
+function toIsoTimestamp(value: unknown): string | null {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (value instanceof Date) {
+    return Number.isFinite(value.getTime()) ? value.toISOString() : null;
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return new Date(value).toISOString();
+  }
+  return null;
 }
 
 function isObject(input: unknown): input is Record<string, unknown> {
@@ -288,6 +330,10 @@ function retryKeyFor(runId: string, stepId: string): string {
   return `run:${runId}:step:${stepId}`;
 }
 
+function scheduledWaitKeyFor(runId: string, stepPath: string): string {
+  return `delay:${runId}:${stepPath}`;
+}
+
 function parseRetryPayload(input: Record<string, unknown>): RetryPayload | null {
   const runId = input.runId;
   const workflowId = input.workflowId;
@@ -327,6 +373,50 @@ function parseRetryPayload(input: Record<string, unknown>): RetryPayload | null 
     stepIndex: typeof stepIndex === "number" ? stepIndex : undefined,
     stepId,
     stepAttempt,
+    triggerEvent,
+    stepResults,
+  };
+}
+
+function parseScheduledDelayPayload(
+  input: Record<string, unknown>,
+): ScheduledDelayPayload | null {
+  const runId = input.runId;
+  const workflowId = input.workflowId;
+  const workflowExternalId = input.workflowExternalId;
+  const stepId = input.stepId;
+  const stepPath = input.stepPath;
+  const stepAttempt = input.stepAttempt;
+  const delayMs = input.delayMs;
+  const scheduledFor = input.scheduledFor;
+  const triggerEvent = input.triggerEvent as IncomingEvent | undefined;
+  const stepResults = input.stepResults as StepResult[] | undefined;
+
+  if (
+    typeof runId !== "string" ||
+    typeof workflowId !== "string" ||
+    typeof workflowExternalId !== "string" ||
+    typeof stepId !== "string" ||
+    typeof stepPath !== "string" ||
+    typeof stepAttempt !== "number" ||
+    typeof delayMs !== "number" ||
+    !Number.isFinite(delayMs) ||
+    typeof scheduledFor !== "string" ||
+    !triggerEvent ||
+    !Array.isArray(stepResults)
+  ) {
+    return null;
+  }
+
+  return {
+    runId,
+    workflowId,
+    workflowExternalId,
+    stepId,
+    stepPath,
+    stepAttempt,
+    delayMs,
+    scheduledFor,
     triggerEvent,
     stepResults,
   };
@@ -550,7 +640,16 @@ function compareValues(left: unknown, right: unknown): number {
     "CONDITION_EVALUATION_FAILED",
   );
 }
+
+export type WorkflowEngineOptions = {
+  inlineDelayThresholdMs?: number;
+  scheduledWaitLeaseMs?: number;
+};
+
 export class WorkflowEngine {
+  private readonly inlineDelayThresholdMs: number;
+  private readonly scheduledWaitLeaseMs: number;
+
   constructor(
     private readonly pluginLoader: PluginLoader,
     private readonly eventQueue: EventQueue,
@@ -558,7 +657,29 @@ export class WorkflowEngine {
     private readonly runRepository: RunRepository,
     private readonly credentialResolver: CredentialResolver,
     private readonly observability: ObservabilityRuntime = getGlobalObservabilityRuntime(),
-  ) {}
+    options: WorkflowEngineOptions = {},
+  ) {
+    this.inlineDelayThresholdMs = clampNumber(
+      options.inlineDelayThresholdMs ??
+        readPositiveIntegerEnv(
+          "INLINE_DELAY_THRESHOLD_MS",
+          DEFAULT_INLINE_DELAY_THRESHOLD_MS,
+          86_400_000,
+        ),
+      0,
+      86_400_000,
+    );
+    this.scheduledWaitLeaseMs = clampNumber(
+      options.scheduledWaitLeaseMs ??
+        readPositiveIntegerEnv(
+          "SCHEDULED_WAIT_LEASE_MS",
+          DEFAULT_SCHEDULED_WAIT_LEASE_MS,
+          3_600_000,
+        ),
+      1_000,
+      3_600_000,
+    );
+  }
 
   async queueIncomingEvent(event: IncomingEvent): Promise<void> {
     await this.runRepository.appendEventLog({
@@ -603,6 +724,303 @@ export class WorkflowEngine {
     }
 
     return true;
+  }
+
+  private computeScheduledWaitRetryDelayMs(attemptCount: number): number {
+    const exponential = DEFAULT_SCHEDULED_WAIT_RETRY_BASE_DELAY_MS * 2 ** Math.max(0, attemptCount - 1);
+    return clampNumber(exponential, 1_000, MAX_SCHEDULED_WAIT_RETRY_DELAY_MS);
+  }
+
+  private async failRunFromScheduledWait(input: {
+    scheduledWait: ScheduledWaitRecord;
+    message: string;
+  }): Promise<void> {
+    const run = await this.runRepository.findRunByIdScoped({
+      runId: input.scheduledWait.workflow_run_id,
+      tenantId: input.scheduledWait.tenant_id,
+      organizationId: input.scheduledWait.organization_id,
+      workspaceId: input.scheduledWait.workspace_id,
+    });
+    if (!run) {
+      return;
+    }
+
+    await this.runRepository.completeRun({
+      runId: run.id,
+      status: "failed",
+      result: {
+        error: input.message,
+        classification: "invalid_config",
+        steps: Array.isArray((run.result_json as { steps?: unknown }).steps)
+          ? (run.result_json as { steps?: StepResult[] }).steps
+          : [],
+      },
+      attemptCount: run.attempt_count || 1,
+      maxAttempts: run.max_attempts || 1,
+      lastError: input.message,
+      deadLetteredAt: null,
+    });
+  }
+
+  private async handleScheduledWaitExecutionFailure(input: {
+    scheduledWait: ScheduledWaitRecord;
+    message: string;
+  }): Promise<void> {
+    const safeMessage = sanitizeSensitiveMessage(input.message);
+    this.observability.metrics.queueJobsFailedTotal.inc({
+      queue: "scheduled_waits",
+    });
+
+    const exhausted = input.scheduledWait.attempt_count >= input.scheduledWait.max_attempts;
+    if (exhausted) {
+      await this.runRepository.markScheduledWaitFailed({
+        waitId: input.scheduledWait.id,
+        lastError: safeMessage,
+      });
+      await this.runRepository.appendEventLog({
+        tenantId: input.scheduledWait.tenant_id,
+        organizationId: input.scheduledWait.organization_id,
+        workspaceId: input.scheduledWait.workspace_id,
+        workflowId: input.scheduledWait.workflow_id,
+        workflowRunId: input.scheduledWait.workflow_run_id,
+        eventType: "workflow.delay.failed",
+        payload: {
+          scheduledWaitId: input.scheduledWait.id,
+          stepId: input.scheduledWait.step_id,
+          stepPath: input.scheduledWait.step_path,
+          attempt: input.scheduledWait.attempt_count,
+          maxAttempts: input.scheduledWait.max_attempts,
+          exhausted: true,
+          message: safeMessage,
+        },
+      });
+      await this.failRunFromScheduledWait({
+        scheduledWait: input.scheduledWait,
+        message: safeMessage,
+      });
+      return;
+    }
+
+    const retryDelayMs = this.computeScheduledWaitRetryDelayMs(
+      input.scheduledWait.attempt_count,
+    );
+    const nextScheduledFor = new Date(Date.now() + retryDelayMs).toISOString();
+    await this.runRepository.markScheduledWaitPending({
+      waitId: input.scheduledWait.id,
+      scheduledFor: nextScheduledFor,
+      lastError: safeMessage,
+    });
+    await this.runRepository.appendEventLog({
+      tenantId: input.scheduledWait.tenant_id,
+      organizationId: input.scheduledWait.organization_id,
+      workspaceId: input.scheduledWait.workspace_id,
+      workflowId: input.scheduledWait.workflow_id,
+      workflowRunId: input.scheduledWait.workflow_run_id,
+      eventType: "workflow.delay.failed",
+      payload: {
+        scheduledWaitId: input.scheduledWait.id,
+        stepId: input.scheduledWait.step_id,
+        stepPath: input.scheduledWait.step_path,
+        attempt: input.scheduledWait.attempt_count,
+        maxAttempts: input.scheduledWait.max_attempts,
+        exhausted: false,
+        retryDelayMs,
+        nextScheduledFor,
+        message: safeMessage,
+      },
+    });
+  }
+
+  async processNextScheduledDelay(referenceTime = new Date()): Promise<boolean> {
+    const dueBefore = referenceTime.toISOString();
+    const reclaimBefore = new Date(
+      referenceTime.getTime() - this.scheduledWaitLeaseMs,
+    ).toISOString();
+    const scheduledWait = await this.runRepository.claimDueScheduledWait({
+      dueBefore,
+      reclaimProcessingBefore: reclaimBefore,
+    });
+    if (!scheduledWait) {
+      return false;
+    }
+
+    this.observability.metrics.queueJobsProcessedTotal.inc({
+      queue: "scheduled_waits",
+    });
+    const claimedScheduledFor =
+      toIsoTimestamp(scheduledWait.scheduled_for) || dueBefore;
+    const scheduledForMs = Date.parse(claimedScheduledFor);
+    if (Number.isFinite(scheduledForMs)) {
+      const lagSeconds = Math.max(0, (Date.now() - scheduledForMs) / 1000);
+      this.observability.metrics.queueWaitTimeSeconds.observe(
+        { queue: "scheduled_waits" },
+        lagSeconds,
+      );
+      this.observability.metrics.workflowDelaySchedulerLagSeconds.observe(
+        { workflow_key: scheduledWait.workflow_id },
+        lagSeconds,
+      );
+    }
+
+    const payload = parseScheduledDelayPayload(scheduledWait.payload_json);
+    if (!payload) {
+      this.observability.metrics.queueJobsFailedTotal.inc({
+        queue: "scheduled_waits",
+      });
+      await this.runRepository.markScheduledWaitFailed({
+        waitId: scheduledWait.id,
+        lastError: "Scheduled delay payload is invalid and cannot be resumed.",
+      });
+      await this.runRepository.appendEventLog({
+        tenantId: scheduledWait.tenant_id,
+        organizationId: scheduledWait.organization_id,
+        workspaceId: scheduledWait.workspace_id,
+        workflowId: scheduledWait.workflow_id,
+        workflowRunId: scheduledWait.workflow_run_id,
+        eventType: "workflow.delay.failed",
+        payload: {
+          scheduledWaitId: scheduledWait.id,
+          stepId: scheduledWait.step_id,
+          stepPath: scheduledWait.step_path,
+          exhausted: true,
+          message: "Scheduled delay payload is invalid and cannot be resumed.",
+        },
+      });
+      await this.failRunFromScheduledWait({
+        scheduledWait,
+        message: "Scheduled delay payload is invalid and cannot be resumed.",
+      });
+      return true;
+    }
+
+    const workflowRecord = await this.workflowRepository.findByIdScoped({
+      workflowId: payload.workflowId,
+      tenantId: scheduledWait.tenant_id,
+      organizationId: scheduledWait.organization_id,
+      workspaceId: scheduledWait.workspace_id,
+    });
+    if (!workflowRecord) {
+      this.observability.metrics.queueJobsFailedTotal.inc({
+        queue: "scheduled_waits",
+      });
+      await this.runRepository.markScheduledWaitFailed({
+        waitId: scheduledWait.id,
+        lastError: "Workflow no longer exists or is outside tenant scope.",
+      });
+      await this.runRepository.appendEventLog({
+        tenantId: scheduledWait.tenant_id,
+        organizationId: scheduledWait.organization_id,
+        workspaceId: scheduledWait.workspace_id,
+        workflowId: scheduledWait.workflow_id,
+        workflowRunId: scheduledWait.workflow_run_id,
+        eventType: "workflow.delay.failed",
+        payload: {
+          scheduledWaitId: scheduledWait.id,
+          stepId: scheduledWait.step_id,
+          stepPath: scheduledWait.step_path,
+          exhausted: true,
+          message: "Workflow no longer exists or is outside tenant scope.",
+        },
+      });
+      await this.failRunFromScheduledWait({
+        scheduledWait,
+        message: "Workflow no longer exists or is outside tenant scope.",
+      });
+      return true;
+    }
+
+    const run = await this.runRepository.findRunByIdScoped({
+      runId: payload.runId,
+      tenantId: scheduledWait.tenant_id,
+      organizationId: scheduledWait.organization_id,
+      workspaceId: scheduledWait.workspace_id,
+    });
+    if (!run) {
+      this.observability.metrics.queueJobsFailedTotal.inc({
+        queue: "scheduled_waits",
+      });
+      await this.runRepository.markScheduledWaitFailed({
+        waitId: scheduledWait.id,
+        lastError: "Workflow run no longer exists or is outside tenant scope.",
+      });
+      await this.runRepository.appendEventLog({
+        tenantId: scheduledWait.tenant_id,
+        organizationId: scheduledWait.organization_id,
+        workspaceId: scheduledWait.workspace_id,
+        workflowId: scheduledWait.workflow_id,
+        workflowRunId: scheduledWait.workflow_run_id,
+        eventType: "workflow.delay.failed",
+        payload: {
+          scheduledWaitId: scheduledWait.id,
+          stepId: scheduledWait.step_id,
+          stepPath: scheduledWait.step_path,
+          exhausted: true,
+          message: "Workflow run no longer exists or is outside tenant scope.",
+        },
+      });
+      return true;
+    }
+
+    await this.runRepository.markRunRunning({
+      runId: run.id,
+    });
+    await this.runRepository.appendEventLog({
+      tenantId: scheduledWait.tenant_id,
+      organizationId: scheduledWait.organization_id,
+      workspaceId: scheduledWait.workspace_id,
+      workflowId: payload.workflowId,
+      workflowRunId: payload.runId,
+      eventType: "workflow.delay.claimed",
+      payload: {
+        scheduledWaitId: scheduledWait.id,
+        stepId: payload.stepId,
+        stepPath: payload.stepPath,
+        attempt: scheduledWait.attempt_count,
+        scheduledFor: claimedScheduledFor,
+      },
+    });
+
+    this.observability.logger.info(
+      "workflow.delay.claimed",
+      {
+        workflowRunId: payload.runId,
+        workflowId: payload.workflowId,
+        stepId: payload.stepId,
+        retryAttempt: scheduledWait.attempt_count,
+        tenantId: scheduledWait.tenant_id,
+        organizationId: scheduledWait.organization_id,
+        workspaceId: scheduledWait.workspace_id,
+      },
+      {
+        scheduledWaitId: scheduledWait.id,
+        stepPath: payload.stepPath,
+      },
+    );
+
+    try {
+      await this.executeWorkflowState({
+        run: {
+          ...run,
+          status: "running",
+        },
+        workflowRecord,
+        triggerEvent: payload.triggerEvent,
+        stepResults: payload.stepResults,
+        currentAttempt: payload.stepAttempt,
+        resumeStepPath: payload.stepPath,
+        activeScheduledWait: scheduledWait,
+      });
+      return true;
+    } catch (error) {
+      await this.handleScheduledWaitExecutionFailure({
+        scheduledWait,
+        message:
+          error instanceof Error
+            ? error.message
+            : "Scheduled delay resume failed unexpectedly.",
+      });
+      return true;
+    }
   }
 
   async processNextRetry(referenceTime = new Date()): Promise<boolean> {
@@ -1094,6 +1512,35 @@ export class WorkflowEngine {
       attempt,
     });
     mutableState.activeRetryJob = undefined;
+  }
+
+  private isScheduledWaitResume(
+    state: ExecutionState,
+    mutableState: MutableExecutionState,
+    stepPath: string,
+  ): boolean {
+    return Boolean(
+      mutableState.activeScheduledWait && state.resumeStepPath === stepPath,
+    );
+  }
+
+  private async markActiveScheduledWaitCompleted(
+    state: ExecutionState,
+    mutableState: MutableExecutionState,
+    stepPath: string,
+  ): Promise<void> {
+    if (!this.isScheduledWaitResume(state, mutableState, stepPath)) {
+      return;
+    }
+
+    const scheduledWait = mutableState.activeScheduledWait!;
+    await this.runRepository.markScheduledWaitCompleted({
+      waitId: scheduledWait.id,
+    });
+    this.observability.metrics.workflowDelaysResumedTotal.inc({
+      workflow_key: getWorkflowKey(state.workflowRecord),
+    });
+    mutableState.activeScheduledWait = undefined;
   }
 
   private async validateStepCredentials(input: {
@@ -1655,6 +2102,7 @@ export class WorkflowEngine {
         0,
       );
 
+      await this.markActiveScheduledWaitCompleted(state, mutableState, stepPath);
       await this.markActiveRetryResolved(state, mutableState, step, stepPath, attempt);
       return {
         halted: false,
@@ -1681,6 +2129,141 @@ export class WorkflowEngine {
       attempt,
       delayMs,
     });
+
+    if (this.isScheduledWaitResume(state, mutableState, stepPath)) {
+      const scheduledWait = mutableState.activeScheduledWait!;
+      const resumedAt = new Date().toISOString();
+      const scheduledFor =
+        toIsoTimestamp(scheduledWait.scheduled_for) || resumedAt;
+      const resumedAfterMs = Number.isFinite(Date.parse(scheduledFor))
+        ? Math.max(0, Date.now() - Date.parse(scheduledFor))
+        : undefined;
+
+      await this.appendRunLog(state, "workflow.delay.resumed", {
+        scheduledWaitId: scheduledWait.id,
+        stepId: step.id,
+        stepPath,
+        attempt,
+        delayMs,
+        scheduledFor,
+        resumedAt,
+        resumedAfterMs,
+      });
+
+      await this.appendRunLog(state, "workflow.delay.completed", {
+        stepId: step.id,
+        stepPath,
+        attempt,
+        delayMs,
+        scheduledFor,
+        resumedAt,
+        resumedFromSchedule: true,
+        stepDurationMs: Date.now() - stepStartedAt,
+      });
+
+      mutableState.stepResults.push({
+        stepId: step.id,
+        stepPath,
+        status: "delay",
+        success: true,
+        output: {
+          delayMs,
+          scheduledFor,
+          resumedAt,
+          resumedFromSchedule: true,
+        },
+        attempt,
+      });
+
+      this.observability.metrics.workflowStepsTotal.inc({
+        workflow_key: workflowKey,
+        adapter_key: "delay",
+        step_type: "delay",
+        status: "completed",
+      });
+      this.observability.metrics.workflowStepDurationSeconds.observe(
+        {
+          workflow_key: workflowKey,
+          adapter_key: "delay",
+          step_type: "delay",
+          status: "completed",
+        },
+        Math.max(0, (Date.now() - stepStartedAt) / 1000),
+      );
+
+      await this.markActiveScheduledWaitCompleted(state, mutableState, stepPath);
+      await this.markActiveRetryResolved(state, mutableState, step, stepPath, attempt);
+      return {
+        halted: false,
+      };
+    }
+
+    if (delayMs > this.inlineDelayThresholdMs) {
+      const scheduledFor = new Date(Date.now() + delayMs).toISOString();
+      const scheduledPayload: ScheduledDelayPayload = {
+        runId: state.run.id,
+        workflowId: state.workflowRecord.id,
+        workflowExternalId: state.workflowRecord.definition_json.id,
+        stepId: step.id,
+        stepPath,
+        stepAttempt: attempt,
+        delayMs,
+        scheduledFor,
+        triggerEvent: state.triggerEvent,
+        stepResults: mutableState.stepResults,
+      };
+
+      const scheduledWait = await this.runRepository.upsertScheduledWait({
+        tenantId: state.triggerEvent.tenantId,
+        organizationId: state.triggerEvent.organizationId,
+        workspaceId: state.triggerEvent.workspaceId,
+        workflowRunId: state.run.id,
+        workflowId: state.workflowRecord.id,
+        stepId: step.id,
+        stepPath,
+        scheduleKey: scheduledWaitKeyFor(state.run.id, stepPath),
+        payload: scheduledPayload,
+        scheduledFor,
+      });
+
+      await this.runRepository.markRunWaiting({
+        runId: state.run.id,
+        attemptCount: attempt,
+        maxAttempts: state.run.max_attempts || attempt,
+        lastError: null,
+        result: {
+          steps: mutableState.stepResults,
+          waiting: {
+            scheduledWaitId: scheduledWait.id,
+            stepId: step.id,
+            stepPath,
+            delayMs,
+            scheduledFor,
+          },
+        },
+      });
+
+      await this.appendRunLog(state, "workflow.delay.persisted", {
+        scheduledWaitId: scheduledWait.id,
+        stepId: step.id,
+        stepPath,
+        attempt,
+        delayMs,
+        scheduledFor,
+        inlineDelayThresholdMs: this.inlineDelayThresholdMs,
+      });
+
+      this.observability.metrics.workflowDelaysScheduledTotal.inc({
+        workflow_key: workflowKey,
+      });
+      this.observability.metrics.queueJobsEnqueuedTotal.inc({
+        queue: "scheduled_waits",
+      });
+
+      return {
+        halted: true,
+      };
+    }
 
     if (delayMs > 0) {
       await new Promise((resolve) => setTimeout(resolve, delayMs));
@@ -1924,6 +2507,7 @@ export class WorkflowEngine {
     const mutableState: MutableExecutionState = {
       stepResults: [...state.stepResults],
       activeRetryJob: state.activeRetryJob,
+      activeScheduledWait: state.activeScheduledWait,
       resume: {
         targetPath: state.resumeStepPath,
         reached: !state.resumeStepPath,
@@ -1958,6 +2542,12 @@ export class WorkflowEngine {
           attempts: mutableState.resume.attemptForTarget,
           lastError: message,
           failureClassification: "invalid_config",
+        });
+      }
+      if (mutableState.activeScheduledWait) {
+        await this.runRepository.markScheduledWaitFailed({
+          waitId: mutableState.activeScheduledWait.id,
+          lastError: message,
         });
       }
       await this.appendRunLog(state, "workflow.failed", {

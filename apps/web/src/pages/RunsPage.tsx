@@ -4,9 +4,11 @@ import {
   listLogs,
   listRetryJobs,
   listRuns,
+  listScheduledWaits,
   type EventLogRecord,
   type RetryQueueRecord,
   type RunRecord,
+  type ScheduledWaitRecord,
 } from "../api";
 import { RunStatusBadge } from "../components/RunStatusBadge";
 import {
@@ -22,6 +24,7 @@ import {
 export function RunsPage() {
   const [runs, setRuns] = useState<RunRecord[]>([]);
   const [retries, setRetries] = useState<RetryQueueRecord[]>([]);
+  const [scheduledWaits, setScheduledWaits] = useState<ScheduledWaitRecord[]>([]);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [selectedRun, setSelectedRun] = useState<RunRecord | null>(null);
   const [logs, setLogs] = useState<EventLogRecord[]>([]);
@@ -36,6 +39,13 @@ export function RunsPage() {
     }
     return retries.filter((retry) => retry.workflow_run_id === selectedRunId);
   }, [retries, selectedRunId]);
+
+  const selectedRunScheduledWaits = useMemo(() => {
+    if (!selectedRunId) {
+      return [] as ScheduledWaitRecord[];
+    }
+    return scheduledWaits.filter((wait) => wait.workflow_run_id === selectedRunId);
+  }, [scheduledWaits, selectedRunId]);
 
   const timeline = useMemo(() => getRunStepTimeline(selectedRun), [selectedRun]);
   const logHighlights = useMemo(() => toRunLogHighlights(logs), [logs]);
@@ -60,6 +70,10 @@ export function RunsPage() {
       logHighlights.filter(
         (entry) =>
           entry.eventType === "workflow.delay.scheduled" ||
+          entry.eventType === "workflow.delay.persisted" ||
+          entry.eventType === "workflow.delay.claimed" ||
+          entry.eventType === "workflow.delay.resumed" ||
+          entry.eventType === "workflow.delay.failed" ||
           entry.eventType === "workflow.delay.completed",
       ),
     [logHighlights],
@@ -75,9 +89,14 @@ export function RunsPage() {
     setError(null);
 
     try {
-      const [nextRuns, nextRetries] = await Promise.all([listRuns(), listRetryJobs()]);
+      const [nextRuns, nextRetries, nextScheduledWaits] = await Promise.all([
+        listRuns(),
+        listRetryJobs(),
+        listScheduledWaits(),
+      ]);
       setRuns(nextRuns);
       setRetries(nextRetries);
+      setScheduledWaits(nextScheduledWaits);
 
       if (nextRuns.length === 0) {
         setSelectedRunId(null);
@@ -265,6 +284,24 @@ export function RunsPage() {
               </div>
 
               <div style={{ border: "1px solid #ececec", borderRadius: 8, padding: 10 }}>
+                <strong>Durable Wait State</strong>
+                {selectedRunScheduledWaits.length === 0 ? (
+                  <p style={{ marginBottom: 0 }}>No durable wait records.</p>
+                ) : null}
+                <ul style={{ marginTop: 8 }}>
+                  {selectedRunScheduledWaits.map((wait) => (
+                    <li key={wait.id}>
+                      {wait.step_id} ({wait.step_path}) - {wait.status} - scheduled{" "}
+                      {wait.scheduled_for}
+                      {wait.claimed_at ? ` - claimed ${wait.claimed_at}` : ""}
+                      {wait.completed_at ? ` - completed ${wait.completed_at}` : ""}
+                      {wait.last_error ? ` - ${wait.last_error}` : ""}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+
+              <div style={{ border: "1px solid #ececec", borderRadius: 8, padding: 10 }}>
                 <strong>Step Timeline</strong>
                 {timeline.length === 0 ? <p style={{ marginBottom: 0 }}>No step timeline available yet.</p> : null}
                 <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
@@ -326,6 +363,11 @@ export function RunsPage() {
                         <li key={entry.id}>
                           {entry.eventType} {entry.stepId ? `(${entry.stepId})` : ""}
                           {entry.delayMs !== undefined ? ` - ${entry.delayMs}ms` : ""}
+                          {entry.scheduledFor ? ` - scheduled ${entry.scheduledFor}` : ""}
+                          {entry.resumedAfterMs !== undefined
+                            ? ` - resumed after ${entry.resumedAfterMs}ms`
+                            : ""}
+                          {entry.scheduledWaitId ? ` - wait ${entry.scheduledWaitId}` : ""}
                         </li>
                       ))}
                     </ul>

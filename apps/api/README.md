@@ -163,6 +163,40 @@ Event log types include:
 - `workflow.retry.exhausted`
 - `workflow.dead_lettered`
 
+## Durable Delay Scheduler (v1)
+
+Long delay steps now persist to `scheduled_waits` instead of blocking worker threads.
+
+- run status `waiting` indicates a durable pause
+- scheduler loop claims due rows and resumes the same `workflow_run_id`
+- restart-safe behavior: delayed runs survive API/worker restarts
+- safe claim semantics:
+  - `pending` -> `processing`
+  - lease-based reclaim of stale `processing` rows
+
+### Delay Lifecycle Events
+
+- `workflow.delay.scheduled`
+- `workflow.delay.persisted`
+- `workflow.delay.claimed`
+- `workflow.delay.resumed`
+- `workflow.delay.completed`
+- `workflow.delay.failed`
+
+### Delay Runtime Controls
+
+- `INLINE_DELAY_THRESHOLD_MS`:
+  - delays above this threshold are persisted
+  - short delays can still execute inline
+- `SCHEDULED_WAIT_LEASE_MS`:
+  - reclaim timeout for stale scheduler claims
+
+### Delay Inspection Endpoints
+
+- `GET /api/v1/delays`
+  - lists scoped durable wait records
+  - optional `runId` query filter
+
 ## Role Model (v1)
 
 Roles: `owner`, `admin`, `member`

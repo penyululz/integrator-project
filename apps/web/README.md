@@ -92,8 +92,18 @@ The Runs page now includes an operational detail view:
 - branch decision visibility
 - delay scheduling/completion visibility
 - retry lifecycle visibility (`scheduled`, `started`, `succeeded`, `exhausted`)
+- durable delay lifecycle visibility (`persisted`, `claimed`, `resumed`, `completed`, `failed`)
 - log filtering by event type
 - compact payload preview with token redaction
+
+### Durable Wait Visibility
+
+Run detail now includes a **Durable Wait State** panel sourced from `GET /api/v1/delays`:
+
+- wait status (`pending`, `processing`, `completed`, `failed`)
+- scheduled-for timestamp
+- claim/completion timestamps
+- per-step wait path metadata
 
 ## Test Coverage Added (web)
 

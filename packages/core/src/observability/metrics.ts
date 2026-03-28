@@ -222,6 +222,16 @@ export class PlatformMetrics {
     "Total queue jobs failed to process.",
     ["queue"],
   );
+  readonly workflowDelaysScheduledTotal = this.counter(
+    "workflow_delays_scheduled_total",
+    "Total durable workflow delays persisted for future resume.",
+    ["workflow_key"],
+  );
+  readonly workflowDelaysResumedTotal = this.counter(
+    "workflow_delays_resumed_total",
+    "Total durable workflow delays resumed by scheduler.",
+    ["workflow_key"],
+  );
 
   readonly workflowRunDurationSeconds = this.histogram(
     "workflow_run_duration_seconds",
@@ -246,6 +256,12 @@ export class PlatformMetrics {
     "Adapter action execution duration in seconds.",
     ["adapter_key", "action_key", "status"],
     [0.01, 0.05, 0.1, 0.3, 0.5, 1, 3, 5, 10, 30],
+  );
+  readonly workflowDelaySchedulerLagSeconds = this.histogram(
+    "workflow_delay_scheduler_lag_seconds",
+    "Delay scheduler lag between scheduled_for and claim time in seconds.",
+    ["workflow_key"],
+    [0.001, 0.01, 0.05, 0.1, 0.3, 0.5, 1, 3, 5, 10, 30, 60],
   );
 
   get contentType(): string {
