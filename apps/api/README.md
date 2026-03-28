@@ -46,6 +46,66 @@ Protected repositories query with all three scope keys:
 
 This is enforced for integrations, credentials, workflows, workflow runs, and logs.
 
+## Secret Management + Credential Hardening (v1)
+
+Credential secrets are now stored using AES-256-GCM envelope-style encryption.
+
+### Encryption model
+
+- Master key source: `MASTER_ENCRYPTION_KEY`
+- Algorithm: `aes-256-gcm`
+- Encrypted credential envelope fields:
+  - `encrypted_data` (base64 ciphertext)
+  - `iv` (base64 nonce)
+  - `auth_tag` (base64 GCM authentication tag)
+  - `key_version` (integer)
+
+Plaintext credential columns are no longer used for writes.
+
+### Key versioning and rotation
+
+- Current key version: `MASTER_ENCRYPTION_KEY_VERSION` (default `1`)
+- Previous keys for backward decryption:
+  - `PREVIOUS_MASTER_ENCRYPTION_KEYS`
+  - format: `1:<key>,2:<key>`
+- Rotation helper script:
+  - `npm run reencrypt:credentials -w @integration/core`
+
+### Credential lifecycle and isolation
+
+- Credential lookup is always scoped by:
+  - `tenant_id`
+  - `organization_id`
+  - `workspace_id`
+  - `provider_key`
+- Decryption happens only in runtime credential resolution (`CredentialResolver`).
+- Decrypted values are passed to adapter context only during step execution.
+- API responses never include raw credential values.
+
+### Credential health model
+
+Credential status values:
+
+- `valid`
+- `expired`
+- `invalid`
+
+Status is exposed in `GET /api/v1/credentials` for operational reconnect flows.
+
+Credential list responses include safe metadata only:
+
+- provider/auth type
+- expiry
+- `credential_status`
+- `secret_mask` (`****` when secret envelope exists)
+- validation error hints (no secret material)
+
+### Logging safety
+
+- Event and audit log payloads are automatically redacted for secret-like keys.
+- Runtime error messages are sanitized before persistence and API responses.
+- Access tokens/API keys are masked (`[redacted]` / `****`) in operator-facing views.
+
 ## Retry Engine + Dead-letter (v1)
 
 Workflow execution now supports resilient retries with persisted retry state.
@@ -126,8 +186,16 @@ Roles: `owner`, `admin`, `member`
 ## Retry/Run Inspection Endpoints
 
 - `GET /api/v1/runs` returns run status and attempt metadata
+- `GET /api/v1/runs/:runId` returns scoped run detail
 - `GET /api/v1/retries` returns retry queue state
-- `GET /api/v1/logs` returns retry lifecycle events
+- `GET /api/v1/logs` returns lifecycle events
+  - optional filters: `runId`, `eventType`
+
+## Workflow Validation Endpoint
+
+- `POST /api/v1/workflows/validate`
+  - validates DSL structure and references under authenticated org/workspace scope
+  - returns `{ valid, errors }`
 
 ## Adapter Plugin Endpoints
 
@@ -200,8 +268,17 @@ Workflow definitions now support:
 - `005_retry_engine_hardening.sql`
   - extends `workflow_runs` with retry/dead-letter columns
   - extends `retry_queue` with workflow/step/failure/dead-letter metadata
+- `006_credential_encryption_hardening.sql`
+  - adds encrypted credential envelope fields and status metadata
+  - adds scoped provider/status indices for credential resolution
 
 ## Local Setup
+
+Set security env vars (example):
+
+- `MASTER_ENCRYPTION_KEY=<32-byte key material (hex/base64/raw)>`
+- `MASTER_ENCRYPTION_KEY_VERSION=1`
+- optional `PREVIOUS_MASTER_ENCRYPTION_KEYS=1:<old-key>,2:<older-key>`
 
 1. Run migrations:
    - `npm run migrate -w @integration/core`

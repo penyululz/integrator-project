@@ -3,6 +3,7 @@ import {
   Adapter,
   AdapterActionResult,
   AdapterAuthResult,
+  AdapterCredentialValidationResult,
   AdapterContext,
   AdapterTokenRefreshResult,
   AdapterTriggerResult,
@@ -152,5 +153,10 @@ export class WebhookAdapter implements Adapter {
   ): Promise<AdapterTokenRefreshResult> {
     throw new Error("Webhook adapter does not use OAuth token refresh.");
   }
-}
 
+  async validateCredentials(): Promise<AdapterCredentialValidationResult> {
+    return {
+      status: "valid",
+    };
+  }
+}

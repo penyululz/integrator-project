@@ -38,6 +38,11 @@ export type CoreRuntime = {
 
 export { validateWorkflowDefinition };
 export { AuthService } from "./auth/auth-service";
+export {
+  CredentialCrypto,
+  CredentialCryptoError,
+  createCredentialCryptoFromEnv,
+} from "./security/credential-crypto";
 export type {
   PlatformRole,
   SessionScope,

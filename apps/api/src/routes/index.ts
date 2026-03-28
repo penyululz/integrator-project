@@ -10,10 +10,20 @@ import {
   oauthCallbackSchema,
   oauthStartSchema,
   upsertCredentialSchema,
+  validateWorkflowSchema,
   webhookSchema,
 } from "../schemas";
 
 function resolveRouteParam(value: string | string[]): string {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function resolveOptionalQueryParam(
+  value: string | string[] | undefined,
+): string | undefined {
+  if (!value) {
+    return undefined;
+  }
   return Array.isArray(value) ? value[0] : value;
 }
 
@@ -116,15 +126,31 @@ export function createApiRouter(runtime: CoreRuntime): Router {
   router.get("/integrations", requireAuth, async (req, res, next) => {
     try {
       const scope = req.auth!.scope;
-      const integrations = await runtime.repositories.integrationRepository.list({
-        tenantId: scope.tenantId,
-        organizationId: scope.organizationId,
-        workspaceId: scope.workspaceId,
-      });
+      const [integrations, credentials] = await Promise.all([
+        runtime.repositories.integrationRepository.list({
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+        }),
+        runtime.repositories.credentialRepository.list({
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+        }),
+      ]);
       const adapterMetadata = runtime.pluginLoader.listMetadata();
+      const credentialStatusByProvider = credentials.reduce<Record<string, string>>(
+        (acc, item) => {
+          acc[item.provider_key] = item.credential_status;
+          return acc;
+        },
+        {},
+      );
+
       res.json({
         integrations,
         adapters: adapterMetadata.map((adapter) => adapter.key),
+        credentialStatusByProvider,
       });
     } catch (error) {
       next(error);
@@ -257,10 +283,32 @@ export function createApiRouter(runtime: CoreRuntime): Router {
           authType: body.authType,
           accessToken: body.accessToken,
           refreshToken: body.refreshToken,
+          apiKey: body.apiKey,
           expiresAt: body.expiresAt,
+          sensitiveConfig: body.sensitiveConfig,
           metadata: body.metadata,
         });
         res.status(201).json({ credential });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.delete(
+    "/credentials/:providerKey",
+    requireRole(["owner", "admin"]),
+    async (req, res, next) => {
+      try {
+        const providerKey = resolveRouteParam(req.params.providerKey);
+        const scope = req.auth!.scope;
+        const deleted = await runtime.repositories.credentialRepository.deleteByProvider({
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+          providerKey,
+        });
+        res.status(200).json({ deleted });
       } catch (error) {
         next(error);
       }
@@ -280,6 +328,29 @@ export function createApiRouter(runtime: CoreRuntime): Router {
       next(error);
     }
   });
+
+  router.post(
+    "/workflows/validate",
+    requireRole(["owner", "admin"]),
+    async (req, res, next) => {
+      try {
+        const body = validateWorkflowSchema.parse(req.body);
+        const scope = req.auth!.scope;
+        const normalizedDefinition = {
+          ...body.definition,
+          workspaceId: scope.workspaceId,
+          organizationId: scope.organizationId,
+        };
+        const validation = validateWorkflowDefinition(normalizedDefinition);
+        res.status(200).json({
+          valid: validation.valid,
+          errors: validation.errors,
+        });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
 
   router.post(
     "/workflows",
@@ -333,6 +404,26 @@ export function createApiRouter(runtime: CoreRuntime): Router {
     }
   });
 
+  router.get("/runs/:runId", requireAuth, async (req, res, next) => {
+    try {
+      const runId = resolveRouteParam(req.params.runId);
+      const scope = req.auth!.scope;
+      const run = await runtime.repositories.runRepository.findRunByIdScoped({
+        runId,
+        tenantId: scope.tenantId,
+        organizationId: scope.organizationId,
+        workspaceId: scope.workspaceId,
+      });
+      if (!run) {
+        res.status(404).json({ error: "Not found." });
+        return;
+      }
+      res.json({ run });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.get("/retries", requireAuth, async (req, res, next) => {
     try {
       const scope = req.auth!.scope;
@@ -350,10 +441,18 @@ export function createApiRouter(runtime: CoreRuntime): Router {
   router.get("/logs", requireAuth, async (req, res, next) => {
     try {
       const scope = req.auth!.scope;
+      const runId = resolveOptionalQueryParam(
+        req.query.runId as string | string[] | undefined,
+      );
+      const eventType = resolveOptionalQueryParam(
+        req.query.eventType as string | string[] | undefined,
+      );
       const logs = await runtime.repositories.runRepository.listLogs({
         tenantId: scope.tenantId,
         organizationId: scope.organizationId,
         workspaceId: scope.workspaceId,
+        runId,
+        eventType,
       });
       res.json({ logs });
     } catch (error) {

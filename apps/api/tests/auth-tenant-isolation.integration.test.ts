@@ -128,6 +128,9 @@ async function createAuthRuntime() {
 
   await pool.query(fs.readFileSync(migrationPath("004_membership_tables.sql"), "utf8"));
   await pool.query(fs.readFileSync(migrationPath("005_retry_engine_hardening.sql"), "utf8"));
+  await pool.query(
+    fs.readFileSync(migrationPath("006_credential_encryption_hardening.sql"), "utf8"),
+  );
 
   const workspaceRepository = new WorkspaceRepository(pool);
   const integrationRepository = new IntegrationRepository(pool);
@@ -190,6 +193,23 @@ async function createAuthRuntime() {
     adapterKey: "webhook",
     name: "Org B Integration",
     config: {},
+  });
+
+  await credentialRepository.upsert({
+    tenantId: tenantAId,
+    organizationId: orgAId,
+    workspaceId: workspaceAId,
+    providerKey: "webhook",
+    authType: "oauth2",
+    accessToken: "org-a-secret-token",
+  });
+  await credentialRepository.upsert({
+    tenantId: tenantBId,
+    organizationId: orgBId,
+    workspaceId: workspaceBId,
+    providerKey: "webhook",
+    authType: "oauth2",
+    accessToken: "org-b-secret-token",
   });
 
   const pluginLoader = new PluginLoader();
@@ -292,6 +312,21 @@ describe("Auth + tenant isolation hardening", () => {
           }),
         ]),
       );
+
+      const credentials = await request(app)
+        .get("/api/v1/credentials")
+        .set("authorization", `Bearer ${login.accessToken}`);
+      expect(credentials.status).toBe(200);
+      expect(credentials.body.credentials).toHaveLength(1);
+      expect(credentials.body.credentials[0]).toEqual(
+        expect.objectContaining({
+          provider_key: "webhook",
+          credential_status: "valid",
+          secret_mask: "****",
+        }),
+      );
+      expect(JSON.stringify(credentials.body)).not.toContain("org-a-secret-token");
+      expect(JSON.stringify(credentials.body)).not.toContain("access_token");
     } finally {
       await runtime.close();
     }
@@ -326,7 +361,7 @@ describe("Auth + tenant isolation hardening", () => {
   });
 
   it("enforces RBAC for integration management", async () => {
-    const { app, runtime } = await createAuthRuntime();
+    const { app, runtime, fixture, pool } = await createAuthRuntime();
     try {
       const memberLogin = await runtime.authService.login({
         email: "member@org-a.com",
@@ -359,10 +394,30 @@ describe("Auth + tenant isolation hardening", () => {
         .send({
           name: "Allowed Integration",
           adapterKey: "webhook",
-          config: {},
+          config: {
+            region: "us",
+            apiKey: "very-secret-api-key",
+          },
         });
 
       expect(created.status).toBe(201);
+      expect(created.body.integration.has_sensitive_config).toBe(true);
+      expect(JSON.stringify(created.body.integration)).not.toContain("very-secret-api-key");
+
+      const row = await pool.query<{ config_json: Record<string, unknown> }>(
+        `SELECT config_json
+         FROM integrations
+         WHERE tenant_id = $1
+           AND organization_id = $2
+           AND workspace_id = $3
+           AND name = 'Allowed Integration'
+         LIMIT 1`,
+        [fixture.tenantAId, fixture.orgAId, fixture.workspaceAId],
+      );
+      expect(JSON.stringify(row.rows[0].config_json)).not.toContain("very-secret-api-key");
+      expect(JSON.stringify(row.rows[0].config_json)).toContain(
+        "__encrypted_sensitive_config",
+      );
     } finally {
       await runtime.close();
     }

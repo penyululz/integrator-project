@@ -1,4 +1,4 @@
-﻿import { randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import request from "supertest";
@@ -173,6 +173,9 @@ async function createDslRuntime(definition: WorkflowDefinition) {
   await pool.query(fs.readFileSync(migrationPath("003_integration_workflow_tables.sql"), "utf8"));
   await pool.query(fs.readFileSync(migrationPath("004_membership_tables.sql"), "utf8"));
   await pool.query(fs.readFileSync(migrationPath("005_retry_engine_hardening.sql"), "utf8"));
+  await pool.query(
+    fs.readFileSync(migrationPath("006_credential_encryption_hardening.sql"), "utf8"),
+  );
 
   const organization = await pool.query<{ id: string; tenant_id: string }>(
     `INSERT INTO organizations (name, slug)
@@ -637,3 +640,4 @@ describe("Workflow DSL integration", () => {
     }
   });
 });
+

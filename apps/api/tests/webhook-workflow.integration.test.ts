@@ -177,6 +177,9 @@ async function createTestRuntime() {
   const workspaceId = workspace.rows[0].id;
   await pool.query(fs.readFileSync(migrationPath("004_membership_tables.sql"), "utf8"));
   await pool.query(fs.readFileSync(migrationPath("005_retry_engine_hardening.sql"), "utf8"));
+  await pool.query(
+    fs.readFileSync(migrationPath("006_credential_encryption_hardening.sql"), "utf8"),
+  );
 
   const workspaceRepository = new WorkspaceRepository(pool);
   const integrationRepository = new IntegrationRepository(pool);
@@ -293,6 +296,7 @@ async function createTestRuntime() {
   return {
     app: createApp(runtime),
     runtime,
+    pool,
     workflow,
     testActionAdapter,
     context: {
@@ -306,7 +310,7 @@ async function createTestRuntime() {
 
 describe("Webhook -> Queue -> Workflow integration", () => {
   it("queues webhook events and persists run/logs with resolved credentials", async () => {
-    const { app, runtime, workflow, testActionAdapter, context } =
+    const { app, runtime, workflow, testActionAdapter, context, pool } =
       await createTestRuntime();
 
     try {
@@ -350,14 +354,36 @@ describe("Webhook -> Queue -> Workflow integration", () => {
       expect(
         logs.some((log) => log.event_type === "workflow.step.completed"),
       ).toBe(true);
+      const serializedLogs = JSON.stringify(logs);
+      expect(serializedLogs).not.toContain(login.accessToken);
+      expect(serializedLogs).not.toContain("token-from-db");
 
       expect(testActionAdapter.lastContext?.credentials?.accessToken).toBe(
         "token-from-db",
       );
       expect(testActionAdapter.lastInput?.accessToken).toBe("token-from-db");
       expect(testActionAdapter.lastInput?.note).toBe("from-workflow");
+
+      const rawCredentials = await pool.query<{
+        access_token: string | null;
+        refresh_token: string | null;
+        encrypted_data: string | null;
+      }>(
+        `SELECT access_token, refresh_token, encrypted_data
+         FROM credentials
+         WHERE tenant_id = $1
+           AND organization_id = $2
+           AND workspace_id = $3
+           AND provider_key = 'test-action'`,
+        [context.tenantId, context.organizationId, context.workspaceId],
+      );
+      expect(rawCredentials.rows[0].access_token).toBeNull();
+      expect(rawCredentials.rows[0].refresh_token).toBeNull();
+      expect(rawCredentials.rows[0].encrypted_data).toBeTruthy();
+      expect(rawCredentials.rows[0].encrypted_data).not.toContain("token-from-db");
     } finally {
       await runtime.close();
     }
   });
 });
+

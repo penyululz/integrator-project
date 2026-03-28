@@ -1,39 +1,123 @@
-# Web Auth Notes (v1)
+# Web App Operational UX (v1)
 
-The web app now uses API-issued bearer tokens instead of tenant context headers.
+The web app now provides a practical operator-focused UI for integration setup, workflow authoring, validation, and execution observability.
 
-## Session Behavior
+## Authentication and Session
 
-- Login via `POST /api/v1/auth/login`
-- Optional local bootstrap via `POST /api/v1/auth/dev-login` (non-production only)
-- Session is stored in `localStorage` under:
-  - `integration.auth.session`
-- Protected pages require a stored token.
-- Logout calls `POST /api/v1/auth/logout` and clears local session storage.
+- Uses bearer token auth from API endpoints:
+  - `POST /api/v1/auth/login`
+  - `POST /api/v1/auth/dev-login` (development only)
+  - `POST /api/v1/auth/logout`
+- Stores session in `localStorage` key `integration.auth.session`.
+- Protected routes:
+  - `/integrations`
+  - `/workflows`
+  - `/runs`
 
-## Practical Local Dev Defaults
+## Integrations UX
+
+The Integrations page now shows:
+
+- installed adapters with manifest/runtime metadata
+- enabled or disabled state
+- auth type
+- supported triggers and actions
+- credential health status (`connected` / `expired` / `invalid` / `not connected`)
+
+Operator actions:
+
+- create integration
+- start OAuth auth flow (`Start OAuth` / `Connect`)
+- complete callback code manually
+- reconnect invalid/expired credentials
+- disconnect credentials per provider
+
+Credential values are never rendered in the UI. The frontend consumes only masked status metadata.
+
+## Workflow Builder UX
+
+The Workflows page is now a structured form-driven builder with a JSON-assisted mode.
+
+### Supported v1 authoring features
+
+- trigger adapter and trigger selection
+- trigger config JSON editor
+- workflow context JSON editor
+- step creation and editing:
+  - action step
+  - branch step
+  - delay step
+- condition editing
+- variable/reference mapping
+- retry behavior controls (`onError`, optional retry policy fields in JSON)
+
+### JSON-assisted mode
+
+- Form mode and JSON mode stay synchronized.
+- Switching from JSON back to Form requires valid JSON.
+- `Validate DSL` calls backend schema/DSL validation before create.
+
+### Reference mapping syntax
+
+Form editor supports literal and reference mappings.
+
+Reference roots:
+
+- `trigger.*`
+- `context.*`
+- `steps.<stepId>.output.*`
+
+Example references:
+
+- `trigger.payload.order.id`
+- `steps.fetch_order.output.total`
+- `context.workspaceId`
+
+### Validation feedback shown in UI
+
+- invalid references
+- duplicate step IDs
+- invalid condition blocks/operators
+- branch/schema shape issues
+- prior-step output reference errors
+
+## Runs and Logs UX
+
+The Runs page now includes an operational detail view:
+
+- run list with status badges
+- run detail summary (`attempt_count`, `max_attempts`, `last_error`, `dead_lettered_at`)
+- step timeline from persisted run results
+- retry queue state for selected run
+- branch decision visibility
+- delay scheduling/completion visibility
+- retry lifecycle visibility (`scheduled`, `started`, `succeeded`, `exhausted`)
+- log filtering by event type
+- compact payload preview with token redaction
+
+## Test Coverage Added (web)
+
+- `src/pages/workflow-builder-helpers.test.ts`
+  - default workflow generation
+  - JSON object parsing
+  - reference hint generation from nested steps
+- `src/pages/runs-helpers.test.ts`
+  - step timeline extraction/sorting
+  - log highlight extraction
+  - payload redaction behavior
+- `src/components/ValidationErrorPanel.test.tsx`
+  - empty state rendering
+  - validation error rendering
+
+## Local Dev Defaults
 
 - email: `admin@example.com`
 - password: `dev-password`
 - org slug: `demo-org`
 - workspace slug: `default`
 
-## Run Visibility
+## Known v1 UX limits
 
-The Runs view now shows retry-aware execution state:
-
-- run status (`retrying`, `failed`, `dead_lettered`, `success`)
-- run attempt count (`attempt_count/max_attempts`)
-- last error
-- retry queue items from `GET /api/v1/retries`
-
-## Workflow DSL Editor (v1)
-
-The Workflows page JSON editor now includes a v1 DSL example with:
-
-- variable mapping (`$ref` and `$literal`)
-- condition blocks
-- branch steps (`type: "branch"`, `then`/`else`)
-- delay steps (`type: "delay"`)
-
-The UI remains a JSON-assisted editor (no drag-and-drop builder yet).
+- No drag-and-drop graph canvas (intentional v1 non-goal)
+- Builder still includes JSON areas for trigger/context and advanced edits
+- No screenshot assets are stored in this repository yet; use the running UI for current views

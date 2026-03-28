@@ -10,7 +10,8 @@
     "lint": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --passWithNoTests",
     "migrate": "tsx src/migrations/run-migrations.ts",
-    "seed": "tsx src/migrations/seed.ts"
+    "seed": "tsx src/migrations/seed.ts",
+    "reencrypt:credentials": "tsx src/security/reencrypt-credentials.ts"
   },
   "dependencies": {
     "@integration/adapter-email": "*",

@@ -39,8 +39,17 @@ export type AdapterCredentials = {
   authType?: string;
   accessToken?: string;
   refreshToken?: string;
+  apiKey?: string;
   expiresAt?: string;
   metadata?: Record<string, unknown>;
+  status?: CredentialStatus;
+};
+
+export type CredentialStatus = "valid" | "expired" | "invalid";
+
+export type AdapterCredentialValidationResult = {
+  status: CredentialStatus;
+  reason?: string;
 };
 
 export type AdapterAuthResult = {
@@ -110,4 +119,8 @@ export interface Adapter {
     currentCredentials: Record<string, unknown>,
     context: AdapterContext,
   ): Promise<AdapterTokenRefreshResult>;
+  validateCredentials?(
+    credentials: AdapterCredentials,
+    context: AdapterContext,
+  ): Promise<AdapterCredentialValidationResult>;
 }

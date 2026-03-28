@@ -45,7 +45,9 @@ export const upsertCredentialSchema = z.object({
   authType: z.string().default("oauth2"),
   accessToken: z.string().optional(),
   refreshToken: z.string().optional(),
+  apiKey: z.string().optional(),
   expiresAt: z.string().optional(),
+  sensitiveConfig: z.record(z.unknown()).optional(),
   metadata: z.record(z.unknown()).optional(),
 });
 
@@ -203,6 +205,10 @@ export const workflowDefinitionSchema = z.object({
 export const createWorkflowSchema = z.object({
   name: z.string().min(1),
   description: z.string().optional(),
+  definition: workflowDefinitionSchema,
+});
+
+export const validateWorkflowSchema = z.object({
   definition: workflowDefinitionSchema,
 });
 

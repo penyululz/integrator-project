@@ -3,6 +3,7 @@ import {
   Adapter,
   AdapterActionResult,
   AdapterAuthResult,
+  AdapterCredentialValidationResult,
   AdapterContext,
   AdapterTokenRefreshResult,
   AdapterTriggerResult,
@@ -156,5 +157,10 @@ export class EmailAdapter implements Adapter {
   ): Promise<AdapterTokenRefreshResult> {
     throw new Error("Email adapter does not support token refresh.");
   }
-}
 
+  async validateCredentials(): Promise<AdapterCredentialValidationResult> {
+    return {
+      status: "valid",
+    };
+  }
+}

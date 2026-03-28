@@ -4,10 +4,13 @@ import {
   AdapterError,
   buildStepIdempotencyKey,
   calculateExponentialBackoffMs,
+  sanitizeSensitiveMessage,
   type AdapterContext,
   type AdapterCredentials,
+  type AdapterCredentialValidationResult,
   type WorkflowActionStep,
   type WorkflowBranchStep,
+  type CredentialStatus,
   type WorkflowCondition,
   type WorkflowConditionBlock,
   type WorkflowConditionGroup,
@@ -164,13 +167,6 @@ function resolveRetryPolicy(step: WorkflowActionStep): ResolvedRetryPolicy {
   };
 }
 
-function sanitizeErrorMessage(message: string): string {
-  return message
-    .replace(/Bearer\s+[A-Za-z0-9\-_.]+/gi, "Bearer [redacted]")
-    .replace(/(access[_-]?token|refresh[_-]?token|authorization)\s*[:=]\s*\S+/gi, "$1=[redacted]")
-    .slice(0, 600);
-}
-
 function detectStatusCode(error: unknown): number | null {
   const candidate = error as
     | { status?: unknown; statusCode?: unknown; response?: { status?: unknown } }
@@ -197,7 +193,7 @@ function analyzeFailure(error: unknown): FailureAnalysis {
       : typeof error === "string"
         ? error
         : "Unknown workflow step error.";
-  const message = sanitizeErrorMessage(rawMessage);
+  const message = sanitizeSensitiveMessage(rawMessage);
 
   if (error instanceof WorkflowDslError) {
     return {
@@ -1004,6 +1000,55 @@ export class WorkflowEngine {
     });
     mutableState.activeRetryJob = undefined;
   }
+
+  private async validateStepCredentials(input: {
+    state: ExecutionState;
+    step: WorkflowActionStep;
+    adapterContext: AdapterContext;
+    credentials?: AdapterCredentials;
+  }): Promise<AdapterCredentialValidationResult> {
+    const credentials = input.credentials;
+    if (!credentials) {
+      return {
+        status: "valid",
+      };
+    }
+
+    let status: CredentialStatus = credentials.status || "valid";
+    let reason: string | undefined;
+    if (credentials.expiresAt) {
+      const parsed = Date.parse(credentials.expiresAt);
+      if (Number.isFinite(parsed) && parsed <= Date.now()) {
+        status = "expired";
+        reason = "Credential token has expired.";
+      }
+    }
+
+    const adapter = this.pluginLoader.get(input.step.adapter);
+    if (adapter.validateCredentials) {
+      const adapterResult = await adapter.validateCredentials(
+        credentials,
+        input.adapterContext,
+      );
+      status = adapterResult.status;
+      reason = adapterResult.reason || reason;
+    }
+
+    await this.credentialResolver.recordCredentialStatus({
+      tenantId: input.state.triggerEvent.tenantId,
+      organizationId: input.state.triggerEvent.organizationId,
+      workspaceId: input.state.triggerEvent.workspaceId,
+      providerKey: input.step.adapter,
+      status,
+      validationError: reason || null,
+    });
+
+    return {
+      status,
+      reason,
+    };
+  }
+
   private async executeActionStep(
     state: ExecutionState,
     mutableState: MutableExecutionState,
@@ -1072,6 +1117,24 @@ export class WorkflowEngine {
         credentials: resolvedCredentials,
       };
 
+      const credentialValidation = await this.validateStepCredentials({
+        state,
+        step,
+        adapterContext: stepContext,
+        credentials: resolvedCredentials,
+      });
+      if (credentialValidation.status !== "valid") {
+        throw new AdapterError(
+          credentialValidation.status === "expired"
+            ? "Credentials have expired for this adapter."
+            : "Credentials are invalid for this adapter.",
+          {
+            code: "CREDENTIAL_VALIDATION_FAILED",
+            retryable: false,
+          },
+        );
+      }
+
       const baseConfig = {
         ...step.config,
       };
@@ -1132,7 +1195,7 @@ export class WorkflowEngine {
           stepId: step.id,
           stepPath,
           attempt,
-          message: sanitizeErrorMessage(error.message),
+          message: sanitizeSensitiveMessage(error.message),
         });
       }
 

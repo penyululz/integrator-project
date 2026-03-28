@@ -3,6 +3,8 @@ import {
   Adapter,
   AdapterActionResult,
   AdapterAuthResult,
+  AdapterCredentialValidationResult,
+  AdapterCredentials,
   AdapterContext,
   AdapterTokenRefreshResult,
   AdapterTriggerResult,
@@ -188,6 +190,20 @@ export class ShopifyAdapter implements Adapter {
     return {
       accessToken,
       refreshToken: undefined,
+    };
+  }
+
+  async validateCredentials(
+    credentials: AdapterCredentials,
+  ): Promise<AdapterCredentialValidationResult> {
+    if (!credentials.accessToken) {
+      return {
+        status: "invalid",
+        reason: "Missing Shopify access token.",
+      };
+    }
+    return {
+      status: "valid",
     };
   }
 }

@@ -3,6 +3,8 @@ import {
   Adapter,
   AdapterActionResult,
   AdapterAuthResult,
+  AdapterCredentialValidationResult,
+  AdapterCredentials,
   AdapterContext,
   AdapterTokenRefreshResult,
   AdapterTriggerResult,
@@ -179,6 +181,29 @@ export class SlackAdapter implements Adapter {
       expiresAt: currentCredentials.expiresAt
         ? String(currentCredentials.expiresAt)
         : undefined,
+    };
+  }
+
+  async validateCredentials(
+    credentials: AdapterCredentials,
+  ): Promise<AdapterCredentialValidationResult> {
+    if (!credentials.accessToken) {
+      return {
+        status: "invalid",
+        reason: "Missing Slack access token.",
+      };
+    }
+    if (credentials.expiresAt) {
+      const expiresAt = Date.parse(credentials.expiresAt);
+      if (Number.isFinite(expiresAt) && expiresAt <= Date.now()) {
+        return {
+          status: "expired",
+          reason: "Credential token has expired.",
+        };
+      }
+    }
+    return {
+      status: "valid",
     };
   }
 }

@@ -1,6 +1,7 @@
 import express from "express";
 import cors from "cors";
 import { ZodError } from "zod";
+import { sanitizeSensitiveMessage } from "@integration/shared";
 import type { CoreRuntime } from "@integration/core";
 import { withAuth } from "./middleware/auth";
 import { createApiRouter } from "./routes";
@@ -27,8 +28,19 @@ export function createApp(runtime: CoreRuntime) {
         });
         return;
       }
-      res.status(error.statusCode || 500).json({
-        error: error.message,
+
+      const statusCode = error.statusCode || 500;
+      const safeMessage = sanitizeSensitiveMessage(error.message || "Unexpected error.");
+      if (statusCode >= 500) {
+        console.error(`[api] ${safeMessage}`);
+        res.status(500).json({
+          error: "Internal server error.",
+        });
+        return;
+      }
+
+      res.status(statusCode).json({
+        error: safeMessage,
       });
     },
   );

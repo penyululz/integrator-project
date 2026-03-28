@@ -212,6 +212,9 @@ async function createRetryRuntime(input: {
   );
   await pool.query(fs.readFileSync(migrationPath("004_membership_tables.sql"), "utf8"));
   await pool.query(fs.readFileSync(migrationPath("005_retry_engine_hardening.sql"), "utf8"));
+  await pool.query(
+    fs.readFileSync(migrationPath("006_credential_encryption_hardening.sql"), "utf8"),
+  );
 
   const organization = await pool.query<{
     id: string;
@@ -577,3 +580,4 @@ describe("Retry engine + dead-letter + backoff", () => {
     }
   });
 });
+

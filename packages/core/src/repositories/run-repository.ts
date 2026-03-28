@@ -1,4 +1,8 @@
 import { Pool } from "pg";
+import {
+  redactSensitiveRecord,
+  sanitizeSensitiveMessage,
+} from "@integration/shared";
 
 export type WorkflowRunStatus =
   | "queued"
@@ -136,8 +140,8 @@ export class RunRepository {
         input.runId,
         input.attemptCount,
         input.maxAttempts,
-        input.lastError,
-        JSON.stringify(input.result),
+        sanitizeSensitiveMessage(input.lastError),
+        JSON.stringify(redactSensitiveRecord(input.result)),
       ],
     );
   }
@@ -164,10 +168,10 @@ export class RunRepository {
       [
         input.runId,
         input.status,
-        JSON.stringify(input.result),
+        JSON.stringify(redactSensitiveRecord(input.result)),
         input.attemptCount || null,
         input.maxAttempts || null,
-        input.lastError || null,
+        input.lastError ? sanitizeSensitiveMessage(input.lastError) : null,
         input.deadLetteredAt || null,
       ],
     );
@@ -209,7 +213,7 @@ export class RunRepository {
         input.workflowId || null,
         input.workflowRunId || null,
         input.eventType,
-        JSON.stringify(input.payload),
+        JSON.stringify(redactSensitiveRecord(input.payload)),
       ],
     );
   }
@@ -218,15 +222,37 @@ export class RunRepository {
     tenantId: string;
     organizationId: string;
     workspaceId: string;
+    runId?: string;
+    eventType?: string;
   }): Promise<EventLogRecord[]> {
+    const values: Array<string> = [
+      input.tenantId,
+      input.organizationId,
+      input.workspaceId,
+    ];
+    const predicates = [
+      `tenant_id = $1`,
+      `organization_id = $2`,
+      `workspace_id = $3`,
+    ];
+
+    if (input.runId) {
+      values.push(input.runId);
+      predicates.push(`workflow_run_id = $${values.length}`);
+    }
+
+    if (input.eventType) {
+      values.push(input.eventType);
+      predicates.push(`event_type = $${values.length}`);
+    }
+
     const result = await this.pool.query<EventLogRecord>(
-      `SELECT * FROM event_logs
-       WHERE tenant_id = $1
-         AND organization_id = $2
-         AND workspace_id = $3
+      `SELECT *
+       FROM event_logs
+       WHERE ${predicates.join("\n         AND ")}
        ORDER BY created_at DESC
        LIMIT 250`,
-      [input.tenantId, input.organizationId, input.workspaceId],
+      values,
     );
     return result.rows;
   }
@@ -287,11 +313,11 @@ export class RunRepository {
         input.workflowId,
         input.stepId,
         input.retryKey,
-        JSON.stringify(input.payload),
+        JSON.stringify(redactSensitiveRecord(input.payload)),
         input.attempts,
         input.maxAttempts,
         input.nextRunAt,
-        input.lastError,
+        sanitizeSensitiveMessage(input.lastError),
         input.failureClassification,
       ],
     );
@@ -349,10 +375,10 @@ export class RunRepository {
        WHERE id = $1`,
       [
         input.jobId,
-        input.payload ? JSON.stringify(input.payload) : null,
+        input.payload ? JSON.stringify(redactSensitiveRecord(input.payload)) : null,
         input.attempts,
         input.nextRunAt,
-        input.lastError,
+        sanitizeSensitiveMessage(input.lastError),
         input.failureClassification,
       ],
     );
@@ -391,7 +417,7 @@ export class RunRepository {
       [
         input.jobId,
         input.attempts,
-        input.lastError,
+        sanitizeSensitiveMessage(input.lastError),
         input.failureClassification,
       ],
     );
@@ -436,7 +462,7 @@ export class RunRepository {
         input.action,
         input.entityType || null,
         input.entityId || null,
-        JSON.stringify(input.metadata || {}),
+        JSON.stringify(redactSensitiveRecord(input.metadata || {})),
       ],
     );
   }
