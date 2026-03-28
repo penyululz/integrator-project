@@ -1,0 +1,38 @@
+{
+  "name": "integration-platform-monorepo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Integration platform v1 monorepo",
+  "license": "MIT",
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "packages/adapters/*"
+  ],
+  "scripts": {
+    "build": "npm run --workspaces build",
+    "dev": "concurrently \"npm run dev -w @integration/api\" \"npm run dev -w @integration/web\"",
+    "lint": "npm run --workspaces lint",
+    "test": "npm run --workspaces test",
+    "migrate": "npm run migrate -w @integration/core",
+    "seed": "npm run seed -w @integration/core",
+    "start:api": "npm run start -w @integration/api",
+    "start:web": "npm run start -w @integration/web",
+    "start:worker": "npm run worker -w @integration/api"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/node": "^24.5.2",
+    "@types/nodemailer": "^7.0.11",
+    "@types/pg": "^8.20.0",
+    "concurrently": "^9.2.1",
+    "rimraf": "^6.0.1",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2",
+    "vitest": "^2.1.8"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "key": "sheets",
+  "name": "Google Sheets Adapter",
+  "version": "1.0.0",
+  "description": "Executes Google Sheets actions using Google APIs.",
+  "triggers": [],
+  "actions": ["appendRow"]
+}
+

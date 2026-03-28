@@ -1,0 +1,9 @@
+{
+  "key": "webhook",
+  "name": "Webhook Adapter",
+  "version": "1.0.0",
+  "description": "Receives HTTP POST webhook payloads and forwards them to workflow engine.",
+  "triggers": ["http_post"],
+  "actions": ["forward_payload"]
+}
+

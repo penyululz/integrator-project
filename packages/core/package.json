@@ -1,0 +1,29 @@
+{
+  "name": "@integration/core",
+  "version": "1.0.0",
+  "private": true,
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx watch src/index.ts",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "migrate": "tsx src/migrations/run-migrations.ts",
+    "seed": "tsx src/migrations/seed.ts"
+  },
+  "dependencies": {
+    "@integration/adapter-email": "*",
+    "@integration/adapter-shopify": "*",
+    "@integration/adapter-sheets": "*",
+    "@integration/adapter-slack": "*",
+    "@integration/adapter-webhook": "*",
+    "@integration/shared": "*",
+    "ajv": "^8.17.1",
+    "dotenv": "^17.2.3",
+    "pg": "^8.16.3",
+    "redis": "^4.7.1",
+    "uuid": "^11.1.0"
+  }
+}
+

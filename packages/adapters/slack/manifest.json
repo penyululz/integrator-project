@@ -1,0 +1,9 @@
+{
+  "key": "slack",
+  "name": "Slack Adapter",
+  "version": "1.0.0",
+  "description": "Sends Slack messages via Web API.",
+  "triggers": [],
+  "actions": ["sendMessage"]
+}
+

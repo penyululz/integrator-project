@@ -1,0 +1,9 @@
+{
+  "key": "email",
+  "name": "Email Adapter",
+  "version": "1.0.0",
+  "description": "Sends email via SMTP using nodemailer.",
+  "triggers": [],
+  "actions": ["sendEmail"]
+}
+

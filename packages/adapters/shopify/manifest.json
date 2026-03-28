@@ -1,0 +1,9 @@
+{
+  "key": "shopify",
+  "name": "Shopify Adapter",
+  "version": "1.0.0",
+  "description": "Handles Shopify order webhooks and order reads.",
+  "triggers": ["order_created"],
+  "actions": ["readOrder"]
+}
+

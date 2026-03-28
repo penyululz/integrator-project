@@ -1,0 +1,17 @@
+{
+  "extends": "./tsconfig.base.json",
+  "files": [],
+  "references": [
+    { "path": "./packages/shared" },
+    { "path": "./packages/core" },
+    { "path": "./packages/adapters/webhook" },
+    { "path": "./packages/adapters/sheets" },
+    { "path": "./packages/adapters/email" },
+    { "path": "./packages/adapters/shopify" },
+    { "path": "./packages/adapters/slack" },
+    { "path": "./packages/adapters/http-api" },
+    { "path": "./packages/adapters/scheduler" },
+    { "path": "./apps/api" },
+    { "path": "./apps/web" }
+  ]
+}
