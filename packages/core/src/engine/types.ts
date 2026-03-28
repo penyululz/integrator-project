@@ -18,9 +18,12 @@ export type ExecutionContext = {
 
 export type StepResult = {
   stepId: string;
+  stepPath?: string;
+  status?: "completed" | "failed" | "skipped" | "delay";
   success: boolean;
   output?: Record<string, unknown>;
   error?: string;
+  skippedReason?: string;
   attempt: number;
 };
 
@@ -28,7 +31,8 @@ export type RetryPayload = {
   runId: string;
   workflowId: string;
   workflowExternalId: string;
-  stepIndex: number;
+  stepIndex?: number;
+  stepPath?: string;
   stepId: string;
   stepAttempt: number;
   triggerEvent: IncomingEvent;

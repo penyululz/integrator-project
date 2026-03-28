@@ -26,3 +26,14 @@ The Runs view now shows retry-aware execution state:
 - run attempt count (`attempt_count/max_attempts`)
 - last error
 - retry queue items from `GET /api/v1/retries`
+
+## Workflow DSL Editor (v1)
+
+The Workflows page JSON editor now includes a v1 DSL example with:
+
+- variable mapping (`$ref` and `$literal`)
+- condition blocks
+- branch steps (`type: "branch"`, `then`/`else`)
+- delay steps (`type: "delay"`)
+
+The UI remains a JSON-assisted editor (no drag-and-drop builder yet).

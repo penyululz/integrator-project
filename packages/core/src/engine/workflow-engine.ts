@@ -1,3 +1,4 @@
+﻿
 import { v4 as uuidv4 } from "uuid";
 import {
   AdapterError,
@@ -5,6 +6,12 @@ import {
   calculateExponentialBackoffMs,
   type AdapterContext,
   type AdapterCredentials,
+  type WorkflowActionStep,
+  type WorkflowBranchStep,
+  type WorkflowCondition,
+  type WorkflowConditionBlock,
+  type WorkflowConditionGroup,
+  type WorkflowMappedValue,
   type WorkflowStep,
   type WorkflowStepRetryPolicy,
 } from "@integration/shared";
@@ -49,10 +56,53 @@ type ExecutionState = {
   workflowRecord: WorkflowRecord;
   triggerEvent: IncomingEvent;
   stepResults: StepResult[];
-  startStepIndex: number;
   currentAttempt: number;
+  resumeStepPath?: string;
   activeRetryJob?: RetryQueueRecord;
 };
+
+type ResumeState = {
+  targetPath?: string;
+  reached: boolean;
+  attemptForTarget: number;
+};
+
+type MutableExecutionState = {
+  stepResults: StepResult[];
+  activeRetryJob?: RetryQueueRecord;
+  resume: ResumeState;
+  workflowContext: Record<string, unknown>;
+};
+
+type ResolutionContext = {
+  triggerPayload: Record<string, unknown>;
+  workflowContext: Record<string, unknown>;
+  stepOutputs: Record<string, Record<string, unknown> | undefined>;
+};
+
+type ConditionEvaluationResult = {
+  result: boolean;
+  mode: "all" | "any";
+  operators: Array<{
+    operator: WorkflowCondition["operator"];
+    result: boolean;
+  }>;
+};
+
+class WorkflowDslError extends Error {
+  constructor(
+    message: string,
+    readonly code:
+      | "MAPPING_RESOLUTION_FAILED"
+      | "CONDITION_EVALUATION_FAILED"
+      | "INVALID_RESUME_PATH"
+      | "INVALID_DELAY"
+      | "INVALID_INPUT",
+  ) {
+    super(message);
+    this.name = "WorkflowDslError";
+  }
+}
 
 const DEFAULT_RETRY_POLICY: Omit<ResolvedRetryPolicy, "enabled"> = {
   maxAttempts: 3,
@@ -66,7 +116,19 @@ function clampNumber(input: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, input));
 }
 
-function resolveRetryPolicy(step: WorkflowStep): ResolvedRetryPolicy {
+function isObject(input: unknown): input is Record<string, unknown> {
+  return typeof input === "object" && input !== null && !Array.isArray(input);
+}
+
+function isActionStep(step: WorkflowStep): step is WorkflowActionStep {
+  return step.type === "action" || step.type === undefined;
+}
+
+function isBranchStep(step: WorkflowStep): step is WorkflowBranchStep {
+  return step.type === "branch";
+}
+
+function resolveRetryPolicy(step: WorkflowActionStep): ResolvedRetryPolicy {
   const retryPolicy = (step.retryPolicy || {}) as WorkflowStepRetryPolicy;
   const enabled = retryPolicy.enabled ?? step.onError === "retry";
   const maxAttempts = clampNumber(
@@ -136,6 +198,14 @@ function analyzeFailure(error: unknown): FailureAnalysis {
         ? error
         : "Unknown workflow step error.";
   const message = sanitizeErrorMessage(rawMessage);
+
+  if (error instanceof WorkflowDslError) {
+    return {
+      retryable: false,
+      classification: "invalid_config",
+      message,
+    };
+  }
 
   if (error instanceof AdapterError) {
     if (error.retryable) {
@@ -214,7 +284,6 @@ function analyzeFailure(error: unknown): FailureAnalysis {
     message,
   };
 }
-
 function retryKeyFor(runId: string, stepId: string): string {
   return `run:${runId}:step:${stepId}`;
 }
@@ -224,18 +293,26 @@ function parseRetryPayload(input: Record<string, unknown>): RetryPayload | null 
   const workflowId = input.workflowId;
   const workflowExternalId = input.workflowExternalId;
   const stepIndex = input.stepIndex;
+  const stepPath = input.stepPath;
   const stepId = input.stepId;
   const stepAttempt = input.stepAttempt;
   const triggerEvent = input.triggerEvent as IncomingEvent | undefined;
   const stepResults = input.stepResults as StepResult[] | undefined;
+
+  const normalizedStepPath =
+    typeof stepPath === "string"
+      ? stepPath
+      : typeof stepIndex === "number"
+        ? String(stepIndex)
+        : null;
 
   if (
     typeof runId !== "string" ||
     typeof workflowId !== "string" ||
     typeof workflowExternalId !== "string" ||
     typeof stepId !== "string" ||
-    typeof stepIndex !== "number" ||
     typeof stepAttempt !== "number" ||
+    !normalizedStepPath ||
     !triggerEvent ||
     !Array.isArray(stepResults)
   ) {
@@ -246,7 +323,8 @@ function parseRetryPayload(input: Record<string, unknown>): RetryPayload | null 
     runId,
     workflowId,
     workflowExternalId,
-    stepIndex,
+    stepPath: normalizedStepPath,
+    stepIndex: typeof stepIndex === "number" ? stepIndex : undefined,
     stepId,
     stepAttempt,
     triggerEvent,
@@ -254,13 +332,219 @@ function parseRetryPayload(input: Record<string, unknown>): RetryPayload | null 
   };
 }
 
+function collectActionSteps(steps: WorkflowStep[], acc: WorkflowActionStep[]): void {
+  for (const step of steps) {
+    if (isBranchStep(step)) {
+      collectActionSteps(step.then, acc);
+      if (step.else) {
+        collectActionSteps(step.else, acc);
+      }
+      continue;
+    }
+
+    if (isActionStep(step)) {
+      acc.push(step);
+    }
+  }
+}
+
 function computeWorkflowMaxAttempts(workflow: WorkflowRecord): number {
-  const stepMaxAttempts = workflow.definition_json.steps.map((step) =>
+  const actionSteps: WorkflowActionStep[] = [];
+  collectActionSteps(workflow.definition_json.steps, actionSteps);
+  const stepMaxAttempts = actionSteps.map((step) =>
     resolveRetryPolicy(step).enabled ? resolveRetryPolicy(step).maxAttempts : 1,
   );
   return Math.max(1, ...stepMaxAttempts);
 }
 
+function normalizeConditionBlock(block: WorkflowConditionBlock): WorkflowConditionGroup {
+  if (isObject(block) && Array.isArray((block as WorkflowConditionGroup).conditions)) {
+    return {
+      mode: (block as WorkflowConditionGroup).mode || "all",
+      conditions: (block as WorkflowConditionGroup).conditions,
+    };
+  }
+
+  return {
+    mode: "all",
+    conditions: [block as WorkflowCondition],
+  };
+}
+
+function parseReference(reference: string): {
+  source: "trigger" | "context" | "steps";
+  stepId?: string;
+  path: string[];
+} {
+  if (reference === "trigger") {
+    return {
+      source: "trigger",
+      path: [],
+    };
+  }
+
+  if (reference.startsWith("trigger.")) {
+    return {
+      source: "trigger",
+      path: reference.slice("trigger.".length).split("."),
+    };
+  }
+
+  if (reference === "context") {
+    return {
+      source: "context",
+      path: [],
+    };
+  }
+
+  if (reference.startsWith("context.")) {
+    return {
+      source: "context",
+      path: reference.slice("context.".length).split("."),
+    };
+  }
+
+  const stepMatch = reference.match(/^steps\.([A-Za-z0-9_-]+)\.output(?:\.(.+))?$/);
+  if (stepMatch) {
+    return {
+      source: "steps",
+      stepId: stepMatch[1],
+      path: stepMatch[2] ? stepMatch[2].split(".") : [],
+    };
+  }
+
+  throw new WorkflowDslError(
+    `Invalid reference syntax "${reference}". Allowed roots: trigger, context, steps.<stepId>.output.`,
+    "MAPPING_RESOLUTION_FAILED",
+  );
+}
+
+function readPathValue(
+  source: unknown,
+  path: string[],
+): {
+  found: boolean;
+  value: unknown;
+} {
+  if (path.length === 0) {
+    return {
+      found: true,
+      value: source,
+    };
+  }
+
+  let current: unknown = source;
+  for (const segment of path) {
+    if (Array.isArray(current)) {
+      const index = Number(segment);
+      if (!Number.isInteger(index) || index < 0 || index >= current.length) {
+        return {
+          found: false,
+          value: undefined,
+        };
+      }
+      current = current[index];
+      continue;
+    }
+
+    if (isObject(current)) {
+      if (!Object.prototype.hasOwnProperty.call(current, segment)) {
+        return {
+          found: false,
+          value: undefined,
+        };
+      }
+      current = current[segment];
+      continue;
+    }
+
+    return {
+      found: false,
+      value: undefined,
+    };
+  }
+
+  return {
+    found: true,
+    value: current,
+  };
+}
+
+function isMappedReference(value: unknown): value is { $ref: string; default?: unknown } {
+  return isObject(value) && typeof value.$ref === "string";
+}
+
+function isMappedLiteral(value: unknown): value is { $literal: unknown } {
+  return isObject(value) && Object.prototype.hasOwnProperty.call(value, "$literal");
+}
+
+function deepEqual(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) {
+    return true;
+  }
+
+  if (Array.isArray(left) && Array.isArray(right)) {
+    if (left.length !== right.length) {
+      return false;
+    }
+    for (let index = 0; index < left.length; index += 1) {
+      if (!deepEqual(left[index], right[index])) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  if (isObject(left) && isObject(right)) {
+    const leftKeys = Object.keys(left);
+    const rightKeys = Object.keys(right);
+    if (leftKeys.length !== rightKeys.length) {
+      return false;
+    }
+    for (const key of leftKeys) {
+      if (!Object.prototype.hasOwnProperty.call(right, key)) {
+        return false;
+      }
+      if (!deepEqual(left[key], right[key])) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  return false;
+}
+
+function containsValue(left: unknown, right: unknown): boolean {
+  if (typeof left === "string") {
+    return typeof right === "string" && left.includes(right);
+  }
+
+  if (Array.isArray(left)) {
+    return left.some((item) => deepEqual(item, right));
+  }
+
+  if (isObject(left) && typeof right === "string") {
+    return Object.prototype.hasOwnProperty.call(left, right);
+  }
+
+  return false;
+}
+
+function compareValues(left: unknown, right: unknown): number {
+  if (typeof left === "number" && typeof right === "number") {
+    return left - right;
+  }
+
+  if (typeof left === "string" && typeof right === "string") {
+    return left.localeCompare(right);
+  }
+
+  throw new WorkflowDslError(
+    "greaterThan/lessThan conditions require both operands to be numbers or strings.",
+    "CONDITION_EVALUATION_FAILED",
+  );
+}
 export class WorkflowEngine {
   constructor(
     private readonly pluginLoader: PluginLoader,
@@ -364,7 +648,7 @@ export class WorkflowEngine {
         retryJobId: retryJob.id,
         retryKey: retryJob.retry_key,
         stepId: payload.stepId,
-        stepIndex: payload.stepIndex,
+        stepPath: payload.stepPath,
         attempt: retryJob.attempts + 1,
       },
     });
@@ -374,8 +658,8 @@ export class WorkflowEngine {
       workflowRecord,
       triggerEvent: payload.triggerEvent,
       stepResults: payload.stepResults,
-      startStepIndex: payload.stepIndex,
       currentAttempt: retryJob.attempts + 1,
+      resumeStepPath: payload.stepPath,
       activeRetryJob: retryJob,
     });
 
@@ -403,6 +687,22 @@ export class WorkflowEngine {
     return merged;
   }
 
+  private async appendRunLog(
+    state: ExecutionState,
+    eventType: string,
+    payload: Record<string, unknown>,
+  ): Promise<void> {
+    await this.runRepository.appendEventLog({
+      tenantId: state.triggerEvent.tenantId,
+      organizationId: state.triggerEvent.organizationId,
+      workspaceId: state.triggerEvent.workspaceId,
+      workflowId: state.workflowRecord.id,
+      workflowRunId: state.run.id,
+      eventType,
+      payload,
+    });
+  }
+
   async executeWorkflow(
     workflowRecord: WorkflowRecord,
     event: IncomingEvent,
@@ -422,328 +722,928 @@ export class WorkflowEngine {
       workflowRecord,
       triggerEvent: event,
       stepResults: [],
-      startStepIndex: 0,
       currentAttempt: 1,
     });
   }
+  private buildStepOutputMap(stepResults: StepResult[]): Record<string, Record<string, unknown> | undefined> {
+    const outputMap: Record<string, Record<string, unknown> | undefined> = {};
+    for (const result of stepResults) {
+      if (!result.success || !result.output) {
+        continue;
+      }
+      outputMap[result.stepId] = result.output;
+    }
+    return outputMap;
+  }
 
-  private async executeWorkflowState(state: ExecutionState): Promise<void> {
-    const workflow = state.workflowRecord.definition_json;
-    const stepResults = [...state.stepResults];
-    let activeRetryJob = state.activeRetryJob;
+  private resolveMappedValue(
+    value: WorkflowMappedValue,
+    context: ResolutionContext,
+  ): unknown {
+    if (Array.isArray(value)) {
+      return value.map((item) => this.resolveMappedValue(item, context));
+    }
 
-    for (
-      let stepIndex = state.startStepIndex;
-      stepIndex < workflow.steps.length;
-      stepIndex += 1
-    ) {
-      const step = workflow.steps[stepIndex];
-      const attempt = stepIndex === state.startStepIndex ? state.currentAttempt : 1;
-      const retryPolicy = resolveRetryPolicy(step);
-      const stepIdempotencyKey = buildStepIdempotencyKey({
-        workflowId: state.workflowRecord.id,
-        runId: state.run.id,
+    if (isMappedReference(value)) {
+      const parsed = parseReference(value.$ref);
+      const baseSource =
+        parsed.source === "trigger"
+          ? context.triggerPayload
+          : parsed.source === "context"
+            ? context.workflowContext
+            : context.stepOutputs[parsed.stepId || ""];
+
+      const resolved = readPathValue(baseSource, parsed.path);
+      if (!resolved.found) {
+        if (Object.prototype.hasOwnProperty.call(value, "default")) {
+          return value.default;
+        }
+        throw new WorkflowDslError(
+          `Reference "${value.$ref}" could not be resolved.`,
+          "MAPPING_RESOLUTION_FAILED",
+        );
+      }
+      return resolved.value;
+    }
+
+    if (isMappedLiteral(value)) {
+      return value.$literal;
+    }
+
+    if (isObject(value)) {
+      const resolvedObject: Record<string, unknown> = {};
+      for (const [key, child] of Object.entries(value)) {
+        resolvedObject[key] = this.resolveMappedValue(child as WorkflowMappedValue, context);
+      }
+      return resolvedObject;
+    }
+
+    return value;
+  }
+
+  private evaluateConditionBlock(
+    block: WorkflowConditionBlock,
+    context: ResolutionContext,
+  ): ConditionEvaluationResult {
+    const normalized = normalizeConditionBlock(block);
+    const mode = normalized.mode === "any" ? "any" : "all";
+    const operators: Array<{
+      operator: WorkflowCondition["operator"];
+      result: boolean;
+    }> = [];
+
+    for (const condition of normalized.conditions) {
+      const left = this.resolveMappedValue(condition.left, context);
+      let result = false;
+
+      if (condition.operator === "exists") {
+        result = left !== undefined && left !== null;
+      } else {
+        const right = this.resolveMappedValue(
+          condition.right as WorkflowMappedValue,
+          context,
+        );
+
+        switch (condition.operator) {
+          case "equals": {
+            result = deepEqual(left, right);
+            break;
+          }
+          case "notEquals": {
+            result = !deepEqual(left, right);
+            break;
+          }
+          case "contains": {
+            result = containsValue(left, right);
+            break;
+          }
+          case "greaterThan": {
+            result = compareValues(left, right) > 0;
+            break;
+          }
+          case "lessThan": {
+            result = compareValues(left, right) < 0;
+            break;
+          }
+          default: {
+            throw new WorkflowDslError(
+              `Unsupported condition operator "${condition.operator}".`,
+              "CONDITION_EVALUATION_FAILED",
+            );
+          }
+        }
+      }
+
+      operators.push({
+        operator: condition.operator,
+        result,
+      });
+    }
+
+    const finalResult =
+      mode === "any"
+        ? operators.some((item) => item.result)
+        : operators.every((item) => item.result);
+
+    return {
+      result: finalResult,
+      mode,
+      operators,
+    };
+  }
+
+  private resolveContext(
+    state: ExecutionState,
+    mutableState: MutableExecutionState,
+  ): ResolutionContext {
+    return {
+      triggerPayload: state.triggerEvent.payload,
+      workflowContext: mutableState.workflowContext,
+      stepOutputs: this.buildStepOutputMap(mutableState.stepResults),
+    };
+  }
+
+  private shouldRunConditionedStep(step: WorkflowStep): boolean {
+    if (isBranchStep(step)) {
+      return false;
+    }
+    return step.condition !== undefined;
+  }
+
+  private async evaluateStepConditionIfNeeded(
+    state: ExecutionState,
+    mutableState: MutableExecutionState,
+    step: WorkflowStep,
+    stepPath: string,
+    attempt: number,
+  ): Promise<{
+    shouldRun: boolean;
+  }> {
+    if (!this.shouldRunConditionedStep(step)) {
+      return {
+        shouldRun: true,
+      };
+    }
+
+    try {
+      const evaluation = this.evaluateConditionBlock(
+        step.condition as WorkflowConditionBlock,
+        this.resolveContext(state, mutableState),
+      );
+
+      await this.appendRunLog(state, "workflow.condition.evaluated", {
         stepId: step.id,
+        stepPath,
+        scope: "step",
+        attempt,
+        mode: evaluation.mode,
+        result: evaluation.result,
+        operators: evaluation.operators,
       });
 
-      try {
-        const resolvedCredentials = await this.credentialResolver.resolveForAdapter({
-          tenantId: state.triggerEvent.tenantId,
-          organizationId: state.triggerEvent.organizationId,
-          workspaceId: state.triggerEvent.workspaceId,
-          providerKey: step.adapter,
-        });
+      return {
+        shouldRun: evaluation.result,
+      };
+    } catch (error) {
+      throw new WorkflowDslError(
+        error instanceof Error ? error.message : "Condition evaluation failed.",
+        "CONDITION_EVALUATION_FAILED",
+      );
+    }
+  }
 
-        const adapter = this.pluginLoader.get(step.adapter);
-        const stepContext: AdapterContext = {
-          tenantId: state.triggerEvent.tenantId,
-          organizationId: state.triggerEvent.organizationId,
-          workspaceId: state.triggerEvent.workspaceId,
+  private getForcedBranch(
+    stepPath: string,
+    targetPath: string,
+  ): "then" | "else" {
+    const thenPrefix = `${stepPath}.then.`;
+    if (targetPath.startsWith(thenPrefix)) {
+      return "then";
+    }
+
+    const elsePrefix = `${stepPath}.else.`;
+    if (targetPath.startsWith(elsePrefix)) {
+      return "else";
+    }
+
+    throw new WorkflowDslError(
+      `Retry resume path "${targetPath}" is not a valid branch descendant of "${stepPath}".`,
+      "INVALID_RESUME_PATH",
+    );
+  }
+
+  private resolveResumeDirective(
+    step: WorkflowStep,
+    stepPath: string,
+    resume: ResumeState,
+  ): {
+    action: "execute" | "skip" | "descend";
+    forcedBranch?: "then" | "else";
+  } {
+    if (!resume.targetPath || resume.reached) {
+      return {
+        action: "execute",
+      };
+    }
+
+    if (stepPath === resume.targetPath) {
+      resume.reached = true;
+      return {
+        action: "execute",
+      };
+    }
+
+    if (resume.targetPath.startsWith(`${stepPath}.`)) {
+      if (!isBranchStep(step)) {
+        throw new WorkflowDslError(
+          `Resume path "${resume.targetPath}" points inside non-branch step "${step.id}".`,
+          "INVALID_RESUME_PATH",
+        );
+      }
+
+      return {
+        action: "descend",
+        forcedBranch: this.getForcedBranch(stepPath, resume.targetPath),
+      };
+    }
+
+    return {
+      action: "skip",
+    };
+  }
+
+  private getAttemptForStep(stepPath: string, resume: ResumeState): number {
+    if (resume.targetPath && stepPath === resume.targetPath) {
+      return resume.attemptForTarget;
+    }
+    return 1;
+  }
+
+  private async markActiveRetryResolved(
+    state: ExecutionState,
+    mutableState: MutableExecutionState,
+    step: WorkflowStep,
+    stepPath: string,
+    attempt: number,
+  ): Promise<void> {
+    if (!mutableState.activeRetryJob || state.resumeStepPath !== stepPath) {
+      return;
+    }
+
+    const retryJob = mutableState.activeRetryJob;
+    await this.runRepository.markRetryJobResolved({
+      jobId: retryJob.id,
+      attempts: attempt,
+    });
+    await this.appendRunLog(state, "workflow.retry.succeeded", {
+      retryJobId: retryJob.id,
+      retryKey: retryJob.retry_key,
+      stepId: step.id,
+      stepPath,
+      attempt,
+    });
+    mutableState.activeRetryJob = undefined;
+  }
+  private async executeActionStep(
+    state: ExecutionState,
+    mutableState: MutableExecutionState,
+    step: WorkflowActionStep,
+    stepPath: string,
+    attempt: number,
+  ): Promise<{
+    halted: boolean;
+  }> {
+    const conditionDecision = await this.evaluateStepConditionIfNeeded(
+      state,
+      mutableState,
+      step,
+      stepPath,
+      attempt,
+    );
+    if (!conditionDecision.shouldRun) {
+      mutableState.stepResults.push({
+        stepId: step.id,
+        stepPath,
+        status: "skipped",
+        success: true,
+        skippedReason: "condition_false",
+        attempt,
+      });
+
+      await this.appendRunLog(state, "workflow.step.skipped", {
+        stepId: step.id,
+        stepPath,
+        adapter: step.adapter,
+        action: step.action,
+        attempt,
+        reason: "condition_false",
+      });
+
+      await this.markActiveRetryResolved(state, mutableState, step, stepPath, attempt);
+      return {
+        halted: false,
+      };
+    }
+
+    const stepIdempotencyKey = buildStepIdempotencyKey({
+      workflowId: state.workflowRecord.id,
+      runId: state.run.id,
+      stepId: step.id,
+    });
+
+    const retryPolicy = resolveRetryPolicy(step);
+
+    try {
+      const resolvedCredentials = await this.credentialResolver.resolveForAdapter({
+        tenantId: state.triggerEvent.tenantId,
+        organizationId: state.triggerEvent.organizationId,
+        workspaceId: state.triggerEvent.workspaceId,
+        providerKey: step.adapter,
+      });
+
+      const adapter = this.pluginLoader.get(step.adapter);
+      const stepContext: AdapterContext = {
+        tenantId: state.triggerEvent.tenantId,
+        organizationId: state.triggerEvent.organizationId,
+        workspaceId: state.triggerEvent.workspaceId,
+        runId: state.run.id,
+        requestId: uuidv4(),
+        idempotencyKey: stepIdempotencyKey,
+        credentials: resolvedCredentials,
+      };
+
+      const baseConfig = {
+        ...step.config,
+      };
+      if (step.input) {
+        const mappedInput = this.resolveMappedValue(
+          step.input as WorkflowMappedValue,
+          this.resolveContext(state, mutableState),
+        );
+        if (!isObject(mappedInput)) {
+          throw new WorkflowDslError(
+            `Step input mapping for "${step.id}" must resolve to an object.`,
+            "INVALID_INPUT",
+          );
+        }
+        Object.assign(baseConfig, mappedInput);
+      }
+
+      const stepInput = this.withResolvedCredentials(baseConfig, resolvedCredentials);
+      if (stepInput.idempotencyKey === undefined) {
+        stepInput.idempotencyKey = stepIdempotencyKey;
+      }
+
+      const result = await adapter.runAction(step.action, stepInput, stepContext);
+      if (!result.success) {
+        throw new AdapterError("Adapter action returned unsuccessful result.", {
+          code: "ACTION_UNSUCCESSFUL",
+          retryable: false,
+        });
+      }
+
+      mutableState.stepResults.push({
+        stepId: step.id,
+        stepPath,
+        status: "completed",
+        success: true,
+        output: result.output,
+        attempt,
+      });
+
+      await this.appendRunLog(state, "workflow.step.completed", {
+        workflowId: state.workflowRecord.id,
+        workflowExternalId: state.workflowRecord.definition_json.id,
+        stepId: step.id,
+        stepPath,
+        adapter: step.adapter,
+        action: step.action,
+        attempt,
+      });
+
+      await this.markActiveRetryResolved(state, mutableState, step, stepPath, attempt);
+
+      return {
+        halted: false,
+      };
+    } catch (error) {
+      if (error instanceof WorkflowDslError && error.code === "MAPPING_RESOLUTION_FAILED") {
+        await this.appendRunLog(state, "workflow.mapping.failed", {
+          stepId: step.id,
+          stepPath,
+          attempt,
+          message: sanitizeErrorMessage(error.message),
+        });
+      }
+
+      const failure = analyzeFailure(error);
+      const shouldRetry =
+        retryPolicy.enabled &&
+        failure.retryable &&
+        attempt < retryPolicy.maxAttempts;
+
+      mutableState.stepResults.push({
+        stepId: step.id,
+        stepPath,
+        status: "failed",
+        success: false,
+        error: failure.message,
+        attempt,
+      });
+
+      await this.appendRunLog(state, "workflow.step.failed", {
+        workflowId: state.workflowRecord.id,
+        workflowExternalId: state.workflowRecord.definition_json.id,
+        stepId: step.id,
+        stepPath,
+        adapter: step.adapter,
+        action: step.action,
+        attempt,
+        retryable: shouldRetry,
+        classification: failure.classification,
+        message: failure.message,
+      });
+
+      if (shouldRetry) {
+        const delayMs = calculateExponentialBackoffMs(attempt, retryPolicy);
+        const nextRunAt = new Date(Date.now() + delayMs).toISOString();
+        const retryPayload: RetryPayload = {
           runId: state.run.id,
-          requestId: uuidv4(),
-          idempotencyKey: stepIdempotencyKey,
-          credentials: resolvedCredentials,
+          workflowId: state.workflowRecord.id,
+          workflowExternalId: state.workflowRecord.definition_json.id,
+          stepIndex: Number.parseInt(stepPath.split(".")[0], 10),
+          stepPath,
+          stepId: step.id,
+          stepAttempt: attempt,
+          triggerEvent: state.triggerEvent,
+          stepResults: mutableState.stepResults,
         };
 
-        const stepInput = this.withResolvedCredentials(step.config, resolvedCredentials);
-        if (stepInput.idempotencyKey === undefined) {
-          stepInput.idempotencyKey = stepIdempotencyKey;
-        }
-
-        const result = await adapter.runAction(step.action, stepInput, stepContext);
-        if (!result.success) {
-          throw new AdapterError("Adapter action returned unsuccessful result.", {
-            code: "ACTION_UNSUCCESSFUL",
-            retryable: false,
-          });
-        }
-
-        stepResults.push({
-          stepId: step.id,
-          success: true,
-          output: result.output,
-          attempt,
-        });
-
-        await this.runRepository.appendEventLog({
-          tenantId: state.triggerEvent.tenantId,
-          organizationId: state.triggerEvent.organizationId,
-          workspaceId: state.triggerEvent.workspaceId,
-          workflowId: state.workflowRecord.id,
-          workflowRunId: state.run.id,
-          eventType: "workflow.step.completed",
-          payload: {
-            workflowId: state.workflowRecord.id,
-            workflowExternalId: workflow.id,
-            stepId: step.id,
-            adapter: step.adapter,
-            action: step.action,
-            attempt,
-          },
-        });
-
-        if (activeRetryJob && stepIndex === state.startStepIndex) {
-          await this.runRepository.markRetryJobResolved({
-            jobId: activeRetryJob.id,
+        let retryJobId: string;
+        if (mutableState.activeRetryJob && state.resumeStepPath === stepPath) {
+          await this.runRepository.markRetryJobPending({
+            jobId: mutableState.activeRetryJob.id,
+            payload: retryPayload,
             attempts: attempt,
-          });
-          await this.runRepository.appendEventLog({
-            tenantId: state.triggerEvent.tenantId,
-            organizationId: state.triggerEvent.organizationId,
-            workspaceId: state.triggerEvent.workspaceId,
-            workflowId: state.workflowRecord.id,
-            workflowRunId: state.run.id,
-            eventType: "workflow.retry.succeeded",
-            payload: {
-              retryJobId: activeRetryJob.id,
-              retryKey: activeRetryJob.retry_key,
-              stepId: step.id,
-              attempt,
-            },
-          });
-          activeRetryJob = undefined;
-        }
-      } catch (error) {
-        const failure = analyzeFailure(error);
-        const shouldRetry =
-          retryPolicy.enabled &&
-          failure.retryable &&
-          attempt < retryPolicy.maxAttempts;
-
-        stepResults.push({
-          stepId: step.id,
-          success: false,
-          error: failure.message,
-          attempt,
-        });
-
-        await this.runRepository.appendEventLog({
-          tenantId: state.triggerEvent.tenantId,
-          organizationId: state.triggerEvent.organizationId,
-          workspaceId: state.triggerEvent.workspaceId,
-          workflowId: state.workflowRecord.id,
-          workflowRunId: state.run.id,
-          eventType: "workflow.step.failed",
-          payload: {
-            workflowId: state.workflowRecord.id,
-            workflowExternalId: workflow.id,
-            stepId: step.id,
-            adapter: step.adapter,
-            action: step.action,
-            attempt,
-            retryable: shouldRetry,
-            classification: failure.classification,
-            message: failure.message,
-          },
-        });
-
-        if (shouldRetry) {
-          const delayMs = calculateExponentialBackoffMs(attempt, retryPolicy);
-          const nextRunAt = new Date(Date.now() + delayMs).toISOString();
-          const retryPayload: RetryPayload = {
-            runId: state.run.id,
-            workflowId: state.workflowRecord.id,
-            workflowExternalId: workflow.id,
-            stepIndex,
-            stepId: step.id,
-            stepAttempt: attempt,
-            triggerEvent: state.triggerEvent,
-            stepResults,
-          };
-
-          let retryJobId: string;
-          if (activeRetryJob && stepIndex === state.startStepIndex) {
-            await this.runRepository.markRetryJobPending({
-              jobId: activeRetryJob.id,
-              payload: retryPayload,
-              attempts: attempt,
-              nextRunAt,
-              lastError: failure.message,
-              failureClassification: failure.classification,
-            });
-            retryJobId = activeRetryJob.id;
-          } else {
-            const retryRecord = await this.runRepository.upsertRetryJob({
-              tenantId: state.triggerEvent.tenantId,
-              organizationId: state.triggerEvent.organizationId,
-              workspaceId: state.triggerEvent.workspaceId,
-              workflowRunId: state.run.id,
-              workflowId: state.workflowRecord.id,
-              stepId: step.id,
-              retryKey: retryKeyFor(state.run.id, step.id),
-              payload: retryPayload,
-              attempts: attempt,
-              maxAttempts: retryPolicy.maxAttempts,
-              nextRunAt,
-              lastError: failure.message,
-              failureClassification: failure.classification,
-            });
-            retryJobId = retryRecord.id;
-          }
-
-          await this.runRepository.markRunRetrying({
-            runId: state.run.id,
-            attemptCount: attempt,
-            maxAttempts: retryPolicy.maxAttempts,
+            nextRunAt,
             lastError: failure.message,
-            result: {
-              steps: stepResults,
-              retry: {
-                retryJobId,
-                stepId: step.id,
-                stepIndex,
-                currentAttempt: attempt,
-                maxAttempts: retryPolicy.maxAttempts,
-                nextRunAt,
-                delayMs,
-                classification: failure.classification,
-              },
-            },
+            failureClassification: failure.classification,
           });
-
-          await this.runRepository.appendEventLog({
+          retryJobId = mutableState.activeRetryJob.id;
+        } else {
+          const retryRecord = await this.runRepository.upsertRetryJob({
             tenantId: state.triggerEvent.tenantId,
             organizationId: state.triggerEvent.organizationId,
             workspaceId: state.triggerEvent.workspaceId,
-            workflowId: state.workflowRecord.id,
             workflowRunId: state.run.id,
-            eventType: "workflow.retry.scheduled",
-            payload: {
+            workflowId: state.workflowRecord.id,
+            stepId: step.id,
+            retryKey: retryKeyFor(state.run.id, step.id),
+            payload: retryPayload,
+            attempts: attempt,
+            maxAttempts: retryPolicy.maxAttempts,
+            nextRunAt,
+            lastError: failure.message,
+            failureClassification: failure.classification,
+          });
+          retryJobId = retryRecord.id;
+        }
+
+        await this.runRepository.markRunRetrying({
+          runId: state.run.id,
+          attemptCount: attempt,
+          maxAttempts: retryPolicy.maxAttempts,
+          lastError: failure.message,
+          result: {
+            steps: mutableState.stepResults,
+            retry: {
               retryJobId,
-              retryKey: retryKeyFor(state.run.id, step.id),
               stepId: step.id,
-              stepIndex,
-              attempt,
+              stepPath,
+              currentAttempt: attempt,
               maxAttempts: retryPolicy.maxAttempts,
               nextRunAt,
               delayMs,
               classification: failure.classification,
             },
+          },
+        });
+
+        await this.appendRunLog(state, "workflow.retry.scheduled", {
+          retryJobId,
+          retryKey: retryKeyFor(state.run.id, step.id),
+          stepId: step.id,
+          stepPath,
+          attempt,
+          maxAttempts: retryPolicy.maxAttempts,
+          nextRunAt,
+          delayMs,
+          classification: failure.classification,
+        });
+
+        return {
+          halted: true,
+        };
+      }
+
+      const exhaustedRetry =
+        retryPolicy.enabled &&
+        failure.retryable &&
+        attempt >= retryPolicy.maxAttempts;
+      const status = exhaustedRetry ? "dead_lettered" : "failed";
+
+      if (step.onError === "continue") {
+        if (mutableState.activeRetryJob && state.resumeStepPath === stepPath) {
+          await this.runRepository.markRetryJobResolved({
+            jobId: mutableState.activeRetryJob.id,
+            attempts: attempt,
           });
-
-          return;
+          mutableState.activeRetryJob = undefined;
         }
 
-        const exhaustedRetry =
-          retryPolicy.enabled &&
-          failure.retryable &&
-          attempt >= retryPolicy.maxAttempts;
-        const status = exhaustedRetry ? "dead_lettered" : "failed";
+        await this.appendRunLog(state, "workflow.step.skipped_after_failure", {
+          stepId: step.id,
+          stepPath,
+          attempt,
+          message: failure.message,
+          classification: failure.classification,
+        });
+        return {
+          halted: false,
+        };
+      }
 
-        if (step.onError === "continue") {
-          if (activeRetryJob && stepIndex === state.startStepIndex) {
-            await this.runRepository.markRetryJobResolved({
-              jobId: activeRetryJob.id,
-              attempts: attempt,
-            });
-            activeRetryJob = undefined;
-          }
-
-          await this.runRepository.appendEventLog({
-            tenantId: state.triggerEvent.tenantId,
-            organizationId: state.triggerEvent.organizationId,
-            workspaceId: state.triggerEvent.workspaceId,
-            workflowId: state.workflowRecord.id,
-            workflowRunId: state.run.id,
-            eventType: "workflow.step.skipped_after_failure",
-            payload: {
-              stepId: step.id,
-              attempt,
-              message: failure.message,
-              classification: failure.classification,
-            },
-          });
-          continue;
-        }
-
-        if (activeRetryJob && stepIndex === state.startStepIndex) {
-          if (status === "dead_lettered") {
-            await this.runRepository.markRetryJobDeadLettered({
-              jobId: activeRetryJob.id,
-              attempts: attempt,
-              lastError: failure.message,
-              failureClassification: failure.classification,
-            });
-          } else {
-            await this.runRepository.markRetryJobResolved({
-              jobId: activeRetryJob.id,
-              attempts: attempt,
-            });
-          }
-        }
-
+      if (mutableState.activeRetryJob && state.resumeStepPath === stepPath) {
         if (status === "dead_lettered") {
-          await this.runRepository.appendEventLog({
-            tenantId: state.triggerEvent.tenantId,
-            organizationId: state.triggerEvent.organizationId,
-            workspaceId: state.triggerEvent.workspaceId,
-            workflowId: state.workflowRecord.id,
-            workflowRunId: state.run.id,
-            eventType: "workflow.retry.exhausted",
-            payload: {
-              stepId: step.id,
-              attempt,
-              maxAttempts: retryPolicy.maxAttempts,
-              message: failure.message,
-              classification: failure.classification,
-            },
+          await this.runRepository.markRetryJobDeadLettered({
+            jobId: mutableState.activeRetryJob.id,
+            attempts: attempt,
+            lastError: failure.message,
+            failureClassification: failure.classification,
+          });
+        } else {
+          await this.runRepository.markRetryJobResolved({
+            jobId: mutableState.activeRetryJob.id,
+            attempts: attempt,
           });
         }
+      }
 
-        await this.runRepository.appendEventLog({
-          tenantId: state.triggerEvent.tenantId,
-          organizationId: state.triggerEvent.organizationId,
-          workspaceId: state.triggerEvent.workspaceId,
-          workflowId: state.workflowRecord.id,
-          workflowRunId: state.run.id,
-          eventType: status === "dead_lettered" ? "workflow.dead_lettered" : "workflow.failed",
-          payload: {
-            stepId: step.id,
-            attempt,
-            message: failure.message,
-            classification: failure.classification,
-          },
+      if (status === "dead_lettered") {
+        await this.appendRunLog(state, "workflow.retry.exhausted", {
+          stepId: step.id,
+          stepPath,
+          attempt,
+          maxAttempts: retryPolicy.maxAttempts,
+          message: failure.message,
+          classification: failure.classification,
         });
+      }
 
-        await this.runRepository.completeRun({
-          runId: state.run.id,
-          status,
-          result: {
-            error: failure.message,
-            failedStepId: step.id,
-            classification: failure.classification,
-            steps: stepResults,
-          },
-          attemptCount: attempt,
-          maxAttempts: retryPolicy.enabled ? retryPolicy.maxAttempts : 1,
-          lastError: failure.message,
-          deadLetteredAt: status === "dead_lettered" ? new Date().toISOString() : null,
-        });
-        return;
+      await this.appendRunLog(
+        state,
+        status === "dead_lettered" ? "workflow.dead_lettered" : "workflow.failed",
+        {
+          stepId: step.id,
+          stepPath,
+          attempt,
+          message: failure.message,
+          classification: failure.classification,
+        },
+      );
+
+      await this.runRepository.completeRun({
+        runId: state.run.id,
+        status,
+        result: {
+          error: failure.message,
+          failedStepId: step.id,
+          failedStepPath: stepPath,
+          classification: failure.classification,
+          steps: mutableState.stepResults,
+        },
+        attemptCount: attempt,
+        maxAttempts: retryPolicy.enabled ? retryPolicy.maxAttempts : 1,
+        lastError: failure.message,
+        deadLetteredAt: status === "dead_lettered" ? new Date().toISOString() : null,
+      });
+      return {
+        halted: true,
+      };
+    }
+  }
+  private async executeDelayStep(
+    state: ExecutionState,
+    mutableState: MutableExecutionState,
+    step: Extract<WorkflowStep, { type: "delay" }>,
+    stepPath: string,
+    attempt: number,
+  ): Promise<{
+    halted: boolean;
+  }> {
+    const conditionDecision = await this.evaluateStepConditionIfNeeded(
+      state,
+      mutableState,
+      step,
+      stepPath,
+      attempt,
+    );
+    if (!conditionDecision.shouldRun) {
+      mutableState.stepResults.push({
+        stepId: step.id,
+        stepPath,
+        status: "skipped",
+        success: true,
+        skippedReason: "condition_false",
+        attempt,
+      });
+
+      await this.appendRunLog(state, "workflow.step.skipped", {
+        stepId: step.id,
+        stepPath,
+        type: "delay",
+        attempt,
+        reason: "condition_false",
+      });
+
+      await this.markActiveRetryResolved(state, mutableState, step, stepPath, attempt);
+      return {
+        halted: false,
+      };
+    }
+
+    const delayMs =
+      typeof step.delayMs === "number"
+        ? step.delayMs
+        : typeof step.delaySeconds === "number"
+          ? step.delaySeconds * 1000
+          : null;
+
+    if (delayMs === null || !Number.isFinite(delayMs) || delayMs < 0) {
+      throw new WorkflowDslError(
+        `Delay step "${step.id}" requires a valid delayMs or delaySeconds value.`,
+        "INVALID_DELAY",
+      );
+    }
+
+    await this.appendRunLog(state, "workflow.delay.scheduled", {
+      stepId: step.id,
+      stepPath,
+      attempt,
+      delayMs,
+    });
+
+    if (delayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+
+    await this.appendRunLog(state, "workflow.delay.completed", {
+      stepId: step.id,
+      stepPath,
+      attempt,
+      delayMs,
+    });
+
+    mutableState.stepResults.push({
+      stepId: step.id,
+      stepPath,
+      status: "delay",
+      success: true,
+      output: {
+        delayMs,
+      },
+      attempt,
+    });
+
+    await this.markActiveRetryResolved(state, mutableState, step, stepPath, attempt);
+
+    return {
+      halted: false,
+    };
+  }
+
+  private async executeBranchStep(
+    state: ExecutionState,
+    mutableState: MutableExecutionState,
+    step: WorkflowBranchStep,
+    stepPath: string,
+    attempt: number,
+    forcedBranch?: "then" | "else",
+  ): Promise<{
+    halted: boolean;
+  }> {
+    let selectedBranch: "then" | "else" | null = null;
+
+    if (forcedBranch) {
+      selectedBranch = forcedBranch;
+    } else {
+      const evaluation = this.evaluateConditionBlock(
+        step.condition,
+        this.resolveContext(state, mutableState),
+      );
+
+      await this.appendRunLog(state, "workflow.condition.evaluated", {
+        stepId: step.id,
+        stepPath,
+        scope: "branch",
+        attempt,
+        mode: evaluation.mode,
+        result: evaluation.result,
+        operators: evaluation.operators,
+      });
+
+      if (evaluation.result) {
+        selectedBranch = "then";
+      } else if (step.else && step.else.length > 0) {
+        selectedBranch = "else";
       }
     }
 
-    const maxObservedAttempt = stepResults.reduce(
+    await this.appendRunLog(state, "workflow.branch.selected", {
+      stepId: step.id,
+      stepPath,
+      attempt,
+      selectedBranch: selectedBranch || "none",
+      mode: forcedBranch ? "retry_resume" : "condition",
+    });
+
+    if (!selectedBranch) {
+      mutableState.stepResults.push({
+        stepId: step.id,
+        stepPath,
+        status: "skipped",
+        success: true,
+        skippedReason: "branch_no_match",
+        attempt,
+      });
+      return {
+        halted: false,
+      };
+    }
+
+    mutableState.stepResults.push({
+      stepId: step.id,
+      stepPath,
+      status: "completed",
+      success: true,
+      output: {
+        branch: selectedBranch,
+      },
+      attempt,
+    });
+
+    const branchSteps = selectedBranch === "then" ? step.then : step.else || [];
+    return this.executeStepSequence(
+      state,
+      mutableState,
+      branchSteps,
+      `${stepPath}.${selectedBranch}`,
+    );
+  }
+
+  private async executeStep(
+    state: ExecutionState,
+    mutableState: MutableExecutionState,
+    step: WorkflowStep,
+    stepPath: string,
+    attempt: number,
+    forcedBranch?: "then" | "else",
+  ): Promise<{
+    halted: boolean;
+  }> {
+    if (isBranchStep(step)) {
+      return this.executeBranchStep(
+        state,
+        mutableState,
+        step,
+        stepPath,
+        attempt,
+        forcedBranch,
+      );
+    }
+
+    if (step.type === "delay") {
+      return this.executeDelayStep(state, mutableState, step, stepPath, attempt);
+    }
+
+    return this.executeActionStep(
+      state,
+      mutableState,
+      step,
+      stepPath,
+      attempt,
+    );
+  }
+
+  private async executeStepSequence(
+    state: ExecutionState,
+    mutableState: MutableExecutionState,
+    steps: WorkflowStep[],
+    pathPrefix = "",
+  ): Promise<{
+    halted: boolean;
+  }> {
+    for (let index = 0; index < steps.length; index += 1) {
+      const step = steps[index];
+      const stepPath = pathPrefix ? `${pathPrefix}.${index}` : `${index}`;
+
+      const directive = this.resolveResumeDirective(step, stepPath, mutableState.resume);
+      if (directive.action === "skip") {
+        continue;
+      }
+
+      const attempt = this.getAttemptForStep(stepPath, mutableState.resume);
+
+      if (directive.action === "descend") {
+        const outcome = await this.executeStep(
+          state,
+          mutableState,
+          step,
+          stepPath,
+          attempt,
+          directive.forcedBranch,
+        );
+        if (outcome.halted) {
+          return outcome;
+        }
+        continue;
+      }
+
+      const outcome = await this.executeStep(state, mutableState, step, stepPath, attempt);
+      if (outcome.halted) {
+        return outcome;
+      }
+    }
+
+    return {
+      halted: false,
+    };
+  }
+
+  private async executeWorkflowState(state: ExecutionState): Promise<void> {
+    const workflow = state.workflowRecord.definition_json;
+    const mutableState: MutableExecutionState = {
+      stepResults: [...state.stepResults],
+      activeRetryJob: state.activeRetryJob,
+      resume: {
+        targetPath: state.resumeStepPath,
+        reached: !state.resumeStepPath,
+        attemptForTarget: state.currentAttempt,
+      },
+      workflowContext: {
+        ...(workflow.context || {}),
+        runId: state.run.id,
+        workflowId: state.workflowRecord.id,
+        workflowExternalId: workflow.id,
+        tenantId: state.triggerEvent.tenantId,
+        organizationId: state.triggerEvent.organizationId,
+        workspaceId: state.triggerEvent.workspaceId,
+        receivedAt: state.triggerEvent.receivedAt,
+      },
+    };
+
+    const execution = await this.executeStepSequence(
+      state,
+      mutableState,
+      workflow.steps,
+    );
+    if (execution.halted) {
+      return;
+    }
+
+    if (mutableState.resume.targetPath && !mutableState.resume.reached) {
+      const message = `Retry resume step path "${mutableState.resume.targetPath}" could not be resolved in the workflow definition.`;
+      if (mutableState.activeRetryJob) {
+        await this.runRepository.markRetryJobDeadLettered({
+          jobId: mutableState.activeRetryJob.id,
+          attempts: mutableState.resume.attemptForTarget,
+          lastError: message,
+          failureClassification: "invalid_config",
+        });
+      }
+      await this.appendRunLog(state, "workflow.failed", {
+        message,
+        classification: "invalid_config",
+        stepPath: mutableState.resume.targetPath,
+      });
+      await this.runRepository.completeRun({
+        runId: state.run.id,
+        status: "failed",
+        result: {
+          error: message,
+          failedStepPath: mutableState.resume.targetPath,
+          classification: "invalid_config",
+          steps: mutableState.stepResults,
+        },
+        attemptCount: mutableState.resume.attemptForTarget,
+        maxAttempts: state.run.max_attempts || mutableState.resume.attemptForTarget,
+        lastError: message,
+        deadLetteredAt: null,
+      });
+      return;
+    }
+
+    const maxObservedAttempt = mutableState.stepResults.reduce(
       (acc, item) => Math.max(acc, item.attempt),
       1,
     );
@@ -751,7 +1651,7 @@ export class WorkflowEngine {
       runId: state.run.id,
       status: "success",
       result: {
-        steps: stepResults,
+        steps: mutableState.stepResults,
       },
       attemptCount: maxObservedAttempt,
       maxAttempts: state.run.max_attempts || maxObservedAttempt,

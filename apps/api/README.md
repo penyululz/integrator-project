@@ -156,6 +156,41 @@ Environment controls:
 - `ENABLED_ADAPTER_KEYS` optional allowlist
 - `DISABLED_ADAPTER_KEYS` optional denylist
 
+## Workflow DSL (v1)
+
+Workflow definitions now support:
+
+- variable mapping via step `input` using:
+  - `{ "$ref": "trigger.*" }`
+  - `{ "$ref": "steps.<stepId>.output.*" }`
+  - `{ "$ref": "context.*" }`
+  - `{ "$literal": <static value> }`
+- step-level conditions:
+  - `equals`
+  - `notEquals`
+  - `exists`
+  - `contains`
+  - `greaterThan`
+  - `lessThan`
+- branching with `type: "branch"` and `then`/`else` step arrays
+- delay/wait with `type: "delay"` and `delayMs` or `delaySeconds`
+
+### DSL Validation Behavior
+
+- Invalid reference roots are rejected.
+- References to prior step outputs are validated by path order.
+- Duplicate step IDs (including nested branch steps) are rejected.
+- Condition operand requirements are enforced (`exists` has no `right`; others require `right`).
+
+### Workflow Lifecycle Events Added
+
+- `workflow.condition.evaluated`
+- `workflow.branch.selected`
+- `workflow.step.skipped`
+- `workflow.mapping.failed`
+- `workflow.delay.scheduled`
+- `workflow.delay.completed`
+
 ## Migrations Added
 
 - `004_membership_tables.sql`
