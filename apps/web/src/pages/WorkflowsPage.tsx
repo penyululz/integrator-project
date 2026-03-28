@@ -26,13 +26,21 @@ function buildDefaultWorkflow() {
         action: "sendMessage",
         config: {
           channel: "#ops",
-          text: "New order received",
-        },
-        onError: "stop",
+        text: "New order received",
       },
-    ],
-    enabled: true,
-  };
+      onError: "retry",
+      retryPolicy: {
+        enabled: true,
+        maxAttempts: 3,
+        baseDelayMs: 1000,
+        maxDelayMs: 15000,
+        backoffMultiplier: 2,
+        jitter: true,
+      },
+    },
+  ],
+  enabled: true,
+};
 }
 
 export function WorkflowsPage() {

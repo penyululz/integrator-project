@@ -7,7 +7,11 @@ async function runWorker(): Promise<void> {
 
   while (true) {
     try {
-      await runtime.workflowEngine.processNextEvent();
+      const handledRetry = await runtime.workflowEngine.processNextRetry();
+      if (handledRetry) {
+        continue;
+      }
+      await runtime.workflowEngine.processNextEvent(2);
     } catch (error) {
       console.error("[worker] process error", error);
       await new Promise((resolve) => setTimeout(resolve, 1000));
@@ -19,4 +23,3 @@ runWorker().catch((error) => {
   console.error(error);
   process.exit(1);
 });
-

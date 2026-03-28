@@ -117,4 +117,28 @@ export class WorkflowRepository {
     );
     return result.rows;
   }
+
+  async findByIdScoped(input: {
+    workflowId: string;
+    tenantId: string;
+    organizationId: string;
+    workspaceId: string;
+  }): Promise<WorkflowRecord | null> {
+    const result = await this.pool.query<WorkflowRecord>(
+      `SELECT *
+       FROM workflows
+       WHERE id = $1
+         AND tenant_id = $2
+         AND organization_id = $3
+         AND workspace_id = $4
+       LIMIT 1`,
+      [
+        input.workflowId,
+        input.tenantId,
+        input.organizationId,
+        input.workspaceId,
+      ],
+    );
+    return result.rows[0] || null;
+  }
 }

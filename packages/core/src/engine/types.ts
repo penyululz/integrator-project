@@ -16,3 +16,21 @@ export type ExecutionContext = {
   triggerEvent: IncomingEvent;
 };
 
+export type StepResult = {
+  stepId: string;
+  success: boolean;
+  output?: Record<string, unknown>;
+  error?: string;
+  attempt: number;
+};
+
+export type RetryPayload = {
+  runId: string;
+  workflowId: string;
+  workflowExternalId: string;
+  stepIndex: number;
+  stepId: string;
+  stepAttempt: number;
+  triggerEvent: IncomingEvent;
+  stepResults: StepResult[];
+};

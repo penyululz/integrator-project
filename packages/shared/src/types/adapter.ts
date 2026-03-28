@@ -29,6 +29,7 @@ export type AdapterContext = {
   organizationId: string;
   runId?: string;
   requestId?: string;
+  idempotencyKey?: string;
   credentials?: AdapterCredentials;
 };
 

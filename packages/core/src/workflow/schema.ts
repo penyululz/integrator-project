@@ -35,6 +35,20 @@ const workflowSchema: JSONSchemaType<WorkflowDefinitionInput> = {
             nullable: true,
             enum: ["stop", "continue", "retry", null],
           },
+          retryPolicy: {
+            type: "object",
+            nullable: true,
+            properties: {
+              enabled: { type: "boolean", nullable: true },
+              maxAttempts: { type: "integer", nullable: true, minimum: 1, maximum: 20 },
+              baseDelayMs: { type: "integer", nullable: true, minimum: 0, maximum: 3600000 },
+              maxDelayMs: { type: "integer", nullable: true, minimum: 0, maximum: 86400000 },
+              backoffMultiplier: { type: "number", nullable: true, minimum: 1, maximum: 10 },
+              jitter: { type: "boolean", nullable: true },
+            },
+            required: [],
+            additionalProperties: false,
+          },
         },
         required: ["id", "adapter", "action", "config"],
         additionalProperties: false,
@@ -89,4 +103,3 @@ export function validateWorkflowDefinition(input: unknown): {
 }
 
 export { workflowSchema };
-

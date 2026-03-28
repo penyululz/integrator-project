@@ -126,6 +126,7 @@ async function createAuthRuntime() {
   const workspaceBId = workspaceB.rows[0].id;
 
   await pool.query(fs.readFileSync(migrationPath("004_membership_tables.sql"), "utf8"));
+  await pool.query(fs.readFileSync(migrationPath("005_retry_engine_hardening.sql"), "utf8"));
 
   const workspaceRepository = new WorkspaceRepository(pool);
   const integrationRepository = new IntegrationRepository(pool);

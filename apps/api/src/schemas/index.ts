@@ -52,6 +52,16 @@ export const workflowStepSchema = z.object({
   action: z.string().min(1),
   config: z.record(z.unknown()).default({}),
   onError: z.enum(["stop", "continue", "retry"]).optional(),
+  retryPolicy: z
+    .object({
+      enabled: z.boolean().optional(),
+      maxAttempts: z.number().int().min(1).max(20).optional(),
+      baseDelayMs: z.number().int().min(0).max(3_600_000).optional(),
+      maxDelayMs: z.number().int().min(0).max(86_400_000).optional(),
+      backoffMultiplier: z.number().min(1).max(10).optional(),
+      jitter: z.boolean().optional(),
+    })
+    .optional(),
 });
 
 export const workflowDefinitionSchema = z.object({

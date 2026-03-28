@@ -4,12 +4,22 @@ export type WorkflowTrigger = {
   config: Record<string, unknown>;
 };
 
+export type WorkflowStepRetryPolicy = {
+  enabled?: boolean;
+  maxAttempts?: number;
+  baseDelayMs?: number;
+  maxDelayMs?: number;
+  backoffMultiplier?: number;
+  jitter?: boolean;
+};
+
 export type WorkflowStep = {
   id: string;
   adapter: string;
   action: string;
   config: Record<string, unknown>;
   onError?: "stop" | "continue" | "retry";
+  retryPolicy?: WorkflowStepRetryPolicy;
 };
 
 export type WorkflowDefinition = {
@@ -22,4 +32,3 @@ export type WorkflowDefinition = {
   enabled: boolean;
   metadata?: Record<string, unknown>;
 };
-

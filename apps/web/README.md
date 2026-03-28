@@ -17,3 +17,12 @@ The web app now uses API-issued bearer tokens instead of tenant context headers.
 - password: `dev-password`
 - org slug: `demo-org`
 - workspace slug: `default`
+
+## Run Visibility
+
+The Runs view now shows retry-aware execution state:
+
+- run status (`retrying`, `failed`, `dead_lettered`, `success`)
+- run attempt count (`attempt_count/max_attempts`)
+- last error
+- retry queue items from `GET /api/v1/retries`

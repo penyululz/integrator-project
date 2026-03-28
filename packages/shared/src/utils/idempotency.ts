@@ -30,3 +30,11 @@ export class IdempotencyRedisStore {
     await this.redis.del(key);
   }
 }
+
+export function buildStepIdempotencyKey(input: {
+  workflowId: string;
+  runId: string;
+  stepId: string;
+}): string {
+  return `workflow:${input.workflowId}:run:${input.runId}:step:${input.stepId}`;
+}

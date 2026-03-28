@@ -306,6 +306,20 @@ export function createApiRouter(runtime: CoreRuntime): Router {
     }
   });
 
+  router.get("/retries", requireAuth, async (req, res, next) => {
+    try {
+      const scope = req.auth!.scope;
+      const retries = await runtime.repositories.runRepository.listRetryJobs({
+        tenantId: scope.tenantId,
+        organizationId: scope.organizationId,
+        workspaceId: scope.workspaceId,
+      });
+      res.json({ retries });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.get("/logs", requireAuth, async (req, res, next) => {
     try {
       const scope = req.auth!.scope;
