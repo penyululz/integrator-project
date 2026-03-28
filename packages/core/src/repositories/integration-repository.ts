@@ -16,10 +16,18 @@ export type IntegrationRecord = {
 export class IntegrationRepository {
   constructor(private readonly pool: Pool) {}
 
-  async list(workspaceId: string): Promise<IntegrationRecord[]> {
+  async list(input: {
+    tenantId: string;
+    organizationId: string;
+    workspaceId: string;
+  }): Promise<IntegrationRecord[]> {
     const result = await this.pool.query<IntegrationRecord>(
-      `SELECT * FROM integrations WHERE workspace_id = $1 ORDER BY created_at DESC`,
-      [workspaceId],
+      `SELECT * FROM integrations
+       WHERE tenant_id = $1
+         AND organization_id = $2
+         AND workspace_id = $3
+       ORDER BY created_at DESC`,
+      [input.tenantId, input.organizationId, input.workspaceId],
     );
     return result.rows;
   }
@@ -50,4 +58,3 @@ export class IntegrationRepository {
     return result.rows[0];
   }
 }
-

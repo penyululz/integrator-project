@@ -34,6 +34,8 @@ export class WorkflowEngine {
     }
 
     const workflows = await this.workflowRepository.findActiveByTrigger({
+      tenantId: event.tenantId,
+      organizationId: event.organizationId,
       workspaceId: event.workspaceId,
       adapterKey: event.adapterKey,
       triggerKey: event.triggerKey,

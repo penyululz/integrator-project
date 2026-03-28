@@ -1,13 +1,21 @@
 import { Router } from "express";
 import { validateWorkflowDefinition, type CoreRuntime } from "@integration/core";
+import { requireAuth, requireRole } from "../middleware/auth";
 import {
   createIntegrationSchema,
   createWorkspaceSchema,
   createWorkflowSchema,
+  devLoginSchema,
+  loginSchema,
+  oauthCallbackSchema,
+  oauthStartSchema,
   upsertCredentialSchema,
   webhookSchema,
 } from "../schemas";
-import { requireContext } from "../middleware/require-context";
+
+function resolveRouteParam(value: string | string[]): string {
+  return Array.isArray(value) ? value[0] : value;
+}
 
 export function createApiRouter(runtime: CoreRuntime): Router {
   const router = Router();
@@ -16,64 +24,103 @@ export function createApiRouter(runtime: CoreRuntime): Router {
     res.json({ status: "ok" });
   });
 
-  router.get("/setup/context", async (_req, res, next) => {
+  router.post("/auth/login", async (req, res, next) => {
     try {
-      const context = await runtime.repositories.workspaceRepository.getSeededContext();
-      if (!context) {
-        res.status(404).json({
-          error:
-            "No seeded organization/workspace found. Run migrations and seed first.",
-        });
+      const body = loginSchema.parse(req.body);
+      const session = await runtime.authService.login(body);
+      res.status(200).json(session);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post("/auth/dev-login", async (req, res, next) => {
+    try {
+      if (!runtime.authService.isDevLoginEnabled()) {
+        res.status(404).json({ error: "Not found." });
         return;
       }
 
+      const body = devLoginSchema.parse(req.body || {});
+      const session = await runtime.authService.issueDevLogin(body);
+      res.status(200).json(session);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get("/auth/me", requireAuth, async (req, res, next) => {
+    try {
+      const workspaces = await runtime.authService.listAccessibleWorkspaces({
+        userId: req.auth!.user.id,
+        organizationId: req.auth!.scope.organizationId,
+      });
       res.json({
-        context: {
-          tenantId: context.tenant_id,
-          organizationId: context.organization_id,
-          workspaceId: context.workspace_id,
-          userId: context.user_id,
-          organizationSlug: context.organization_slug,
-          workspaceSlug: context.workspace_slug,
-        },
+        user: req.auth!.user,
+        scope: req.auth!.scope,
+        workspaces,
       });
     } catch (error) {
       next(error);
     }
   });
 
-  router.get("/workspaces", requireContext, async (req, res, next) => {
+  router.post("/auth/logout", requireAuth, (_req, res) => {
+    res.status(204).send();
+  });
+
+  router.get("/workspaces", requireAuth, async (req, res, next) => {
     try {
-      const workspaces = await runtime.repositories.workspaceRepository.list(
-        req.ctx!.organizationId,
-      );
+      const workspaces = await runtime.authService.listAccessibleWorkspaces({
+        userId: req.auth!.user.id,
+        organizationId: req.auth!.scope.organizationId,
+      });
       res.json({ workspaces });
     } catch (error) {
       next(error);
     }
   });
 
-  router.post("/workspaces", requireContext, async (req, res, next) => {
-    try {
-      const body = createWorkspaceSchema.parse(req.body);
-      const workspace = await runtime.repositories.workspaceRepository.create({
-        tenantId: req.ctx!.tenantId,
-        organizationId: req.ctx!.organizationId,
-        name: body.name,
-        slug: body.slug,
-        createdBy: req.ctx!.userId,
-      });
-      res.status(201).json({ workspace });
-    } catch (error) {
-      next(error);
-    }
-  });
+  router.post(
+    "/workspaces",
+    requireRole(["owner", "admin"]),
+    async (req, res, next) => {
+      try {
+        const body = createWorkspaceSchema.parse(req.body);
+        const scope = req.auth!.scope;
+        const user = req.auth!.user;
 
-  router.get("/integrations", requireContext, async (req, res, next) => {
+        const workspace = await runtime.repositories.workspaceRepository.create({
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          name: body.name,
+          slug: body.slug,
+          createdBy: user.id,
+        });
+
+        await runtime.repositories.authRepository.ensureWorkspaceMembership({
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: workspace.id,
+          userId: user.id,
+          role: scope.orgRole === "owner" ? "owner" : "admin",
+        });
+
+        res.status(201).json({ workspace });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.get("/integrations", requireAuth, async (req, res, next) => {
     try {
-      const workspaceId = req.ctx!.workspaceId!;
-      const integrations =
-        await runtime.repositories.integrationRepository.list(workspaceId);
+      const scope = req.auth!.scope;
+      const integrations = await runtime.repositories.integrationRepository.list({
+        tenantId: scope.tenantId,
+        organizationId: scope.organizationId,
+        workspaceId: scope.workspaceId,
+      });
       res.json({
         integrations,
         adapters: runtime.pluginLoader.list().map((adapter) => adapter.key),
@@ -83,42 +130,44 @@ export function createApiRouter(runtime: CoreRuntime): Router {
     }
   });
 
-  router.post("/integrations", requireContext, async (req, res, next) => {
-    try {
-      const body = createIntegrationSchema.parse(req.body);
-      const integration =
-        await runtime.repositories.integrationRepository.create({
-          tenantId: req.ctx!.tenantId,
-          organizationId: req.ctx!.organizationId,
-          workspaceId: req.ctx!.workspaceId!,
+  router.post(
+    "/integrations",
+    requireRole(["owner", "admin"]),
+    async (req, res, next) => {
+      try {
+        const body = createIntegrationSchema.parse(req.body);
+        const scope = req.auth!.scope;
+        const integration = await runtime.repositories.integrationRepository.create({
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
           adapterKey: body.adapterKey,
           name: body.name,
           config: body.config,
         });
-      res.status(201).json({ integration });
-    } catch (error) {
-      next(error);
-    }
-  });
+        res.status(201).json({ integration });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
 
   router.post(
     "/integrations/:adapterKey/auth/start",
-    requireContext,
+    requireRole(["owner", "admin"]),
     async (req, res, next) => {
       try {
-        const adapterKey = Array.isArray(req.params.adapterKey)
-          ? req.params.adapterKey[0]
-          : req.params.adapterKey;
+        const body = oauthStartSchema.parse(req.body);
+        const adapterKey = resolveRouteParam(req.params.adapterKey);
         const adapter = runtime.pluginLoader.get(adapterKey);
+        const scope = req.auth!.scope;
         const auth = await runtime.oauthService.beginAuth(adapter, {
-          tenantId: req.ctx!.tenantId,
-          organizationId: req.ctx!.organizationId,
-          workspaceId: req.ctx!.workspaceId!,
-          redirectUri: String(req.body.redirectUri || ""),
-          state: String(req.body.state || ""),
-          scopes: Array.isArray(req.body.scopes)
-            ? (req.body.scopes as string[])
-            : undefined,
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+          redirectUri: body.redirectUri,
+          state: body.state,
+          scopes: body.scopes,
         });
         res.json(auth);
       } catch (error) {
@@ -129,20 +178,20 @@ export function createApiRouter(runtime: CoreRuntime): Router {
 
   router.post(
     "/integrations/:adapterKey/auth/callback",
-    requireContext,
+    requireRole(["owner", "admin"]),
     async (req, res, next) => {
       try {
-        const adapterKey = Array.isArray(req.params.adapterKey)
-          ? req.params.adapterKey[0]
-          : req.params.adapterKey;
+        const body = oauthCallbackSchema.parse(req.body);
+        const adapterKey = resolveRouteParam(req.params.adapterKey);
         const adapter = runtime.pluginLoader.get(adapterKey);
+        const scope = req.auth!.scope;
         await runtime.oauthService.completeAuth(adapter, {
-          tenantId: req.ctx!.tenantId,
-          organizationId: req.ctx!.organizationId,
-          workspaceId: req.ctx!.workspaceId!,
-          integrationId: req.body.integrationId,
-          code: String(req.body.code || ""),
-          redirectUri: String(req.body.redirectUri || ""),
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+          integrationId: body.integrationId,
+          code: body.code,
+          redirectUri: body.redirectUri,
         });
         res.status(201).json({ status: "connected" });
       } catch (error) {
@@ -151,92 +200,120 @@ export function createApiRouter(runtime: CoreRuntime): Router {
     },
   );
 
-  router.get("/credentials", requireContext, async (req, res, next) => {
+  router.get("/credentials", requireAuth, async (req, res, next) => {
     try {
-      const credentials = await runtime.repositories.credentialRepository.list(
-        req.ctx!.workspaceId!,
-      );
+      const scope = req.auth!.scope;
+      const credentials = await runtime.repositories.credentialRepository.list({
+        tenantId: scope.tenantId,
+        organizationId: scope.organizationId,
+        workspaceId: scope.workspaceId,
+      });
       res.json({ credentials });
     } catch (error) {
       next(error);
     }
   });
 
-  router.post("/credentials", requireContext, async (req, res, next) => {
-    try {
-      const body = upsertCredentialSchema.parse(req.body);
-      const credential = await runtime.repositories.credentialRepository.upsert({
-        tenantId: req.ctx!.tenantId,
-        organizationId: req.ctx!.organizationId,
-        workspaceId: req.ctx!.workspaceId!,
-        integrationId: body.integrationId,
-        providerKey: body.providerKey,
-        authType: body.authType,
-        accessToken: body.accessToken,
-        refreshToken: body.refreshToken,
-        expiresAt: body.expiresAt,
-        metadata: body.metadata,
-      });
-      res.status(201).json({ credential });
-    } catch (error) {
-      next(error);
-    }
-  });
+  router.post(
+    "/credentials",
+    requireRole(["owner", "admin"]),
+    async (req, res, next) => {
+      try {
+        const body = upsertCredentialSchema.parse(req.body);
+        const scope = req.auth!.scope;
+        const credential = await runtime.repositories.credentialRepository.upsert({
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+          integrationId: body.integrationId,
+          providerKey: body.providerKey,
+          authType: body.authType,
+          accessToken: body.accessToken,
+          refreshToken: body.refreshToken,
+          expiresAt: body.expiresAt,
+          metadata: body.metadata,
+        });
+        res.status(201).json({ credential });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
 
-  router.get("/workflows", requireContext, async (req, res, next) => {
+  router.get("/workflows", requireAuth, async (req, res, next) => {
     try {
-      const workflows = await runtime.repositories.workflowRepository.list(
-        req.ctx!.workspaceId!,
-      );
+      const scope = req.auth!.scope;
+      const workflows = await runtime.repositories.workflowRepository.list({
+        tenantId: scope.tenantId,
+        organizationId: scope.organizationId,
+        workspaceId: scope.workspaceId,
+      });
       res.json({ workflows });
     } catch (error) {
       next(error);
     }
   });
 
-  router.post("/workflows", requireContext, async (req, res, next) => {
-    try {
-      const body = createWorkflowSchema.parse(req.body);
-      const validation = validateWorkflowDefinition(body.definition);
-      if (!validation.valid) {
-        res.status(400).json({
-          error: "Invalid workflow definition.",
-          details: validation.errors,
+  router.post(
+    "/workflows",
+    requireRole(["owner", "admin"]),
+    async (req, res, next) => {
+      try {
+        const body = createWorkflowSchema.parse(req.body);
+        const scope = req.auth!.scope;
+
+        const normalizedDefinition = {
+          ...body.definition,
+          workspaceId: scope.workspaceId,
+          organizationId: scope.organizationId,
+        };
+        const validation = validateWorkflowDefinition(normalizedDefinition);
+        if (!validation.valid) {
+          res.status(400).json({
+            error: "Invalid workflow definition.",
+            details: validation.errors,
+          });
+          return;
+        }
+
+        const workflow = await runtime.repositories.workflowRepository.create({
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+          name: body.name,
+          description: body.description,
+          definition: validation.value!,
+          createdBy: req.auth!.user.id,
         });
-        return;
+        res.status(201).json({ workflow });
+      } catch (error) {
+        next(error);
       }
+    },
+  );
 
-      const workflow = await runtime.repositories.workflowRepository.create({
-        tenantId: req.ctx!.tenantId,
-        organizationId: req.ctx!.organizationId,
-        workspaceId: req.ctx!.workspaceId!,
-        name: body.name,
-        description: body.description,
-        definition: validation.value!,
-        createdBy: req.ctx!.userId,
-      });
-      res.status(201).json({ workflow });
-    } catch (error) {
-      next(error);
-    }
-  });
-
-  router.get("/runs", requireContext, async (req, res, next) => {
+  router.get("/runs", requireAuth, async (req, res, next) => {
     try {
-      const runs = await runtime.repositories.runRepository.listRuns(
-        req.ctx!.workspaceId!,
-      );
+      const scope = req.auth!.scope;
+      const runs = await runtime.repositories.runRepository.listRuns({
+        tenantId: scope.tenantId,
+        organizationId: scope.organizationId,
+        workspaceId: scope.workspaceId,
+      });
       res.json({ runs });
     } catch (error) {
       next(error);
     }
   });
 
-  router.get("/logs", requireContext, async (req, res, next) => {
+  router.get("/logs", requireAuth, async (req, res, next) => {
     try {
-      const logs = await runtime.repositories.runRepository.listLogs(
-        req.ctx!.workspaceId!,
-      );
+      const scope = req.auth!.scope;
+      const logs = await runtime.repositories.runRepository.listLogs({
+        tenantId: scope.tenantId,
+        organizationId: scope.organizationId,
+        workspaceId: scope.workspaceId,
+      });
       res.json({ logs });
     } catch (error) {
       next(error);
@@ -245,16 +322,13 @@ export function createApiRouter(runtime: CoreRuntime): Router {
 
   router.post(
     "/webhook/:adapterKey/:triggerKey",
-    requireContext,
+    requireAuth,
     async (req, res, next) => {
       try {
         const body = webhookSchema.parse(req.body);
-        const adapterKey = Array.isArray(req.params.adapterKey)
-          ? req.params.adapterKey[0]
-          : req.params.adapterKey;
-        const triggerKey = Array.isArray(req.params.triggerKey)
-          ? req.params.triggerKey[0]
-          : req.params.triggerKey;
+        const adapterKey = resolveRouteParam(req.params.adapterKey);
+        const triggerKey = resolveRouteParam(req.params.triggerKey);
+        const scope = req.auth!.scope;
 
         const adapter = runtime.pluginLoader.get(adapterKey);
         const triggerResult = await adapter.runTrigger(
@@ -264,18 +338,18 @@ export function createApiRouter(runtime: CoreRuntime): Router {
             headers: req.headers,
           },
           {
-            tenantId: req.ctx!.tenantId,
-            organizationId: req.ctx!.organizationId,
-            workspaceId: req.ctx!.workspaceId!,
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
             requestId: req.header("x-request-id") || undefined,
           },
         );
 
         for (const event of triggerResult.events) {
           await runtime.workflowEngine.queueIncomingEvent({
-            tenantId: req.ctx!.tenantId,
-            organizationId: req.ctx!.organizationId,
-            workspaceId: req.ctx!.workspaceId!,
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
             adapterKey,
             triggerKey,
             payload: event,

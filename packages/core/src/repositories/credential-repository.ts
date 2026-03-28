@@ -19,10 +19,18 @@ export type CredentialRecord = {
 export class CredentialRepository {
   constructor(private readonly pool: Pool) {}
 
-  async list(workspaceId: string): Promise<CredentialRecord[]> {
+  async list(input: {
+    tenantId: string;
+    organizationId: string;
+    workspaceId: string;
+  }): Promise<CredentialRecord[]> {
     const result = await this.pool.query<CredentialRecord>(
-      `SELECT * FROM credentials WHERE workspace_id = $1 ORDER BY created_at DESC`,
-      [workspaceId],
+      `SELECT * FROM credentials
+       WHERE tenant_id = $1
+         AND organization_id = $2
+         AND workspace_id = $3
+       ORDER BY created_at DESC`,
+      [input.tenantId, input.organizationId, input.workspaceId],
     );
     return result.rows;
   }
@@ -41,21 +49,27 @@ export class CredentialRepository {
   }): Promise<CredentialRecord> {
     const existing = await this.pool.query<CredentialRecord>(
       `SELECT * FROM credentials
-       WHERE workspace_id = $1 AND provider_key = $2
+       WHERE tenant_id = $1
+         AND organization_id = $2
+         AND workspace_id = $3
+         AND provider_key = $4
        ORDER BY created_at DESC
        LIMIT 1`,
-      [input.workspaceId, input.providerKey],
+      [input.tenantId, input.organizationId, input.workspaceId, input.providerKey],
     );
 
     if (existing.rows[0]) {
       const updated = await this.pool.query<CredentialRecord>(
         `UPDATE credentials
-         SET access_token = $3,
-             refresh_token = $4,
-             expires_at = $5,
-             metadata_json = $6,
+         SET access_token = $2,
+             refresh_token = $3,
+             expires_at = $4,
+             metadata_json = $5,
              updated_at = NOW()
          WHERE id = $1
+           AND tenant_id = $6
+           AND organization_id = $7
+           AND workspace_id = $8
          RETURNING *`,
         [
           existing.rows[0].id,
@@ -63,6 +77,9 @@ export class CredentialRepository {
           input.refreshToken || null,
           input.expiresAt || null,
           JSON.stringify(input.metadata || {}),
+          input.tenantId,
+          input.organizationId,
+          input.workspaceId,
         ],
       );
       return updated.rows[0];

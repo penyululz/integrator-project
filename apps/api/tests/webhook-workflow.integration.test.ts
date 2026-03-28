@@ -22,11 +22,14 @@ import { PluginLoader } from "../../../packages/core/src/engine/plugin-loader";
 import { EventQueue } from "../../../packages/core/src/engine/event-queue";
 import { WorkflowEngine } from "../../../packages/core/src/engine/workflow-engine";
 import { CredentialResolver } from "../../../packages/core/src/auth/credential-resolver";
+import { AuthService } from "../../../packages/core/src/auth/auth-service";
 import { WorkspaceRepository } from "../../../packages/core/src/repositories/workspace-repository";
 import { IntegrationRepository } from "../../../packages/core/src/repositories/integration-repository";
 import { CredentialRepository } from "../../../packages/core/src/repositories/credential-repository";
 import { WorkflowRepository } from "../../../packages/core/src/repositories/workflow-repository";
 import { RunRepository } from "../../../packages/core/src/repositories/run-repository";
+import { AuthRepository } from "../../../packages/core/src/repositories/auth-repository";
+import type { CoreEnv } from "../../../packages/core/src/db/env";
 
 class InMemoryRedisQueue {
   private readonly events: string[] = [];
@@ -172,12 +175,34 @@ async function createTestRuntime() {
     [tenantId, organizationId, userId],
   );
   const workspaceId = workspace.rows[0].id;
+  await pool.query(fs.readFileSync(migrationPath("004_membership_tables.sql"), "utf8"));
 
   const workspaceRepository = new WorkspaceRepository(pool);
   const integrationRepository = new IntegrationRepository(pool);
   const credentialRepository = new CredentialRepository(pool);
   const workflowRepository = new WorkflowRepository(pool);
   const runRepository = new RunRepository(pool);
+  const authRepository = new AuthRepository(pool);
+  await authRepository.ensureOrganizationMembership({
+    tenantId,
+    organizationId,
+    userId,
+    role: "admin",
+  });
+  await authRepository.ensureWorkspaceMembership({
+    tenantId,
+    organizationId,
+    workspaceId,
+    userId,
+    role: "admin",
+  });
+  const authService = new AuthService(authRepository, {
+    DATABASE_URL: "postgres://local/test",
+    REDIS_URL: "redis://local/test",
+    APP_ENV: "test",
+    JWT_SECRET: "test-secret",
+    JWT_EXPIRES_IN: "1h",
+  } satisfies CoreEnv);
 
   const workflow = await workflowRepository.create({
     tenantId,
@@ -250,12 +275,14 @@ async function createTestRuntime() {
       beginAuth: async () => ({ authUrl: "https://example.com/auth" }),
       completeAuth: async () => {},
     } as never,
+    authService,
     repositories: {
       workspaceRepository,
       integrationRepository,
       credentialRepository,
       workflowRepository,
       runRepository,
+      authRepository,
     },
     close: async () => {
       await pool.end();
@@ -282,12 +309,16 @@ describe("Webhook -> Queue -> Workflow integration", () => {
       await createTestRuntime();
 
     try {
+      const login = await runtime.authService.login({
+        email: "admin@example.com",
+        password: "not-used-in-test",
+        organizationSlug: "demo-org",
+        workspaceSlug: "default",
+      });
+
       const response = await request(app)
         .post("/api/v1/webhook/webhook/http_post")
-        .set("x-tenant-id", context.tenantId)
-        .set("x-organization-id", context.organizationId)
-        .set("x-workspace-id", context.workspaceId)
-        .set("x-user-id", context.userId)
+        .set("authorization", `Bearer ${login.accessToken}`)
         .send({
           payload: {
             orderId: "demo-order",
@@ -300,16 +331,20 @@ describe("Webhook -> Queue -> Workflow integration", () => {
       const processed = await runtime.workflowEngine.processNextEvent();
       expect(processed).toBe(true);
 
-      const runs = await runtime.repositories.runRepository.listRuns(
-        context.workspaceId,
-      );
+      const runs = await runtime.repositories.runRepository.listRuns({
+        tenantId: context.tenantId,
+        organizationId: context.organizationId,
+        workspaceId: context.workspaceId,
+      });
       expect(runs).toHaveLength(1);
       expect(runs[0].workflow_id).toBe(workflow.id);
       expect(runs[0].status).toBe("success");
 
-      const logs = await runtime.repositories.runRepository.listLogs(
-        context.workspaceId,
-      );
+      const logs = await runtime.repositories.runRepository.listLogs({
+        tenantId: context.tenantId,
+        organizationId: context.organizationId,
+        workspaceId: context.workspaceId,
+      });
       expect(logs.some((log) => log.event_type === "event.received")).toBe(true);
       expect(
         logs.some((log) => log.event_type === "workflow.step.completed"),

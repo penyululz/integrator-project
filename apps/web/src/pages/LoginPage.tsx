@@ -1,94 +1,108 @@
-import { FormEvent, useEffect, useState } from "react";
-import { fetchSetupContext } from "../api";
+import { FormEvent, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { devLogin, getAuthSession, login } from "../api";
 
-export function LoginPage() {
-  const [tenantId, setTenantId] = useState(localStorage.getItem("tenantId") || "");
-  const [organizationId, setOrganizationId] = useState(
-    localStorage.getItem("organizationId") || "",
+export function LoginPage({ onLoggedIn }: { onLoggedIn: () => void }) {
+  const existingSession = getAuthSession();
+  const [email, setEmail] = useState(existingSession?.user.email || "admin@example.com");
+  const [password, setPassword] = useState("dev-password");
+  const [organizationSlug, setOrganizationSlug] = useState(
+    existingSession?.scope.organizationSlug || "demo-org",
   );
-  const [workspaceId, setWorkspaceId] = useState(
-    localStorage.getItem("workspaceId") || "",
+  const [workspaceSlug, setWorkspaceSlug] = useState(
+    existingSession?.scope.workspaceSlug || "default",
   );
-  const [userId, setUserId] = useState(localStorage.getItem("userId") || "");
-  const [saved, setSaved] = useState(false);
-  const [loadingSeed, setLoadingSeed] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const navigate = useNavigate();
 
-  function onSubmit(event: FormEvent) {
+  async function onSubmit(event: FormEvent) {
     event.preventDefault();
-    localStorage.setItem("tenantId", tenantId);
-    localStorage.setItem("organizationId", organizationId);
-    localStorage.setItem("workspaceId", workspaceId);
-    localStorage.setItem("userId", userId);
-    setSaved(true);
-  }
+    setLoading(true);
+    setError(null);
 
-  async function loadSeededContext() {
-    setLoadingSeed(true);
     try {
-      const context = await fetchSetupContext();
-      if (!context) {
-        return;
-      }
-      setTenantId(context.tenantId);
-      setOrganizationId(context.organizationId);
-      setWorkspaceId(context.workspaceId);
-      setUserId(context.userId || "");
-      localStorage.setItem("tenantId", context.tenantId);
-      localStorage.setItem("organizationId", context.organizationId);
-      localStorage.setItem("workspaceId", context.workspaceId);
-      if (context.userId) {
-        localStorage.setItem("userId", context.userId);
-      }
-      setSaved(true);
+      await login({
+        email,
+        password,
+        organizationSlug,
+        workspaceSlug: workspaceSlug || undefined,
+      });
+      onLoggedIn();
+      navigate("/integrations");
+    } catch (loginError) {
+      setError((loginError as Error).message);
     } finally {
-      setLoadingSeed(false);
+      setLoading(false);
     }
   }
 
-  useEffect(() => {
-    if (!tenantId || !organizationId || !workspaceId) {
-      void loadSeededContext();
+  async function onDevLogin() {
+    setLoading(true);
+    setError(null);
+
+    try {
+      await devLogin({
+        email,
+        organizationSlug,
+        workspaceSlug: workspaceSlug || undefined,
+      });
+      onLoggedIn();
+      navigate("/integrations");
+    } catch (loginError) {
+      setError((loginError as Error).message);
+    } finally {
+      setLoading(false);
     }
-  }, []);
+  }
 
   return (
     <div>
-      <h2>Basic Login (Context Setup)</h2>
+      <h2>Login</h2>
       <form onSubmit={onSubmit}>
         <p>
-          <label>Tenant ID</label>
+          <label>Email</label>
           <br />
-          <input value={tenantId} onChange={(e) => setTenantId(e.target.value)} />
+          <input value={email} onChange={(event) => setEmail(event.target.value)} />
         </p>
         <p>
-          <label>Organization ID</label>
+          <label>Password</label>
           <br />
           <input
-            value={organizationId}
-            onChange={(e) => setOrganizationId(e.target.value)}
+            type="password"
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
           />
         </p>
         <p>
-          <label>Workspace ID</label>
+          <label>Organization Slug</label>
           <br />
-          <input value={workspaceId} onChange={(e) => setWorkspaceId(e.target.value)} />
+          <input
+            value={organizationSlug}
+            onChange={(event) => setOrganizationSlug(event.target.value)}
+          />
         </p>
         <p>
-          <label>User ID</label>
+          <label>Workspace Slug</label>
           <br />
-          <input value={userId} onChange={(e) => setUserId(e.target.value)} />
+          <input
+            value={workspaceSlug}
+            onChange={(event) => setWorkspaceSlug(event.target.value)}
+          />
         </p>
-        <button type="submit">Save</button>
+        <button type="submit" disabled={loading}>
+          {loading ? "Signing in..." : "Login"}
+        </button>
         <button
           type="button"
-          onClick={() => void loadSeededContext()}
-          disabled={loadingSeed}
+          disabled={loading}
+          onClick={() => void onDevLogin()}
           style={{ marginLeft: 8 }}
         >
-          {loadingSeed ? "Loading..." : "Use Seeded Context"}
+          {loading ? "Please wait..." : "Use Dev Login"}
         </button>
       </form>
-      {saved ? <p>Saved context headers to local storage.</p> : null}
+      {error ? <p style={{ color: "red" }}>{error}</p> : null}
     </div>
   );
 }

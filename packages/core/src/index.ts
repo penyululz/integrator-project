@@ -11,7 +11,10 @@ import { EventQueue } from "./engine/event-queue";
 import { WorkflowEngine } from "./engine/workflow-engine";
 import { OAuthService } from "./auth/oauth-service";
 import { CredentialResolver } from "./auth/credential-resolver";
+import { AuthService } from "./auth/auth-service";
+import { AuthRepository } from "./repositories/auth-repository";
 import { validateWorkflowDefinition } from "./workflow/schema";
+import { getCoreEnv } from "./db/env";
 import { WebhookAdapter } from "@integration/adapter-webhook";
 import { SheetsAdapter } from "@integration/adapter-sheets";
 import { EmailAdapter } from "@integration/adapter-email";
@@ -24,6 +27,7 @@ export type CoreRuntime = {
   eventQueue: EventQueue;
   workflowEngine: WorkflowEngine;
   oauthService: OAuthService;
+  authService: AuthService;
   credentialResolver: CredentialResolver;
   repositories: {
     workspaceRepository: WorkspaceRepository;
@@ -31,11 +35,20 @@ export type CoreRuntime = {
     credentialRepository: CredentialRepository;
     workflowRepository: WorkflowRepository;
     runRepository: RunRepository;
+    authRepository: AuthRepository;
   };
   close: () => Promise<void>;
 };
 
 export { validateWorkflowDefinition };
+export { AuthService } from "./auth/auth-service";
+export type {
+  PlatformRole,
+  SessionScope,
+  SessionUser,
+  LoginResponse,
+} from "./auth/types";
+export { AuthError, UnauthenticatedError, UnauthorizedError } from "./auth/errors";
 
 function createAdapterInstances(): Adapter[] {
   return [
@@ -48,6 +61,7 @@ function createAdapterInstances(): Adapter[] {
 }
 
 export async function createCoreRuntime(): Promise<CoreRuntime> {
+  const env = getCoreEnv();
   const pool = getPostgresPool();
   const redis = await getRedisClient();
 
@@ -56,6 +70,7 @@ export async function createCoreRuntime(): Promise<CoreRuntime> {
   const credentialRepository = new CredentialRepository(pool);
   const workflowRepository = new WorkflowRepository(pool);
   const runRepository = new RunRepository(pool);
+  const authRepository = new AuthRepository(pool);
 
   const pluginLoader = new PluginLoader();
   for (const adapter of createAdapterInstances()) {
@@ -101,12 +116,14 @@ export async function createCoreRuntime(): Promise<CoreRuntime> {
     credentialResolver,
   );
   const oauthService = new OAuthService(credentialRepository);
+  const authService = new AuthService(authRepository, env);
 
   return {
     pluginLoader,
     eventQueue,
     workflowEngine,
     oauthService,
+    authService,
     credentialResolver,
     repositories: {
       workspaceRepository,
@@ -114,6 +131,7 @@ export async function createCoreRuntime(): Promise<CoreRuntime> {
       credentialRepository,
       workflowRepository,
       runRepository,
+      authRepository,
     },
     close: async () => {
       await closeRedisClient();

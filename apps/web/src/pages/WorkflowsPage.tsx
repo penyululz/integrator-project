@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useState } from "react";
-import { apiClient } from "../api";
+import { apiClient, getAuthSession } from "../api";
 
 type Workflow = {
   id: string;
@@ -7,36 +7,39 @@ type Workflow = {
   status: string;
 };
 
-const defaultWorkflow = {
-  id: "wf_shopify_to_slack",
-  name: "Shopify -> Slack",
-  workspaceId: localStorage.getItem("workspaceId") || "",
-  organizationId: localStorage.getItem("organizationId") || "",
-  trigger: {
-    adapter: "shopify",
-    trigger: "order_created",
-    config: {},
-  },
-  steps: [
-    {
-      id: "step_slack_notify",
-      adapter: "slack",
-      action: "sendMessage",
-      config: {
-        channel: "#ops",
-        text: "New order received",
-      },
-      onError: "stop",
+function buildDefaultWorkflow() {
+  const session = getAuthSession();
+  return {
+    id: "wf_shopify_to_slack",
+    name: "Shopify -> Slack",
+    workspaceId: session?.scope.workspaceId || "",
+    organizationId: session?.scope.organizationId || "",
+    trigger: {
+      adapter: "shopify",
+      trigger: "order_created",
+      config: {},
     },
-  ],
-  enabled: true,
-};
+    steps: [
+      {
+        id: "step_slack_notify",
+        adapter: "slack",
+        action: "sendMessage",
+        config: {
+          channel: "#ops",
+          text: "New order received",
+        },
+        onError: "stop",
+      },
+    ],
+    enabled: true,
+  };
+}
 
 export function WorkflowsPage() {
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
   const [name, setName] = useState("Shopify Order Flow");
   const [definitionText, setDefinitionText] = useState(
-    JSON.stringify(defaultWorkflow, null, 2),
+    JSON.stringify(buildDefaultWorkflow(), null, 2),
   );
   const [error, setError] = useState<string | null>(null);
 

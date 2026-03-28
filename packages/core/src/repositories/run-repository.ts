@@ -63,10 +63,18 @@ export class RunRepository {
     );
   }
 
-  async listRuns(workspaceId: string): Promise<WorkflowRunRecord[]> {
+  async listRuns(input: {
+    tenantId: string;
+    organizationId: string;
+    workspaceId: string;
+  }): Promise<WorkflowRunRecord[]> {
     const result = await this.pool.query<WorkflowRunRecord>(
-      `SELECT * FROM workflow_runs WHERE workspace_id = $1 ORDER BY created_at DESC`,
-      [workspaceId],
+      `SELECT * FROM workflow_runs
+       WHERE tenant_id = $1
+         AND organization_id = $2
+         AND workspace_id = $3
+       ORDER BY created_at DESC`,
+      [input.tenantId, input.organizationId, input.workspaceId],
     );
     return result.rows;
   }
@@ -96,10 +104,19 @@ export class RunRepository {
     );
   }
 
-  async listLogs(workspaceId: string): Promise<EventLogRecord[]> {
+  async listLogs(input: {
+    tenantId: string;
+    organizationId: string;
+    workspaceId: string;
+  }): Promise<EventLogRecord[]> {
     const result = await this.pool.query<EventLogRecord>(
-      `SELECT * FROM event_logs WHERE workspace_id = $1 ORDER BY created_at DESC LIMIT 250`,
-      [workspaceId],
+      `SELECT * FROM event_logs
+       WHERE tenant_id = $1
+         AND organization_id = $2
+         AND workspace_id = $3
+       ORDER BY created_at DESC
+       LIMIT 250`,
+      [input.tenantId, input.organizationId, input.workspaceId],
     );
     return result.rows;
   }
@@ -131,4 +148,3 @@ export class RunRepository {
     );
   }
 }
-

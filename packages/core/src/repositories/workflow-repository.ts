@@ -18,10 +18,18 @@ export type WorkflowRecord = {
 export class WorkflowRepository {
   constructor(private readonly pool: Pool) {}
 
-  async list(workspaceId: string): Promise<WorkflowRecord[]> {
+  async list(input: {
+    tenantId: string;
+    organizationId: string;
+    workspaceId: string;
+  }): Promise<WorkflowRecord[]> {
     const result = await this.pool.query<WorkflowRecord>(
-      `SELECT * FROM workflows WHERE workspace_id = $1 ORDER BY created_at DESC`,
-      [workspaceId],
+      `SELECT * FROM workflows
+       WHERE tenant_id = $1
+         AND organization_id = $2
+         AND workspace_id = $3
+       ORDER BY created_at DESC`,
+      [input.tenantId, input.organizationId, input.workspaceId],
     );
     return result.rows;
   }
@@ -84,20 +92,29 @@ export class WorkflowRepository {
   }
 
   async findActiveByTrigger(input: {
+    tenantId: string;
+    organizationId: string;
     workspaceId: string;
     adapterKey: string;
     triggerKey: string;
   }): Promise<WorkflowRecord[]> {
     const result = await this.pool.query<WorkflowRecord>(
       `SELECT * FROM workflows
-       WHERE workspace_id = $1
+       WHERE tenant_id = $1
+         AND organization_id = $2
+         AND workspace_id = $3
          AND status = 'active'
-         AND definition_json->'trigger'->>'adapter' = $2
-         AND definition_json->'trigger'->>'trigger' = $3
+         AND definition_json->'trigger'->>'adapter' = $4
+         AND definition_json->'trigger'->>'trigger' = $5
        ORDER BY created_at ASC`,
-      [input.workspaceId, input.adapterKey, input.triggerKey],
+      [
+        input.tenantId,
+        input.organizationId,
+        input.workspaceId,
+        input.adapterKey,
+        input.triggerKey,
+      ],
     );
     return result.rows;
   }
 }
-

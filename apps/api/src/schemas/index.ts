@@ -1,10 +1,28 @@
 import { z } from "zod";
 
-export const tenantHeadersSchema = z.object({
-  tenantId: z.string().min(1),
-  organizationId: z.string().min(1),
-  workspaceId: z.string().min(1).optional(),
-  userId: z.string().min(1).optional(),
+export const loginSchema = z.object({
+  email: z.string().email(),
+  password: z.string().min(1),
+  organizationSlug: z.string().min(1),
+  workspaceSlug: z.string().min(1).optional(),
+});
+
+export const devLoginSchema = z.object({
+  email: z.string().email().optional(),
+  organizationSlug: z.string().min(1).optional(),
+  workspaceSlug: z.string().min(1).optional(),
+});
+
+export const oauthStartSchema = z.object({
+  redirectUri: z.string().url().or(z.string().min(1)),
+  state: z.string().optional(),
+  scopes: z.array(z.string()).optional(),
+});
+
+export const oauthCallbackSchema = z.object({
+  integrationId: z.string().uuid().optional(),
+  code: z.string().min(1),
+  redirectUri: z.string().url().or(z.string().min(1)),
 });
 
 export const createWorkspaceSchema = z.object({
@@ -39,8 +57,8 @@ export const workflowStepSchema = z.object({
 export const workflowDefinitionSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
-  workspaceId: z.string().min(1),
-  organizationId: z.string().min(1),
+  workspaceId: z.string().min(1).optional(),
+  organizationId: z.string().min(1).optional(),
   trigger: z.object({
     adapter: z.string().min(1),
     trigger: z.string().min(1),
