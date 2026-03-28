@@ -1,152 +1,17 @@
-import Ajv, { JSONSchemaType } from "ajv";
+import {
+  validateAdapterManifest as validateAdapterManifestWithSdk,
+  type AdapterAuthType,
+  type AdapterManifest,
+} from "@integration/shared";
 
-export type AdapterAuthType =
-  | "none"
-  | "oauth2"
-  | "api_key"
-  | "basic"
-  | "smtp"
-  | "token"
-  | "custom";
-
-export type AdapterManifest = {
-  schemaVersion: "1.0";
-  key: string;
-  displayName: string;
-  version: string;
-  description: string;
-  entry: string;
-  exportName?: string;
-  auth: {
-    type: AdapterAuthType;
-    scopes?: string[];
-  };
-  supportedTriggers: string[];
-  supportedActions: string[];
-  configSchemaRef?: string;
-  enabled?: boolean;
-  defaultEnabled?: boolean;
-  platform: {
-    apiVersion: string;
-    minCoreVersion?: string;
-    maxCoreVersion?: string;
-  };
-};
-
-const manifestSchema: JSONSchemaType<AdapterManifest> = {
-  type: "object",
-  properties: {
-    schemaVersion: { type: "string", enum: ["1.0"] },
-    key: { type: "string", minLength: 1 },
-    displayName: { type: "string", minLength: 1 },
-    version: { type: "string", minLength: 1 },
-    description: { type: "string", minLength: 1 },
-    entry: { type: "string", minLength: 1 },
-    exportName: { type: "string", nullable: true },
-    auth: {
-      type: "object",
-      properties: {
-        type: {
-          type: "string",
-          enum: ["none", "oauth2", "api_key", "basic", "smtp", "token", "custom"],
-        },
-        scopes: {
-          type: "array",
-          nullable: true,
-          items: {
-            type: "string",
-          },
-        },
-      },
-      required: ["type"],
-      additionalProperties: false,
-    },
-    supportedTriggers: {
-      type: "array",
-      items: {
-        type: "string",
-        minLength: 1,
-      },
-    },
-    supportedActions: {
-      type: "array",
-      items: {
-        type: "string",
-        minLength: 1,
-      },
-    },
-    configSchemaRef: {
-      type: "string",
-      nullable: true,
-    },
-    enabled: {
-      type: "boolean",
-      nullable: true,
-    },
-    defaultEnabled: {
-      type: "boolean",
-      nullable: true,
-    },
-    platform: {
-      type: "object",
-      properties: {
-        apiVersion: {
-          type: "string",
-          minLength: 1,
-        },
-        minCoreVersion: {
-          type: "string",
-          nullable: true,
-        },
-        maxCoreVersion: {
-          type: "string",
-          nullable: true,
-        },
-      },
-      required: ["apiVersion"],
-      additionalProperties: false,
-    },
-  },
-  required: [
-    "schemaVersion",
-    "key",
-    "displayName",
-    "version",
-    "description",
-    "entry",
-    "auth",
-    "supportedTriggers",
-    "supportedActions",
-    "platform",
-  ],
-  additionalProperties: false,
-};
-
-const ajv = new Ajv({
-  allErrors: true,
-});
-const validateManifest = ajv.compile(manifestSchema);
+export type { AdapterManifest, AdapterAuthType };
 
 export function validateAdapterManifest(input: unknown): {
   valid: boolean;
   errors: string[];
   value?: AdapterManifest;
 } {
-  const valid = validateManifest(input);
-  if (valid) {
-    return {
-      valid: true,
-      errors: [],
-      value: input as AdapterManifest,
-    };
-  }
-  return {
-    valid: false,
-    errors:
-      validateManifest.errors?.map(
-        (error) => `${error.instancePath || "/"} ${error.message || "invalid"}`,
-      ) || ["Invalid manifest."],
-  };
+  return validateAdapterManifestWithSdk(input);
 }
 
 type ParsedSemver = [number, number, number];
