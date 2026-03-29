@@ -1,11 +1,18 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
+  cancelRun,
+  cancelWait,
+  getAuthSession,
   getRun,
   listLogs,
   listRetryJobs,
   listRuns,
   listScheduledWaits,
+  releaseWaitNow,
+  replayRun,
+  rescheduleWait,
+  resumeRunIfWaiting,
   type EventLogRecord,
   type RetryQueueRecord,
   type RunRecord,
@@ -23,6 +30,13 @@ import {
 } from "./runs-helpers";
 
 export function RunsPage() {
+  const session = getAuthSession();
+  const isOperator =
+    session?.scope.orgRole === "owner" ||
+    session?.scope.orgRole === "admin" ||
+    session?.scope.workspaceRole === "owner" ||
+    session?.scope.workspaceRole === "admin";
+
   const [runs, setRuns] = useState<RunRecord[]>([]);
   const [retries, setRetries] = useState<RetryQueueRecord[]>([]);
   const [scheduledWaits, setScheduledWaits] = useState<ScheduledWaitRecord[]>([]);
@@ -32,6 +46,8 @@ export function RunsPage() {
   const [eventTypeFilter, setEventTypeFilter] = useState<string>("");
   const [loadingRuns, setLoadingRuns] = useState(false);
   const [loadingDetail, setLoadingDetail] = useState(false);
+  const [actionLoading, setActionLoading] = useState(false);
+  const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const selectedRunRetries = useMemo(() => {
@@ -82,6 +98,22 @@ export function RunsPage() {
 
   const retryEvents = useMemo(
     () => logHighlights.filter((entry) => entry.eventType.startsWith("workflow.retry.")),
+    [logHighlights],
+  );
+
+  const blockedExecutionEvents = useMemo(
+    () =>
+      logHighlights.filter((entry) =>
+        [
+          "workflow.execution.deferred",
+          "workflow.execution.dropped",
+          "workflow.queue.rejected",
+          "workflow.step.throttled",
+          "workflow.delay.rejected",
+          "workflow.retry.cancelled",
+          "workflow.cancelled",
+        ].includes(entry.eventType),
+      ),
     [logHighlights],
   );
 
@@ -139,6 +171,154 @@ export function RunsPage() {
     }
   }
 
+  async function refreshCurrentRunState() {
+    await loadRuns(selectedRunId);
+    if (selectedRunId) {
+      await loadRunDetail(selectedRunId, eventTypeFilter);
+    }
+  }
+
+  async function onCancelRun() {
+    if (!selectedRun) {
+      return;
+    }
+    if (!window.confirm(`Cancel run ${selectedRun.id.slice(0, 8)}?`)) {
+      return;
+    }
+    const reason = window.prompt("Optional cancellation note", "") || undefined;
+    setActionLoading(true);
+    setActionMessage(null);
+    setError(null);
+    try {
+      const response = await cancelRun(selectedRun.id, { reason });
+      setActionMessage(`Run action applied: ${response.outcome}.`);
+      await refreshCurrentRunState();
+    } catch (actionError) {
+      setError((actionError as Error).message || "Failed to cancel run.");
+    } finally {
+      setActionLoading(false);
+    }
+  }
+
+  async function onReplayRun() {
+    if (!selectedRun) {
+      return;
+    }
+    if (
+      !window.confirm(
+        `Replay dead-lettered run ${selectedRun.id.slice(0, 8)} as a new run?`,
+      )
+    ) {
+      return;
+    }
+    const reason = window.prompt("Optional replay note", "") || undefined;
+    setActionLoading(true);
+    setActionMessage(null);
+    setError(null);
+    try {
+      const response = await replayRun(selectedRun.id, { reason });
+      setActionMessage(
+        `Replay queued for source run ${response.sourceRunId.slice(0, 8)}.`,
+      );
+      await refreshCurrentRunState();
+    } catch (actionError) {
+      setError((actionError as Error).message || "Failed to replay run.");
+    } finally {
+      setActionLoading(false);
+    }
+  }
+
+  async function onResumeWaitingRun() {
+    if (!selectedRun) {
+      return;
+    }
+    if (!window.confirm("Release waiting run now?")) {
+      return;
+    }
+    const reason = window.prompt("Optional release note", "") || undefined;
+    setActionLoading(true);
+    setActionMessage(null);
+    setError(null);
+    try {
+      const response = await resumeRunIfWaiting(selectedRun.id, { reason });
+      setActionMessage(`Released waits: ${response.releasedWaits}.`);
+      await refreshCurrentRunState();
+    } catch (actionError) {
+      setError((actionError as Error).message || "Failed to release waiting run.");
+    } finally {
+      setActionLoading(false);
+    }
+  }
+
+  async function onRescheduleWait(wait: ScheduledWaitRecord) {
+    const defaultValue = wait.scheduled_for;
+    const scheduledFor =
+      window.prompt("Enter new ISO-8601 scheduled time", defaultValue) || "";
+    if (!scheduledFor) {
+      return;
+    }
+    const reason = window.prompt("Optional reschedule note", "") || undefined;
+    setActionLoading(true);
+    setActionMessage(null);
+    setError(null);
+    try {
+      await rescheduleWait(wait.id, {
+        scheduledFor,
+        reason,
+      });
+      setActionMessage(`Wait ${wait.id.slice(0, 8)} rescheduled.`);
+      await refreshCurrentRunState();
+    } catch (actionError) {
+      setError((actionError as Error).message || "Failed to reschedule wait.");
+    } finally {
+      setActionLoading(false);
+    }
+  }
+
+  async function onReleaseWaitNow(wait: ScheduledWaitRecord) {
+    if (!window.confirm(`Release wait ${wait.id.slice(0, 8)} now?`)) {
+      return;
+    }
+    const reason = window.prompt("Optional release note", "") || undefined;
+    setActionLoading(true);
+    setActionMessage(null);
+    setError(null);
+    try {
+      await releaseWaitNow(wait.id, { reason });
+      setActionMessage(`Wait ${wait.id.slice(0, 8)} released.`);
+      await refreshCurrentRunState();
+    } catch (actionError) {
+      setError((actionError as Error).message || "Failed to release wait.");
+    } finally {
+      setActionLoading(false);
+    }
+  }
+
+  async function onCancelWait(wait: ScheduledWaitRecord) {
+    if (
+      !window.confirm(
+        `Cancel wait ${wait.id.slice(0, 8)} and cancel the linked run?`,
+      )
+    ) {
+      return;
+    }
+    const reason = window.prompt("Optional cancellation note", "") || undefined;
+    setActionLoading(true);
+    setActionMessage(null);
+    setError(null);
+    try {
+      const response = await cancelWait(wait.id, { reason });
+      setActionMessage(
+        `Wait ${response.waitOutcome}; linked run outcome: ${response.runOutcome}.`,
+      );
+      await refreshCurrentRunState();
+    } catch (actionError) {
+      setError((actionError as Error).message || "Failed to cancel wait.");
+    } finally {
+      setActionLoading(false);
+    }
+  }
+
   useEffect(() => {
     void loadRuns(selectedRunId);
   }, []);
@@ -178,6 +358,7 @@ export function RunsPage() {
       </div>
 
       {error ? <p style={{ color: "#b42318" }}>{error}</p> : null}
+      {actionMessage ? <p style={{ color: "#116329" }}>{actionMessage}</p> : null}
 
       <div style={{ display: "grid", gridTemplateColumns: "minmax(300px, 1fr) 2fr", gap: 16 }}>
         <section style={{ border: "1px solid #d0d0d0", borderRadius: 10, padding: 12 }}>
@@ -277,7 +458,61 @@ export function RunsPage() {
                     <strong>Dead-lettered At:</strong> {selectedRun.dead_lettered_at}
                   </div>
                 ) : null}
+                {selectedRun.replay_of_run_id ? (
+                  <div>
+                    <strong>Replay Source Run:</strong>{" "}
+                    <span style={{ fontFamily: "monospace" }}>
+                      {selectedRun.replay_of_run_id}
+                    </span>
+                  </div>
+                ) : null}
+                {selectedRun.cancellation_requested_at ? (
+                  <div style={{ color: "#6b7280" }}>
+                    <strong>Cancellation Requested At:</strong>{" "}
+                    {selectedRun.cancellation_requested_at}
+                  </div>
+                ) : null}
+                {selectedRun.cancelled_at ? (
+                  <div style={{ color: "#6b7280" }}>
+                    <strong>Cancelled At:</strong> {selectedRun.cancelled_at}
+                  </div>
+                ) : null}
               </div>
+
+              {isOperator ? (
+                <div style={{ border: "1px solid #ececec", borderRadius: 8, padding: 10 }}>
+                  <strong>Operator Controls</strong>
+                  <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+                    <button
+                      type="button"
+                      onClick={() => void onCancelRun()}
+                      disabled={actionLoading}
+                    >
+                      Cancel Run
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void onReplayRun()}
+                      disabled={
+                        actionLoading || selectedRun.status !== "dead_lettered"
+                      }
+                    >
+                      Replay Dead-letter
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void onResumeWaitingRun()}
+                      disabled={actionLoading || selectedRun.status !== "waiting"}
+                    >
+                      Resume If Waiting
+                    </button>
+                  </div>
+                  <p style={{ marginBottom: 0, fontSize: 12, color: "#555" }}>
+                    Running cancellations are best-effort and applied at safe execution
+                    boundaries.
+                  </p>
+                </div>
+              ) : null}
 
               <div style={{ border: "1px solid #ececec", borderRadius: 8, padding: 10 }}>
                 <strong>Retry Queue State</strong>
@@ -303,11 +538,39 @@ export function RunsPage() {
                 <ul style={{ marginTop: 8 }}>
                   {selectedRunScheduledWaits.map((wait) => (
                     <li key={wait.id}>
-                      {wait.step_id} ({wait.step_path}) - {wait.status} - scheduled{" "}
-                      {wait.scheduled_for}
-                      {wait.claimed_at ? ` - claimed ${wait.claimed_at}` : ""}
-                      {wait.completed_at ? ` - completed ${wait.completed_at}` : ""}
-                      {wait.last_error ? ` - ${wait.last_error}` : ""}
+                      <div>
+                        {wait.step_id} ({wait.step_path}) - {wait.status} - scheduled{" "}
+                        {wait.scheduled_for}
+                        {wait.claimed_at ? ` - claimed ${wait.claimed_at}` : ""}
+                        {wait.completed_at ? ` - completed ${wait.completed_at}` : ""}
+                        {wait.last_error ? ` - ${wait.last_error}` : ""}
+                      </div>
+                      {isOperator &&
+                      (wait.status === "pending" || wait.status === "processing") ? (
+                        <div style={{ display: "flex", gap: 8, marginTop: 6, flexWrap: "wrap" }}>
+                          <button
+                            type="button"
+                            onClick={() => void onRescheduleWait(wait)}
+                            disabled={actionLoading}
+                          >
+                            Reschedule
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void onReleaseWaitNow(wait)}
+                            disabled={actionLoading}
+                          >
+                            Release Now
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void onCancelWait(wait)}
+                            disabled={actionLoading}
+                          >
+                            Cancel Wait
+                          </button>
+                        </div>
+                      ) : null}
                     </li>
                   ))}
                 </ul>
@@ -402,6 +665,26 @@ export function RunsPage() {
               </div>
 
               <div style={{ border: "1px solid #ececec", borderRadius: 8, padding: 10 }}>
+                <strong>Deferred and Throttled Visibility</strong>
+                {blockedExecutionEvents.length === 0 ? (
+                  <p style={{ marginBottom: 0 }}>
+                    No quota, fairness, or throttling blockers logged.
+                  </p>
+                ) : null}
+                <ul style={{ marginTop: 8 }}>
+                  {blockedExecutionEvents.map((entry) => (
+                    <li key={entry.id}>
+                      {entry.eventType}
+                      {entry.stepId ? ` (${entry.stepId})` : ""}
+                      {entry.reason ? ` - reason: ${entry.reason}` : ""}
+                      {entry.outcome ? ` - outcome: ${entry.outcome}` : ""}
+                      {entry.message ? ` - ${entry.message}` : ""}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+
+              <div style={{ border: "1px solid #ececec", borderRadius: 8, padding: 10 }}>
                 <strong>Event Logs</strong>
                 {logHighlights.length === 0 ? <p style={{ marginBottom: 0 }}>No logs for this run.</p> : null}
                 <div style={{ overflowX: "auto", marginTop: 8 }}>
@@ -421,7 +704,13 @@ export function RunsPage() {
                           <td>{entry.createdAt}</td>
                           <td>{entry.eventType}</td>
                           <td>{entry.stepId || "-"}</td>
-                          <td>{entry.message || entry.reason || entry.classification || "-"}</td>
+                          <td>
+                            {entry.message ||
+                              entry.reason ||
+                              entry.outcome ||
+                              entry.classification ||
+                              "-"}
+                          </td>
                           <td style={{ fontFamily: "monospace" }}>{compactPayload(entry.payload)}</td>
                         </tr>
                       ))}

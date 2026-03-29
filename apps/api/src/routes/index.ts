@@ -19,8 +19,11 @@ import {
   loginSchema,
   oauthCallbackSchema,
   oauthStartSchema,
+  operatorNoteSchema,
+  runReplaySchema,
   upsertCredentialSchema,
   validateWorkflowSchema,
+  waitRescheduleSchema,
   webhookSchema,
 } from "../schemas";
 
@@ -583,6 +586,564 @@ export function createApiRouter(runtime: CoreRuntime): Router {
       next(error);
     }
   });
+
+  router.post(
+    "/runs/:runId/cancel",
+    requireRole(["owner", "admin"]),
+    async (req, res, next) => {
+      try {
+        const runId = resolveRouteParam(req.params.runId);
+        const body = operatorNoteSchema.parse(req.body || {});
+        const scope = req.auth!.scope;
+        const user = req.auth!.user;
+
+        const cancellation = await runtime.repositories.runRepository.cancelRunScoped({
+          runId,
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+          actorUserId: user.id,
+          reason: body.reason,
+        });
+
+        if (cancellation.outcome === "not_found" || !cancellation.run) {
+          res.status(404).json({ error: "Not found." });
+          return;
+        }
+
+        await runtime.repositories.runRepository.appendEventLog({
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+          workflowId: cancellation.run.workflow_id,
+          workflowRunId: cancellation.run.id,
+          eventType:
+            cancellation.outcome === "cancelled"
+              ? "workflow.run.cancelled_by_operator"
+              : cancellation.outcome === "cancellation_requested"
+                ? "workflow.run.cancellation_requested"
+                : "workflow.run.cancel.noop",
+          payload: {
+            actorUserId: user.id,
+            reason: body.reason || null,
+            previousStatus: cancellation.previousStatus || cancellation.run.status,
+            newStatus: cancellation.run.status,
+            outcome: cancellation.outcome,
+            cancelledRetryJobs: cancellation.cancelledRetryJobs,
+            cancelledWaits: cancellation.cancelledWaits,
+          },
+        });
+
+        await runtime.repositories.runRepository.appendAuditLog({
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+          actorUserId: user.id,
+          action: "run.cancel",
+          entityType: "workflow_run",
+          entityId: cancellation.run.id,
+          metadata: {
+            reason: body.reason || null,
+            previousStatus: cancellation.previousStatus || cancellation.run.status,
+            newStatus: cancellation.run.status,
+            outcome: cancellation.outcome,
+            cancelledRetryJobs: cancellation.cancelledRetryJobs,
+            cancelledWaits: cancellation.cancelledWaits,
+          },
+        });
+
+        res.status(cancellation.outcome === "cancellation_requested" ? 202 : 200).json({
+          run: cancellation.run,
+          outcome: cancellation.outcome,
+          cancelledRetryJobs: cancellation.cancelledRetryJobs,
+          cancelledWaits: cancellation.cancelledWaits,
+        });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.post(
+    "/runs/:runId/replay",
+    requireRole(["owner", "admin"]),
+    async (req, res, next) => {
+      try {
+        const runId = resolveRouteParam(req.params.runId);
+        const body = runReplaySchema.parse(req.body || {});
+        const scope = req.auth!.scope;
+        const user = req.auth!.user;
+
+        const sourceRun = await runtime.repositories.runRepository.findRunByIdScoped({
+          runId,
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+        });
+        if (!sourceRun) {
+          res.status(404).json({ error: "Not found." });
+          return;
+        }
+        if (sourceRun.status !== "dead_lettered") {
+          res.status(409).json({
+            error: "Only dead-lettered runs can be replayed.",
+          });
+          return;
+        }
+
+        const existingReplay =
+          await runtime.repositories.runRepository.findLatestReplayRunBySource({
+            sourceRunId: sourceRun.id,
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+          });
+        if (existingReplay) {
+          res.status(409).json({
+            error: "Replay already in progress for this run.",
+            replayRunId: existingReplay.id,
+          });
+          return;
+        }
+
+        const workflow = await runtime.repositories.workflowRepository.findByIdScoped({
+          workflowId: sourceRun.workflow_id,
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+        });
+        if (!workflow || workflow.status !== "active") {
+          res.status(409).json({
+            error: "Replay cannot be started because the workflow is not active.",
+          });
+          return;
+        }
+
+        const correlationId =
+          req.header("x-correlation-id") ||
+          req.header("x-request-id") ||
+          undefined;
+        await runtime.workflowEngine.queueIncomingEvent({
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+          adapterKey: workflow.definition_json.trigger.adapter,
+          triggerKey: workflow.definition_json.trigger.trigger,
+          payload: sourceRun.trigger_payload_json,
+          receivedAt: new Date().toISOString(),
+          correlationId,
+          targetWorkflowId: workflow.id,
+          replayOfRunId: sourceRun.id,
+          replayReason: body.reason,
+          operatorUserId: user.id,
+        });
+
+        await runtime.repositories.runRepository.appendEventLog({
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+          workflowId: workflow.id,
+          workflowRunId: sourceRun.id,
+          eventType: "workflow.replay.requested",
+          payload: {
+            actorUserId: user.id,
+            reason: body.reason || null,
+            correlationId: correlationId || null,
+          },
+        });
+        await runtime.repositories.runRepository.appendAuditLog({
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+          actorUserId: user.id,
+          action: "run.replay",
+          entityType: "workflow_run",
+          entityId: sourceRun.id,
+          metadata: {
+            reason: body.reason || null,
+            previousStatus: sourceRun.status,
+            newStatus: "replay_queued",
+            workflowId: workflow.id,
+            correlationId: correlationId || null,
+          },
+        });
+
+        res.status(202).json({
+          status: "queued",
+          sourceRunId: sourceRun.id,
+          workflowId: workflow.id,
+          correlationId: correlationId || null,
+        });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.post(
+    "/runs/:runId/resume-if-waiting",
+    requireRole(["owner", "admin"]),
+    async (req, res, next) => {
+      try {
+        const runId = resolveRouteParam(req.params.runId);
+        const body = operatorNoteSchema.parse(req.body || {});
+        const scope = req.auth!.scope;
+        const user = req.auth!.user;
+
+        const run = await runtime.repositories.runRepository.findRunByIdScoped({
+          runId,
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+        });
+        if (!run) {
+          res.status(404).json({ error: "Not found." });
+          return;
+        }
+        if (run.status !== "waiting") {
+          res.status(409).json({
+            error: "Run is not waiting.",
+          });
+          return;
+        }
+
+        const waits = await runtime.repositories.runRepository.listScheduledWaits({
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+          runId,
+        });
+        const activeWaits = waits.filter(
+          (wait) => wait.status === "pending" || wait.status === "processing",
+        );
+        if (activeWaits.length === 0) {
+          res.status(409).json({
+            error: "No active waits found for this run.",
+          });
+          return;
+        }
+
+        const nowIso = new Date().toISOString();
+        let releasedCount = 0;
+        for (const wait of activeWaits) {
+          const released =
+            await runtime.repositories.runRepository.rescheduleScheduledWaitScoped({
+              waitId: wait.id,
+              tenantId: scope.tenantId,
+              organizationId: scope.organizationId,
+              workspaceId: scope.workspaceId,
+              scheduledFor: nowIso,
+              actorUserId: user.id,
+              operatorRelease: true,
+              note: body.reason,
+            });
+          if (!released) {
+            continue;
+          }
+          releasedCount += 1;
+          await runtime.repositories.runRepository.appendEventLog({
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+            workflowId: released.workflow_id,
+            workflowRunId: released.workflow_run_id,
+            eventType: "workflow.delay.released_by_operator",
+            payload: {
+              scheduledWaitId: released.id,
+              actorUserId: user.id,
+              reason: body.reason || null,
+              previousStatus: wait.status,
+              newStatus: released.status,
+              previousScheduledFor: wait.scheduled_for,
+              scheduledFor: released.scheduled_for,
+            },
+          });
+        }
+
+        await runtime.repositories.runRepository.appendAuditLog({
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+          actorUserId: user.id,
+          action: "run.resume_if_waiting",
+          entityType: "workflow_run",
+          entityId: run.id,
+          metadata: {
+            reason: body.reason || null,
+            releasedWaits: releasedCount,
+            previousStatus: run.status,
+            newStatus: run.status,
+          },
+        });
+
+        res.status(200).json({
+          runId: run.id,
+          releasedWaits: releasedCount,
+          status: releasedCount > 0 ? "released" : "no_op",
+        });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.post(
+    "/waits/:waitId/reschedule",
+    requireRole(["owner", "admin"]),
+    async (req, res, next) => {
+      try {
+        const waitId = resolveRouteParam(req.params.waitId);
+        const body = waitRescheduleSchema.parse(req.body || {});
+        const scope = req.auth!.scope;
+        const user = req.auth!.user;
+
+        const existing = await runtime.repositories.runRepository.findScheduledWaitByIdScoped({
+          waitId,
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+        });
+        if (!existing) {
+          res.status(404).json({ error: "Not found." });
+          return;
+        }
+        if (!(existing.status === "pending" || existing.status === "processing")) {
+          res.status(409).json({ error: "Wait cannot be rescheduled in its current state." });
+          return;
+        }
+
+        const rescheduled =
+          await runtime.repositories.runRepository.rescheduleScheduledWaitScoped({
+            waitId,
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+            scheduledFor: body.scheduledFor,
+            actorUserId: user.id,
+            operatorRelease: false,
+            note: body.reason,
+          });
+        if (!rescheduled) {
+          res.status(409).json({ error: "Wait could not be rescheduled." });
+          return;
+        }
+
+        await runtime.repositories.runRepository.appendEventLog({
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+          workflowId: rescheduled.workflow_id,
+          workflowRunId: rescheduled.workflow_run_id,
+          eventType: "workflow.delay.rescheduled",
+          payload: {
+            scheduledWaitId: rescheduled.id,
+            actorUserId: user.id,
+            reason: body.reason || null,
+            previousStatus: existing.status,
+            newStatus: rescheduled.status,
+            previousScheduledFor: existing.scheduled_for,
+            scheduledFor: rescheduled.scheduled_for,
+          },
+        });
+        await runtime.repositories.runRepository.appendAuditLog({
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+          actorUserId: user.id,
+          action: "wait.reschedule",
+          entityType: "scheduled_wait",
+          entityId: rescheduled.id,
+          metadata: {
+            reason: body.reason || null,
+            previousStatus: existing.status,
+            newStatus: rescheduled.status,
+            previousScheduledFor: existing.scheduled_for,
+            scheduledFor: rescheduled.scheduled_for,
+          },
+        });
+
+        res.status(200).json({ wait: rescheduled });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.post(
+    "/waits/:waitId/release-now",
+    requireRole(["owner", "admin"]),
+    async (req, res, next) => {
+      try {
+        const waitId = resolveRouteParam(req.params.waitId);
+        const body = operatorNoteSchema.parse(req.body || {});
+        const scope = req.auth!.scope;
+        const user = req.auth!.user;
+
+        const existing = await runtime.repositories.runRepository.findScheduledWaitByIdScoped({
+          waitId,
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+        });
+        if (!existing) {
+          res.status(404).json({ error: "Not found." });
+          return;
+        }
+        if (!(existing.status === "pending" || existing.status === "processing")) {
+          res.status(409).json({ error: "Wait cannot be released in its current state." });
+          return;
+        }
+
+        const released =
+          await runtime.repositories.runRepository.rescheduleScheduledWaitScoped({
+            waitId,
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+            scheduledFor: new Date().toISOString(),
+            actorUserId: user.id,
+            operatorRelease: true,
+            note: body.reason,
+          });
+        if (!released) {
+          res.status(409).json({ error: "Wait could not be released." });
+          return;
+        }
+
+        await runtime.repositories.runRepository.appendEventLog({
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+          workflowId: released.workflow_id,
+          workflowRunId: released.workflow_run_id,
+          eventType: "workflow.delay.released_by_operator",
+          payload: {
+            scheduledWaitId: released.id,
+            actorUserId: user.id,
+            reason: body.reason || null,
+            previousStatus: existing.status,
+            newStatus: released.status,
+            previousScheduledFor: existing.scheduled_for,
+            scheduledFor: released.scheduled_for,
+          },
+        });
+        await runtime.repositories.runRepository.appendAuditLog({
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+          actorUserId: user.id,
+          action: "wait.release_now",
+          entityType: "scheduled_wait",
+          entityId: released.id,
+          metadata: {
+            reason: body.reason || null,
+            previousStatus: existing.status,
+            newStatus: released.status,
+            previousScheduledFor: existing.scheduled_for,
+            scheduledFor: released.scheduled_for,
+          },
+        });
+
+        res.status(200).json({ wait: released });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.post(
+    "/waits/:waitId/cancel",
+    requireRole(["owner", "admin"]),
+    async (req, res, next) => {
+      try {
+        const waitId = resolveRouteParam(req.params.waitId);
+        const body = operatorNoteSchema.parse(req.body || {});
+        const scope = req.auth!.scope;
+        const user = req.auth!.user;
+
+        const existing = await runtime.repositories.runRepository.findScheduledWaitByIdScoped({
+          waitId,
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+        });
+        if (!existing) {
+          res.status(404).json({ error: "Not found." });
+          return;
+        }
+
+        let cancelledWait = existing;
+        let waitOutcome: "cancelled" | "no_op" = "no_op";
+        if (existing.status === "pending" || existing.status === "processing") {
+          const updated = await runtime.repositories.runRepository.cancelScheduledWaitScoped({
+            waitId,
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+            note: body.reason,
+          });
+          if (updated) {
+            cancelledWait = updated;
+            waitOutcome = "cancelled";
+          }
+        }
+
+        const runCancellation =
+          await runtime.repositories.runRepository.cancelRunScoped({
+            runId: existing.workflow_run_id,
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+            actorUserId: user.id,
+            reason: body.reason || "Scheduled wait cancelled by operator.",
+          });
+
+        await runtime.repositories.runRepository.appendEventLog({
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+          workflowId: cancelledWait.workflow_id,
+          workflowRunId: cancelledWait.workflow_run_id,
+          eventType: "workflow.delay.cancelled_by_operator",
+          payload: {
+            scheduledWaitId: cancelledWait.id,
+            actorUserId: user.id,
+            reason: body.reason || null,
+            previousStatus: existing.status,
+            newStatus: cancelledWait.status,
+            waitOutcome,
+            runCancellationOutcome: runCancellation.outcome,
+          },
+        });
+        await runtime.repositories.runRepository.appendAuditLog({
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+          actorUserId: user.id,
+          action: "wait.cancel",
+          entityType: "scheduled_wait",
+          entityId: cancelledWait.id,
+          metadata: {
+            reason: body.reason || null,
+            previousStatus: existing.status,
+            newStatus: cancelledWait.status,
+            waitOutcome,
+            runCancellationOutcome: runCancellation.outcome,
+            runId: existing.workflow_run_id,
+          },
+        });
+
+        res.status(200).json({
+          wait: cancelledWait,
+          waitOutcome,
+          runOutcome: runCancellation.outcome,
+          run: runCancellation.run,
+        });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
 
   router.get("/retries", requireAuth, async (req, res, next) => {
     try {

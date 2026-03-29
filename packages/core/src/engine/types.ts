@@ -12,6 +12,9 @@ export type IncomingEvent = {
   targetWorkflowId?: string;
   deferredCount?: number;
   deferredReason?: string;
+  replayOfRunId?: string;
+  replayReason?: string;
+  operatorUserId?: string;
 };
 
 export type ExecutionContext = {

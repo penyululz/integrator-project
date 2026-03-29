@@ -11,7 +11,8 @@ export type WorkflowRunStatus =
   | "retrying"
   | "success"
   | "failed"
-  | "dead_lettered";
+  | "dead_lettered"
+  | "cancelled";
 
 export type WorkflowRunRecord = {
   id: string;
@@ -26,6 +27,12 @@ export type WorkflowRunRecord = {
   max_attempts: number;
   last_error: string | null;
   dead_lettered_at: string | null;
+  replay_of_run_id: string | null;
+  cancellation_requested_at: string | null;
+  cancellation_requested_by: string | null;
+  cancellation_note: string | null;
+  cancelled_at: string | null;
+  cancelled_by: string | null;
   started_at: string | null;
   finished_at: string | null;
   created_at: string;
@@ -41,7 +48,12 @@ export type EventLogRecord = {
   created_at: string;
 };
 
-export type RetryQueueStatus = "pending" | "processing" | "resolved" | "dead_lettered";
+export type RetryQueueStatus =
+  | "pending"
+  | "processing"
+  | "resolved"
+  | "dead_lettered"
+  | "cancelled";
 
 export type RetryQueueRecord = {
   id: string;
@@ -147,6 +159,12 @@ export type WorkspaceUsageAccounting = {
   updatedAt: string | null;
 };
 
+export type RunCancellationOutcome =
+  | "cancelled"
+  | "cancellation_requested"
+  | "already_cancelled"
+  | "already_terminal";
+
 function toIsoIfPossible(value: unknown): string | null {
   if (typeof value === "string") {
     return value;
@@ -247,6 +265,7 @@ export class RunRepository {
     workflowId: string;
     triggerPayload: Record<string, unknown>;
     maxAttempts?: number;
+    replayOfRunId?: string | null;
   }): Promise<WorkflowRunRecord> {
     const result = await this.pool.query<WorkflowRunRecord>(
       `INSERT INTO workflow_runs (
@@ -259,9 +278,10 @@ export class RunRepository {
         result_json,
         attempt_count,
         max_attempts,
+        replay_of_run_id,
         started_at
       )
-      VALUES ($1, $2, $3, $4, 'running', $5, '{}'::jsonb, 1, $6, NOW())
+      VALUES ($1, $2, $3, $4, 'running', $5, '{}'::jsonb, 1, $6, $7, NOW())
       RETURNING *`,
       [
         input.tenantId,
@@ -270,6 +290,7 @@ export class RunRepository {
         input.workflowId,
         JSON.stringify(input.triggerPayload),
         Math.max(1, input.maxAttempts || 1),
+        input.replayOfRunId || null,
       ],
     );
     return result.rows[0];
@@ -347,19 +368,24 @@ export class RunRepository {
 
   async markRunRunning(input: {
     runId: string;
-  }): Promise<void> {
-    await this.pool.query(
+  }): Promise<boolean> {
+    const result = await this.pool.query(
       `UPDATE workflow_runs
        SET status = 'running',
            finished_at = NULL
-       WHERE id = $1`,
+       WHERE id = $1
+         AND status <> 'cancelled'`,
       [input.runId],
     );
+    return (result.rowCount || 0) > 0;
   }
 
   async completeRun(input: {
     runId: string;
-    status: Extract<WorkflowRunStatus, "success" | "failed" | "dead_lettered">;
+    status: Extract<
+      WorkflowRunStatus,
+      "success" | "failed" | "dead_lettered" | "cancelled"
+    >;
     result: Record<string, unknown>;
     attemptCount?: number;
     maxAttempts?: number;
@@ -402,6 +428,248 @@ export class RunRepository {
       [input.tenantId, input.organizationId, input.workspaceId],
     );
     return result.rows;
+  }
+
+  async findLatestReplayRunBySource(input: {
+    sourceRunId: string;
+    tenantId: string;
+    organizationId: string;
+    workspaceId: string;
+    statuses?: WorkflowRunStatus[];
+  }): Promise<WorkflowRunRecord | null> {
+    const statuses = input.statuses || [
+      "queued",
+      "running",
+      "waiting",
+      "retrying",
+    ];
+    const placeholders = statuses.map((_, index) => `$${index + 5}`).join(", ");
+    const result = await this.pool.query<WorkflowRunRecord>(
+      `SELECT *
+       FROM workflow_runs
+       WHERE tenant_id = $1
+         AND organization_id = $2
+         AND workspace_id = $3
+         AND replay_of_run_id = $4
+         AND status IN (${placeholders})
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [
+        input.tenantId,
+        input.organizationId,
+        input.workspaceId,
+        input.sourceRunId,
+        ...statuses,
+      ],
+    );
+    return result.rows[0] || null;
+  }
+
+  async cancelRunScoped(input: {
+    runId: string;
+    tenantId: string;
+    organizationId: string;
+    workspaceId: string;
+    actorUserId: string;
+    reason?: string;
+  }): Promise<{
+    run: WorkflowRunRecord | null;
+    previousStatus?: WorkflowRunStatus;
+    outcome: RunCancellationOutcome | "not_found";
+    cancelledRetryJobs: number;
+    cancelledWaits: number;
+  }> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const existing = await client.query<WorkflowRunRecord>(
+        `SELECT *
+         FROM workflow_runs
+         WHERE id = $1
+           AND tenant_id = $2
+           AND organization_id = $3
+           AND workspace_id = $4
+         LIMIT 1
+         FOR UPDATE`,
+        [input.runId, input.tenantId, input.organizationId, input.workspaceId],
+      );
+      const run = existing.rows[0];
+      if (!run) {
+        await client.query("ROLLBACK");
+        return {
+          run: null,
+          outcome: "not_found",
+          cancelledRetryJobs: 0,
+          cancelledWaits: 0,
+        };
+      }
+
+      const previousStatus = run.status;
+      if (previousStatus === "cancelled") {
+        await client.query("COMMIT");
+        return {
+          run,
+          previousStatus,
+          outcome: "already_cancelled",
+          cancelledRetryJobs: 0,
+          cancelledWaits: 0,
+        };
+      }
+      if (
+        previousStatus === "success" ||
+        previousStatus === "failed" ||
+        previousStatus === "dead_lettered"
+      ) {
+        await client.query("COMMIT");
+        return {
+          run,
+          previousStatus,
+          outcome: "already_terminal",
+          cancelledRetryJobs: 0,
+          cancelledWaits: 0,
+        };
+      }
+
+      const reason = input.reason ? sanitizeSensitiveMessage(input.reason) : null;
+
+      if (previousStatus === "running") {
+        const requested = await client.query<WorkflowRunRecord>(
+          `UPDATE workflow_runs
+           SET cancellation_requested_at = COALESCE(cancellation_requested_at, NOW()),
+               cancellation_requested_by = COALESCE(cancellation_requested_by, $2),
+               cancellation_note = COALESCE($3, cancellation_note)
+           WHERE id = $1
+           RETURNING *`,
+          [input.runId, input.actorUserId, reason],
+        );
+        await client.query("COMMIT");
+        return {
+          run: requested.rows[0] || run,
+          previousStatus,
+          outcome: "cancellation_requested",
+          cancelledRetryJobs: 0,
+          cancelledWaits: 0,
+        };
+      }
+
+      const cancelled = await client.query<WorkflowRunRecord>(
+        `UPDATE workflow_runs
+         SET status = 'cancelled',
+             cancellation_requested_at = COALESCE(cancellation_requested_at, NOW()),
+             cancellation_requested_by = COALESCE(cancellation_requested_by, $2),
+             cancellation_note = COALESCE($3, cancellation_note),
+             cancelled_at = COALESCE(cancelled_at, NOW()),
+             cancelled_by = COALESCE(cancelled_by, $2),
+             last_error = COALESCE($3, last_error),
+             finished_at = COALESCE(finished_at, NOW())
+         WHERE id = $1
+           AND status IN ('queued', 'waiting', 'retrying')
+         RETURNING *`,
+        [input.runId, input.actorUserId, reason],
+      );
+      const cancelledRun = cancelled.rows[0] || run;
+
+      const cancelledRetry = await client.query<{ count: string }>(
+        `WITH updated AS (
+           UPDATE retry_queue
+           SET status = 'cancelled',
+               resolved_at = NOW(),
+               last_error = COALESCE($5, last_error),
+               updated_at = NOW()
+           WHERE workflow_run_id = $1
+             AND tenant_id = $2
+             AND organization_id = $3
+             AND workspace_id = $4
+             AND status IN ('pending', 'processing')
+           RETURNING 1
+         )
+         SELECT COUNT(*)::bigint AS count FROM updated`,
+        [
+          input.runId,
+          input.tenantId,
+          input.organizationId,
+          input.workspaceId,
+          reason || "Run cancelled by operator.",
+        ],
+      );
+      const cancelledWaits = await client.query<{ count: string }>(
+        `WITH updated AS (
+           UPDATE scheduled_waits
+           SET status = 'cancelled',
+               completed_at = NOW(),
+               claimed_at = NULL,
+               last_error = COALESCE($5, last_error),
+               updated_at = NOW()
+           WHERE workflow_run_id = $1
+             AND tenant_id = $2
+             AND organization_id = $3
+             AND workspace_id = $4
+             AND status IN ('pending', 'processing')
+           RETURNING 1
+         )
+         SELECT COUNT(*)::bigint AS count FROM updated`,
+        [
+          input.runId,
+          input.tenantId,
+          input.organizationId,
+          input.workspaceId,
+          reason || "Run cancelled by operator.",
+        ],
+      );
+
+      await client.query("COMMIT");
+      return {
+        run: cancelledRun,
+        previousStatus,
+        outcome: "cancelled",
+        cancelledRetryJobs: Number(cancelledRetry.rows[0]?.count || 0),
+        cancelledWaits: Number(cancelledWaits.rows[0]?.count || 0),
+      };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async finalizeRunCancellation(input: {
+    runId: string;
+    tenantId: string;
+    organizationId: string;
+    workspaceId: string;
+    actorUserId?: string;
+    reason?: string;
+  }): Promise<WorkflowRunRecord | null> {
+    const safeReason = input.reason
+      ? sanitizeSensitiveMessage(input.reason)
+      : "Run cancelled.";
+    const result = await this.pool.query<WorkflowRunRecord>(
+      `UPDATE workflow_runs
+       SET status = 'cancelled',
+           cancellation_requested_at = COALESCE(cancellation_requested_at, NOW()),
+           cancellation_requested_by = COALESCE(cancellation_requested_by, $5),
+           cancellation_note = COALESCE(cancellation_note, $6),
+           cancelled_at = COALESCE(cancelled_at, NOW()),
+           cancelled_by = COALESCE(cancelled_by, $5),
+           last_error = COALESCE($6, last_error),
+           finished_at = COALESCE(finished_at, NOW())
+       WHERE id = $1
+         AND tenant_id = $2
+         AND organization_id = $3
+         AND workspace_id = $4
+         AND status IN ('queued', 'running', 'waiting', 'retrying')
+       RETURNING *`,
+      [
+        input.runId,
+        input.tenantId,
+        input.organizationId,
+        input.workspaceId,
+        input.actorUserId || null,
+        safeReason,
+      ],
+    );
+    return result.rows[0] || null;
   }
 
   async countActiveRuns(input: {
@@ -539,7 +807,7 @@ export class RunRepository {
     }>(
       `SELECT
          COUNT(*)::bigint AS started_total,
-         SUM(CASE WHEN status IN ('success', 'failed', 'dead_lettered') THEN 1 ELSE 0 END)::bigint AS completed_total,
+         SUM(CASE WHEN status IN ('success', 'failed', 'dead_lettered', 'cancelled') THEN 1 ELSE 0 END)::bigint AS completed_total,
          MAX(COALESCE(finished_at, started_at, created_at)) AS updated_at
        FROM workflow_runs
        WHERE ${runPredicates.join("\n         AND ")}`,
@@ -812,6 +1080,23 @@ export class RunRepository {
     );
   }
 
+  async markRetryJobCancelled(input: {
+    jobId: string;
+    attempts: number;
+    lastError: string;
+  }): Promise<void> {
+    await this.pool.query(
+      `UPDATE retry_queue
+       SET attempts = $2,
+           status = 'cancelled',
+           resolved_at = NOW(),
+           last_error = $3,
+           updated_at = NOW()
+       WHERE id = $1`,
+      [input.jobId, input.attempts, sanitizeSensitiveMessage(input.lastError)],
+    );
+  }
+
   async listRetryJobs(input: {
     tenantId: string;
     organizationId: string;
@@ -827,6 +1112,42 @@ export class RunRepository {
       [input.tenantId, input.organizationId, input.workspaceId],
     );
     return result.rows;
+  }
+
+  async cancelActiveRetryJobsByRunScoped(input: {
+    runId: string;
+    tenantId: string;
+    organizationId: string;
+    workspaceId: string;
+    note?: string;
+  }): Promise<number> {
+    const note = input.note
+      ? sanitizeSensitiveMessage(input.note)
+      : "Run cancelled.";
+    const result = await this.pool.query<{ count: string }>(
+      `WITH updated AS (
+         UPDATE retry_queue
+         SET status = 'cancelled',
+             resolved_at = NOW(),
+             last_error = COALESCE($5, last_error),
+             updated_at = NOW()
+         WHERE workflow_run_id = $1
+           AND tenant_id = $2
+           AND organization_id = $3
+           AND workspace_id = $4
+           AND status IN ('pending', 'processing')
+         RETURNING 1
+       )
+       SELECT COUNT(*)::bigint AS count FROM updated`,
+      [
+        input.runId,
+        input.tenantId,
+        input.organizationId,
+        input.workspaceId,
+        note,
+      ],
+    );
+    return Number(result.rows[0]?.count || 0);
   }
 
   async upsertScheduledWait(input: {
@@ -941,6 +1262,25 @@ export class RunRepository {
     return claimed.rows[0] || null;
   }
 
+  async findScheduledWaitByIdScoped(input: {
+    waitId: string;
+    tenantId: string;
+    organizationId: string;
+    workspaceId: string;
+  }): Promise<ScheduledWaitRecord | null> {
+    const result = await this.pool.query<ScheduledWaitRecord>(
+      `SELECT *
+       FROM scheduled_waits
+       WHERE id = $1
+         AND tenant_id = $2
+         AND organization_id = $3
+         AND workspace_id = $4
+       LIMIT 1`,
+      [input.waitId, input.tenantId, input.organizationId, input.workspaceId],
+    );
+    return result.rows[0] || null;
+  }
+
   async markScheduledWaitPending(input: {
     waitId: string;
     scheduledFor: string;
@@ -955,6 +1295,57 @@ export class RunRepository {
        WHERE id = $1`,
       [input.waitId, input.scheduledFor, sanitizeSensitiveMessage(input.lastError)],
     );
+  }
+
+  async rescheduleScheduledWaitScoped(input: {
+    waitId: string;
+    tenantId: string;
+    organizationId: string;
+    workspaceId: string;
+    scheduledFor: string;
+    actorUserId?: string;
+    operatorRelease?: boolean;
+    note?: string;
+  }): Promise<ScheduledWaitRecord | null> {
+    const safeNote = input.note ? sanitizeSensitiveMessage(input.note) : null;
+    const result = await this.pool.query<ScheduledWaitRecord>(
+      `UPDATE scheduled_waits
+       SET status = 'pending',
+           scheduled_for = $5,
+           claimed_at = NULL,
+           completed_at = NULL,
+           last_error = CASE
+             WHEN $8 IS NULL THEN NULL
+             ELSE $8
+           END,
+           rescheduled_count = COALESCE(rescheduled_count, 0) + 1,
+           operator_released_at = CASE
+             WHEN $7 THEN NOW()
+             ELSE operator_released_at
+           END,
+           operator_released_by = CASE
+             WHEN $7 THEN COALESCE($6, operator_released_by)
+             ELSE operator_released_by
+           END,
+           updated_at = NOW()
+       WHERE id = $1
+         AND tenant_id = $2
+         AND organization_id = $3
+         AND workspace_id = $4
+         AND status IN ('pending', 'processing')
+       RETURNING *`,
+      [
+        input.waitId,
+        input.tenantId,
+        input.organizationId,
+        input.workspaceId,
+        input.scheduledFor,
+        input.actorUserId || null,
+        input.operatorRelease === true,
+        safeNote,
+      ],
+    );
+    return result.rows[0] || null;
   }
 
   async markScheduledWaitCompleted(input: {
@@ -979,6 +1370,22 @@ export class RunRepository {
       `UPDATE scheduled_waits
        SET status = 'failed',
            completed_at = NOW(),
+           last_error = $2,
+           updated_at = NOW()
+       WHERE id = $1`,
+      [input.waitId, sanitizeSensitiveMessage(input.lastError)],
+    );
+  }
+
+  async markScheduledWaitCancelled(input: {
+    waitId: string;
+    lastError: string;
+  }): Promise<void> {
+    await this.pool.query(
+      `UPDATE scheduled_waits
+       SET status = 'cancelled',
+           completed_at = NOW(),
+           claimed_at = NULL,
            last_error = $2,
            updated_at = NOW()
        WHERE id = $1`,
@@ -1016,6 +1423,77 @@ export class RunRepository {
       values,
     );
     return result.rows;
+  }
+
+  async cancelActiveScheduledWaitsByRunScoped(input: {
+    runId: string;
+    tenantId: string;
+    organizationId: string;
+    workspaceId: string;
+    note?: string;
+  }): Promise<number> {
+    const note = input.note
+      ? sanitizeSensitiveMessage(input.note)
+      : "Run cancelled.";
+    const result = await this.pool.query<{ count: string }>(
+      `WITH updated AS (
+         UPDATE scheduled_waits
+         SET status = 'cancelled',
+             completed_at = NOW(),
+             claimed_at = NULL,
+             last_error = COALESCE($5, last_error),
+             updated_at = NOW()
+         WHERE workflow_run_id = $1
+           AND tenant_id = $2
+           AND organization_id = $3
+           AND workspace_id = $4
+           AND status IN ('pending', 'processing')
+         RETURNING 1
+       )
+       SELECT COUNT(*)::bigint AS count FROM updated`,
+      [
+        input.runId,
+        input.tenantId,
+        input.organizationId,
+        input.workspaceId,
+        note,
+      ],
+    );
+    return Number(result.rows[0]?.count || 0);
+  }
+
+  async cancelScheduledWaitScoped(input: {
+    waitId: string;
+    tenantId: string;
+    organizationId: string;
+    workspaceId: string;
+    note?: string;
+  }): Promise<ScheduledWaitRecord | null> {
+    const note = input.note
+      ? sanitizeSensitiveMessage(input.note)
+      : "Scheduled wait cancelled by operator.";
+    const result = await this.pool.query<ScheduledWaitRecord>(
+      `UPDATE scheduled_waits
+       SET status = 'cancelled',
+           completed_at = NOW(),
+           claimed_at = NULL,
+           last_error = $5,
+           updated_at = NOW()
+       WHERE id = $1
+         AND tenant_id = $2
+         AND organization_id = $3
+         AND workspace_id = $4
+         AND status IN ('pending', 'processing')
+       RETURNING *`,
+      [
+        input.waitId,
+        input.tenantId,
+        input.organizationId,
+        input.workspaceId,
+        note,
+      ],
+    );
+    return result.rows[0] || null;
   }
 
   async getAnalyticsOverview(input: AnalyticsFilter): Promise<AnalyticsOverview> {

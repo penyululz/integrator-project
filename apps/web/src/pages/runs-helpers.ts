@@ -20,6 +20,8 @@ export type RunLogHighlight = {
   attempt?: number;
   message?: string;
   reason?: string;
+  outcome?: string;
+  actorUserId?: string;
   classification?: string;
   selectedBranch?: string;
   delayMs?: number;
@@ -36,6 +38,16 @@ export const RUN_EVENT_FILTER_OPTIONS = [
   "workflow.execution.deferred",
   "workflow.execution.dropped",
   "workflow.queue.rejected",
+  "workflow.run.cancellation_requested",
+  "workflow.run.cancelled_by_operator",
+  "workflow.cancelled",
+  "workflow.replay.requested",
+  "workflow.replay.started",
+  "workflow.replay.spawned",
+  "workflow.delay.rescheduled",
+  "workflow.delay.released_by_operator",
+  "workflow.delay.cancelled_by_operator",
+  "workflow.retry.cancelled",
   "workflow.step.throttled",
   "workflow.step.completed",
   "workflow.step.failed",
@@ -165,6 +177,8 @@ export function toRunLogHighlights(logs: EventLogRecord[]): RunLogHighlight[] {
       attempt: toNumberValue(payload.attempt),
       message: toStringValue(payload.message),
       reason: toStringValue(payload.reason),
+      outcome: toStringValue(payload.outcome),
+      actorUserId: toStringValue(payload.actorUserId),
       classification: toStringValue(payload.classification),
       selectedBranch: toStringValue(payload.selectedBranch),
       delayMs: toNumberValue(payload.delayMs),

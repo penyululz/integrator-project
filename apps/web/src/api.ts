@@ -100,6 +100,12 @@ export type RunRecord = {
   max_attempts: number;
   last_error: string | null;
   dead_lettered_at: string | null;
+  replay_of_run_id?: string | null;
+  cancellation_requested_at?: string | null;
+  cancellation_requested_by?: string | null;
+  cancellation_note?: string | null;
+  cancelled_at?: string | null;
+  cancelled_by?: string | null;
   started_at: string | null;
   finished_at: string | null;
   created_at: string;
@@ -126,6 +132,9 @@ export type ScheduledWaitRecord = {
   status: "pending" | "processing" | "completed" | "failed" | "cancelled";
   attempt_count: number;
   max_attempts: number;
+  rescheduled_count?: number;
+  operator_released_at?: string | null;
+  operator_released_by?: string | null;
   scheduled_for: string;
   claimed_at: string | null;
   completed_at: string | null;
@@ -447,6 +456,44 @@ export async function getRun(runId: string): Promise<RunRecord> {
   return response.data.run;
 }
 
+export async function cancelRun(
+  runId: string,
+  input: { reason?: string } = {},
+): Promise<{
+  run: RunRecord;
+  outcome: string;
+  cancelledRetryJobs: number;
+  cancelledWaits: number;
+}> {
+  const response = await apiClient().post(`/runs/${runId}/cancel`, input);
+  return response.data;
+}
+
+export async function replayRun(
+  runId: string,
+  input: { reason?: string } = {},
+): Promise<{
+  status: "queued";
+  sourceRunId: string;
+  workflowId: string;
+  correlationId: string | null;
+}> {
+  const response = await apiClient().post(`/runs/${runId}/replay`, input);
+  return response.data;
+}
+
+export async function resumeRunIfWaiting(
+  runId: string,
+  input: { reason?: string } = {},
+): Promise<{
+  runId: string;
+  releasedWaits: number;
+  status: string;
+}> {
+  const response = await apiClient().post(`/runs/${runId}/resume-if-waiting`, input);
+  return response.data;
+}
+
 export async function listRetryJobs(): Promise<RetryQueueRecord[]> {
   const response = await apiClient().get("/retries");
   return response.data.retries || [];
@@ -461,6 +508,35 @@ export async function listScheduledWaits(input?: {
     },
   });
   return response.data.delays || [];
+}
+
+export async function rescheduleWait(
+  waitId: string,
+  input: { scheduledFor: string; reason?: string },
+): Promise<{ wait: ScheduledWaitRecord }> {
+  const response = await apiClient().post(`/waits/${waitId}/reschedule`, input);
+  return response.data;
+}
+
+export async function releaseWaitNow(
+  waitId: string,
+  input: { reason?: string } = {},
+): Promise<{ wait: ScheduledWaitRecord }> {
+  const response = await apiClient().post(`/waits/${waitId}/release-now`, input);
+  return response.data;
+}
+
+export async function cancelWait(
+  waitId: string,
+  input: { reason?: string } = {},
+): Promise<{
+  wait: ScheduledWaitRecord;
+  waitOutcome: string;
+  runOutcome: string;
+  run: RunRecord | null;
+}> {
+  const response = await apiClient().post(`/waits/${waitId}/cancel`, input);
+  return response.data;
 }
 
 export async function listLogs(input?: {

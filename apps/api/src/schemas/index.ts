@@ -18,6 +18,7 @@ export const workflowRunStatusSchema = z.enum([
   "success",
   "failed",
   "dead_lettered",
+  "cancelled",
 ]);
 
 export const analyticsQuerySchema = z
@@ -258,4 +259,17 @@ export const validateWorkflowSchema = z.object({
 export const webhookSchema = z.object({
   trigger: z.string().min(1).optional(),
   payload: z.record(z.unknown()).default({}),
+});
+
+export const operatorNoteSchema = z.object({
+  reason: z.string().trim().min(1).max(500).optional(),
+});
+
+export const runReplaySchema = z.object({
+  reason: z.string().trim().min(1).max(500).optional(),
+});
+
+export const waitRescheduleSchema = z.object({
+  scheduledFor: isoDateTimeSchema,
+  reason: z.string().trim().min(1).max(500).optional(),
 });

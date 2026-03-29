@@ -8,6 +8,8 @@
         ? "#9a6b00"
         : status === "dead_lettered"
           ? "#8a1c1c"
+          : status === "cancelled"
+            ? "#6b7280"
           : status === "failed"
             ? "#b42318"
             : "#555";
@@ -21,6 +23,8 @@
         ? "#fff6df"
         : status === "dead_lettered"
           ? "#fdecec"
+          : status === "cancelled"
+            ? "#f3f4f6"
           : status === "failed"
             ? "#ffeaea"
             : "#f1f1f1";

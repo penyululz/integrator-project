@@ -1348,9 +1348,49 @@ export class WorkflowEngine {
       return true;
     }
 
-    await this.runRepository.markRunRunning({
+    if (run.status === "cancelled" || run.cancellation_requested_at) {
+      await this.runRepository.markScheduledWaitCancelled({
+        waitId: scheduledWait.id,
+        lastError: "Run cancelled by operator before delay resume.",
+      });
+      if (run.cancellation_requested_at && run.status !== "cancelled") {
+        await this.runRepository.finalizeRunCancellation({
+          runId: run.id,
+          tenantId: scheduledWait.tenant_id,
+          organizationId: scheduledWait.organization_id,
+          workspaceId: scheduledWait.workspace_id,
+          actorUserId: run.cancellation_requested_by || undefined,
+          reason: run.cancellation_note || "Run cancelled by operator.",
+        });
+      }
+      await this.runRepository.appendEventLog({
+        tenantId: scheduledWait.tenant_id,
+        organizationId: scheduledWait.organization_id,
+        workspaceId: scheduledWait.workspace_id,
+        workflowId: payload.workflowId,
+        workflowRunId: payload.runId,
+        eventType: "workflow.delay.cancelled",
+        payload: {
+          scheduledWaitId: scheduledWait.id,
+          stepId: payload.stepId,
+          stepPath: payload.stepPath,
+          reason: "run_cancelled",
+          message: "Run cancelled by operator before delay resume.",
+        },
+      });
+      return true;
+    }
+
+    const markedRunning = await this.runRepository.markRunRunning({
       runId: run.id,
     });
+    if (!markedRunning) {
+      await this.runRepository.markScheduledWaitCancelled({
+        waitId: scheduledWait.id,
+        lastError: "Run was cancelled before delay resume.",
+      });
+      return true;
+    }
     await this.runRepository.appendEventLog({
       tenantId: scheduledWait.tenant_id,
       organizationId: scheduledWait.organization_id,
@@ -1502,6 +1542,41 @@ export class WorkflowEngine {
       return true;
     }
 
+    if (run.status === "cancelled" || run.cancellation_requested_at) {
+      await this.runRepository.markRetryJobCancelled({
+        jobId: retryJob.id,
+        attempts: retryJob.attempts,
+        lastError: "Run cancelled by operator before retry execution.",
+      });
+      if (run.cancellation_requested_at && run.status !== "cancelled") {
+        await this.runRepository.finalizeRunCancellation({
+          runId: run.id,
+          tenantId: retryJob.tenant_id,
+          organizationId: retryJob.organization_id || "",
+          workspaceId: retryJob.workspace_id || "",
+          actorUserId: run.cancellation_requested_by || undefined,
+          reason: run.cancellation_note || "Run cancelled by operator.",
+        });
+      }
+      await this.runRepository.appendEventLog({
+        tenantId: retryJob.tenant_id,
+        organizationId: retryJob.organization_id || undefined,
+        workspaceId: retryJob.workspace_id || undefined,
+        workflowId: payload.workflowId,
+        workflowRunId: payload.runId,
+        eventType: "workflow.retry.cancelled",
+        payload: {
+          retryJobId: retryJob.id,
+          retryKey: retryJob.retry_key,
+          stepId: payload.stepId,
+          stepPath: payload.stepPath,
+          reason: "run_cancelled",
+          message: "Run cancelled by operator before retry execution.",
+        },
+      });
+      return true;
+    }
+
     await this.runRepository.appendEventLog({
       tenantId: retryJob.tenant_id,
       organizationId: retryJob.organization_id || undefined,
@@ -1588,6 +1663,87 @@ export class WorkflowEngine {
     );
   }
 
+  private async cancelRunIfRequested(
+    state: ExecutionState,
+    mutableState: MutableExecutionState,
+    details: {
+      stepId?: string;
+      stepPath?: string;
+      attempt?: number;
+      reason?: string;
+    } = {},
+  ): Promise<boolean> {
+    const latest = await this.runRepository.findRunByIdScoped({
+      runId: state.run.id,
+      tenantId: state.triggerEvent.tenantId,
+      organizationId: state.triggerEvent.organizationId,
+      workspaceId: state.triggerEvent.workspaceId,
+    });
+
+    if (!latest) {
+      return false;
+    }
+    if (latest.status !== "cancelled" && !latest.cancellation_requested_at) {
+      return false;
+    }
+
+    const cancellationReason =
+      latest.cancellation_note ||
+      details.reason ||
+      "Run cancelled by operator.";
+    if (latest.status !== "cancelled") {
+      await this.runRepository.finalizeRunCancellation({
+        runId: latest.id,
+        tenantId: latest.tenant_id,
+        organizationId: latest.organization_id,
+        workspaceId: latest.workspace_id,
+        actorUserId: latest.cancellation_requested_by || undefined,
+        reason: cancellationReason,
+      });
+    }
+
+    await this.runRepository.cancelActiveRetryJobsByRunScoped({
+      runId: latest.id,
+      tenantId: latest.tenant_id,
+      organizationId: latest.organization_id,
+      workspaceId: latest.workspace_id,
+      note: cancellationReason,
+    });
+    await this.runRepository.cancelActiveScheduledWaitsByRunScoped({
+      runId: latest.id,
+      tenantId: latest.tenant_id,
+      organizationId: latest.organization_id,
+      workspaceId: latest.workspace_id,
+      note: cancellationReason,
+    });
+
+    await this.appendRunLog(state, "workflow.cancelled", {
+      stepId: details.stepId,
+      stepPath: details.stepPath,
+      attempt: details.attempt || state.currentAttempt,
+      reason: "operator_cancelled",
+      message: cancellationReason,
+    });
+    await this.runRepository.completeRun({
+      runId: state.run.id,
+      status: "cancelled",
+      result: {
+        cancelled: true,
+        message: cancellationReason,
+        cancelledAt: new Date().toISOString(),
+        steps: mutableState.stepResults,
+      },
+      attemptCount: Math.max(
+        state.currentAttempt,
+        ...mutableState.stepResults.map((item) => item.attempt),
+      ),
+      maxAttempts: state.run.max_attempts || 1,
+      lastError: cancellationReason,
+      deadLetteredAt: null,
+    });
+    return true;
+  }
+
   private observeRunCompletion(
     state: ExecutionState,
     status: "success" | "failed" | "dead_lettered",
@@ -1648,7 +1804,37 @@ export class WorkflowEngine {
       workflowId: workflowRecord.id,
       triggerPayload: event.payload,
       maxAttempts: workflowMaxAttempts,
+      replayOfRunId: event.replayOfRunId || null,
     });
+
+    if (event.replayOfRunId) {
+      await this.runRepository.appendEventLog({
+        tenantId: event.tenantId,
+        organizationId: event.organizationId,
+        workspaceId: event.workspaceId,
+        workflowId: workflowRecord.id,
+        workflowRunId: run.id,
+        eventType: "workflow.replay.started",
+        payload: {
+          sourceRunId: event.replayOfRunId,
+          reason: event.replayReason || null,
+          actorUserId: event.operatorUserId || null,
+        },
+      });
+      await this.runRepository.appendEventLog({
+        tenantId: event.tenantId,
+        organizationId: event.organizationId,
+        workspaceId: event.workspaceId,
+        workflowId: workflowRecord.id,
+        workflowRunId: event.replayOfRunId,
+        eventType: "workflow.replay.spawned",
+        payload: {
+          replayRunId: run.id,
+          reason: event.replayReason || null,
+          actorUserId: event.operatorUserId || null,
+        },
+      });
+    }
 
     await this.executeWorkflowState({
       run,
@@ -3061,6 +3247,18 @@ export class WorkflowEngine {
       const step = steps[index];
       const stepPath = pathPrefix ? `${pathPrefix}.${index}` : `${index}`;
 
+      if (
+        await this.cancelRunIfRequested(state, mutableState, {
+          stepId: step.id,
+          stepPath,
+          attempt: this.getAttemptForStep(stepPath, mutableState.resume),
+        })
+      ) {
+        return {
+          halted: true,
+        };
+      }
+
       const directive = this.resolveResumeDirective(step, stepPath, mutableState.resume);
       if (directive.action === "skip") {
         continue;
@@ -3117,12 +3315,20 @@ export class WorkflowEngine {
       },
     };
 
+    if (await this.cancelRunIfRequested(state, mutableState)) {
+      return;
+    }
+
     const execution = await this.executeStepSequence(
       state,
       mutableState,
       workflow.steps,
     );
     if (execution.halted) {
+      return;
+    }
+
+    if (await this.cancelRunIfRequested(state, mutableState)) {
       return;
     }
 
