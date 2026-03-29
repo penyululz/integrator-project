@@ -139,6 +139,24 @@ export type AdapterAnalyticsRow = {
   avgActionDurationMs: number;
 };
 
+export type WorkspaceUsageAccounting = {
+  workflowRunsStarted: number;
+  workflowRunsCompleted: number;
+  workflowRetries: number;
+  adapterActionsExecuted: number;
+  updatedAt: string | null;
+};
+
+function toIsoIfPossible(value: unknown): string | null {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (value instanceof Date && Number.isFinite(value.getTime())) {
+    return value.toISOString();
+  }
+  return null;
+}
+
 export class RunRepository {
   constructor(private readonly pool: Pool) {}
 
@@ -386,6 +404,174 @@ export class RunRepository {
     return result.rows;
   }
 
+  async countActiveRuns(input: {
+    tenantId: string;
+    organizationId: string;
+    workspaceId: string;
+  }): Promise<number> {
+    const result = await this.pool.query<{ total: string }>(
+      `SELECT COUNT(*)::bigint AS total
+       FROM workflow_runs
+       WHERE tenant_id = $1
+         AND organization_id = $2
+         AND workspace_id = $3
+         AND status IN ('running', 'retrying', 'waiting')`,
+      [input.tenantId, input.organizationId, input.workspaceId],
+    );
+    return Number(result.rows[0]?.total || 0);
+  }
+
+  async countActiveRunsForWorkflow(input: {
+    tenantId: string;
+    organizationId: string;
+    workspaceId: string;
+    workflowId: string;
+  }): Promise<number> {
+    const result = await this.pool.query<{ total: string }>(
+      `SELECT COUNT(*)::bigint AS total
+       FROM workflow_runs
+       WHERE tenant_id = $1
+         AND organization_id = $2
+         AND workspace_id = $3
+         AND workflow_id = $4
+         AND status IN ('running', 'retrying', 'waiting')`,
+      [input.tenantId, input.organizationId, input.workspaceId, input.workflowId],
+    );
+    return Number(result.rows[0]?.total || 0);
+  }
+
+  async countPendingRetryJobs(input: {
+    tenantId: string;
+    organizationId: string;
+    workspaceId: string;
+  }): Promise<number> {
+    const result = await this.pool.query<{ total: string }>(
+      `SELECT COUNT(*)::bigint AS total
+       FROM retry_queue
+       WHERE tenant_id = $1
+         AND organization_id = $2
+         AND workspace_id = $3
+         AND status = 'pending'`,
+      [input.tenantId, input.organizationId, input.workspaceId],
+    );
+    return Number(result.rows[0]?.total || 0);
+  }
+
+  async countPendingScheduledWaits(input: {
+    tenantId: string;
+    organizationId: string;
+    workspaceId: string;
+  }): Promise<number> {
+    const result = await this.pool.query<{ total: string }>(
+      `SELECT COUNT(*)::bigint AS total
+       FROM scheduled_waits
+       WHERE tenant_id = $1
+         AND organization_id = $2
+         AND workspace_id = $3
+         AND status IN ('pending', 'processing')`,
+      [input.tenantId, input.organizationId, input.workspaceId],
+    );
+    return Number(result.rows[0]?.total || 0);
+  }
+
+  async getAdapterActionAttemptsInWindow(input: {
+    tenantId: string;
+    organizationId: string;
+    workspaceId: string;
+    adapterKey: string;
+    windowStartIso: string;
+  }): Promise<number> {
+    const result = await this.pool.query<{ total: string }>(
+      `SELECT COUNT(*)::bigint AS total
+       FROM event_logs
+       WHERE tenant_id = $1
+         AND organization_id = $2
+         AND workspace_id = $3
+         AND created_at >= $4
+         AND event_type IN ('workflow.step.completed', 'workflow.step.failed')
+         AND payload_json->>'adapter' = $5`,
+      [
+        input.tenantId,
+        input.organizationId,
+        input.workspaceId,
+        input.windowStartIso,
+        input.adapterKey,
+      ],
+    );
+    return Number(result.rows[0]?.total || 0);
+  }
+
+  async getUsageAccounting(input: {
+    tenantId: string;
+    organizationId: string;
+    workspaceId: string;
+    from?: string;
+    to?: string;
+  }): Promise<WorkspaceUsageAccounting> {
+    const values: unknown[] = [input.tenantId, input.organizationId, input.workspaceId];
+    const runPredicates = [
+      "tenant_id = $1",
+      "organization_id = $2",
+      "workspace_id = $3",
+    ];
+    const logPredicates = [
+      "tenant_id = $1",
+      "organization_id = $2",
+      "workspace_id = $3",
+    ];
+
+    if (input.from) {
+      values.push(input.from);
+      runPredicates.push(`created_at >= $${values.length}`);
+      logPredicates.push(`created_at >= $${values.length}`);
+    }
+
+    if (input.to) {
+      values.push(input.to);
+      runPredicates.push(`created_at <= $${values.length}`);
+      logPredicates.push(`created_at <= $${values.length}`);
+    }
+
+    const runs = await this.pool.query<{
+      started_total: string;
+      completed_total: string;
+      updated_at: Date | string | null;
+    }>(
+      `SELECT
+         COUNT(*)::bigint AS started_total,
+         SUM(CASE WHEN status IN ('success', 'failed', 'dead_lettered') THEN 1 ELSE 0 END)::bigint AS completed_total,
+         MAX(COALESCE(finished_at, started_at, created_at)) AS updated_at
+       FROM workflow_runs
+       WHERE ${runPredicates.join("\n         AND ")}`,
+      values,
+    );
+
+    const logs = await this.pool.query<{
+      retries_total: string;
+      actions_total: string;
+      updated_at: Date | string | null;
+    }>(
+      `SELECT
+         SUM(CASE WHEN event_type = 'workflow.retry.scheduled' THEN 1 ELSE 0 END)::bigint AS retries_total,
+         SUM(CASE WHEN event_type IN ('workflow.step.completed', 'workflow.step.failed') THEN 1 ELSE 0 END)::bigint AS actions_total,
+         MAX(created_at) AS updated_at
+       FROM event_logs
+       WHERE ${logPredicates.join("\n         AND ")}`,
+      values,
+    );
+
+    return {
+      workflowRunsStarted: Number(runs.rows[0]?.started_total || 0),
+      workflowRunsCompleted: Number(runs.rows[0]?.completed_total || 0),
+      workflowRetries: Number(logs.rows[0]?.retries_total || 0),
+      adapterActionsExecuted: Number(logs.rows[0]?.actions_total || 0),
+      updatedAt:
+        toIsoIfPossible(logs.rows[0]?.updated_at) ||
+        toIsoIfPossible(runs.rows[0]?.updated_at) ||
+        null,
+    };
+  }
+
   async appendEventLog(input: {
     tenantId: string;
     organizationId?: string;
@@ -517,15 +703,25 @@ export class RunRepository {
     return result.rows[0];
   }
 
-  async claimDueRetryJob(referenceTimeIso: string): Promise<RetryQueueRecord | null> {
+  async claimDueRetryJob(
+    referenceTimeIso: string,
+    options: { deprioritizeWorkspaceId?: string } = {},
+  ): Promise<RetryQueueRecord | null> {
+    const orderBy =
+      options.deprioritizeWorkspaceId
+        ? `CASE WHEN workspace_id = $2 THEN 1 ELSE 0 END ASC, next_run_at ASC`
+        : `next_run_at ASC`;
+    const values = options.deprioritizeWorkspaceId
+      ? [referenceTimeIso, options.deprioritizeWorkspaceId]
+      : [referenceTimeIso];
     const due = await this.pool.query<RetryQueueRecord>(
       `SELECT *
        FROM retry_queue
        WHERE status = 'pending'
          AND next_run_at <= $1
-       ORDER BY next_run_at ASC
+       ORDER BY ${orderBy}
        LIMIT 1`,
-      [referenceTimeIso],
+      values,
     );
     const next = due.rows[0];
     if (!next) {
@@ -697,7 +893,14 @@ export class RunRepository {
   async claimDueScheduledWait(input: {
     dueBefore: string;
     reclaimProcessingBefore: string;
+    deprioritizeWorkspaceId?: string;
   }): Promise<ScheduledWaitRecord | null> {
+    const orderBy = input.deprioritizeWorkspaceId
+      ? `CASE WHEN workspace_id = $3 THEN 1 ELSE 0 END ASC, scheduled_for ASC`
+      : `scheduled_for ASC`;
+    const values = input.deprioritizeWorkspaceId
+      ? [input.dueBefore, input.reclaimProcessingBefore, input.deprioritizeWorkspaceId]
+      : [input.dueBefore, input.reclaimProcessingBefore];
     const candidate = await this.pool.query<ScheduledWaitRecord>(
       `SELECT *
        FROM scheduled_waits
@@ -707,9 +910,9 @@ export class RunRepository {
             AND claimed_at IS NOT NULL
             AND claimed_at <= $2
           )
-       ORDER BY scheduled_for ASC
+       ORDER BY ${orderBy}
        LIMIT 1`,
-      [input.dueBefore, input.reclaimProcessingBefore],
+      values,
     );
     const next = candidate.rows[0];
     if (!next) {

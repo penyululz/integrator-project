@@ -421,7 +421,7 @@ export function RunsPage() {
                           <td>{entry.createdAt}</td>
                           <td>{entry.eventType}</td>
                           <td>{entry.stepId || "-"}</td>
-                          <td>{entry.message || entry.classification || "-"}</td>
+                          <td>{entry.message || entry.reason || entry.classification || "-"}</td>
                           <td style={{ fontFamily: "monospace" }}>{compactPayload(entry.payload)}</td>
                         </tr>
                       ))}

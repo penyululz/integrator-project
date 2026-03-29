@@ -41,6 +41,19 @@ describe("PlatformMetrics", () => {
     metrics.queueJobsFailedTotal.inc({ queue: "integration:events" });
     metrics.workflowDelaysScheduledTotal.inc({ workflow_key: "wf_observe" });
     metrics.workflowDelaysResumedTotal.inc({ workflow_key: "wf_observe" });
+    metrics.workflowRunDeferredTotal.inc({ reason: "workspace_active_limit" });
+    metrics.workflowThrottledTotal.inc({
+      adapter_key: "shopify",
+      reason: "provider_rate_limit",
+    });
+    metrics.quotaViolationsTotal.inc({
+      scope: "workspace",
+      reason: "queued_jobs",
+    });
+    metrics.queueFairnessEventsTotal.inc({
+      queue: "integration:events",
+      reason: "deprioritized_workspace",
+    });
 
     const output = metrics.render();
     expect(output).toContain(`workflow_runs_total{workflow_key="wf_observe"} 1`);
@@ -56,6 +69,15 @@ describe("PlatformMetrics", () => {
     );
     expect(output).toContain(
       `workflow_delays_resumed_total{workflow_key="wf_observe"} 1`,
+    );
+    expect(output).toContain(
+      `workflow_run_deferred_total{reason="workspace_active_limit"} 1`,
+    );
+    expect(output).toContain(
+      `workflow_throttled_total{adapter_key="shopify",reason="provider_rate_limit"} 1`,
+    );
+    expect(output).toContain(
+      `quota_violations_total{scope="workspace",reason="queued_jobs"} 1`,
     );
     expect(output).toContain(`credential_validation_failures_total`);
   });
@@ -88,6 +110,10 @@ describe("PlatformMetrics", () => {
       { workflow_key: "wf_a" },
       1.5,
     );
+    metrics.workspaceQueueBacklogItems.observe(
+      { queue: "integration:events" },
+      42,
+    );
 
     const output = metrics.render();
     expect(output).toContain(
@@ -102,6 +128,9 @@ describe("PlatformMetrics", () => {
     );
     expect(output).toContain(
       `workflow_delay_scheduler_lag_seconds_count{workflow_key="wf_a"} 1`,
+    );
+    expect(output).toContain(
+      `workspace_queue_backlog_items_count{queue="integration:events"} 1`,
     );
   });
 });

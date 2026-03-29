@@ -232,6 +232,26 @@ export class PlatformMetrics {
     "Total durable workflow delays resumed by scheduler.",
     ["workflow_key"],
   );
+  readonly workflowRunDeferredTotal = this.counter(
+    "workflow_run_deferred_total",
+    "Total workflow run execution deferrals caused by scale controls.",
+    ["reason"],
+  );
+  readonly workflowThrottledTotal = this.counter(
+    "workflow_throttled_total",
+    "Total workflow step throttles caused by provider/workspace safeguards.",
+    ["adapter_key", "reason"],
+  );
+  readonly quotaViolationsTotal = this.counter(
+    "quota_violations_total",
+    "Total quota enforcement violations.",
+    ["scope", "reason"],
+  );
+  readonly queueFairnessEventsTotal = this.counter(
+    "queue_fairness_events_total",
+    "Total fairness yield/deprioritization events.",
+    ["queue", "reason"],
+  );
 
   readonly workflowRunDurationSeconds = this.histogram(
     "workflow_run_duration_seconds",
@@ -262,6 +282,12 @@ export class PlatformMetrics {
     "Delay scheduler lag between scheduled_for and claim time in seconds.",
     ["workflow_key"],
     [0.001, 0.01, 0.05, 0.1, 0.3, 0.5, 1, 3, 5, 10, 30, 60],
+  );
+  readonly workspaceQueueBacklogItems = this.histogram(
+    "workspace_queue_backlog_items",
+    "Workspace queue backlog size sampled during enqueue/dequeue operations.",
+    ["queue"],
+    [0, 1, 5, 10, 25, 50, 100, 250, 500, 1_000, 5_000],
   );
 
   get contentType(): string {

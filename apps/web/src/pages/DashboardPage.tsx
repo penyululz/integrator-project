@@ -1,12 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
+  getWorkspaceQuotas,
+  getWorkspaceUsage,
   getAdapterAnalytics,
   getAnalyticsOverview,
   getWorkflowAnalytics,
   type AdapterAnalyticsRow,
   type AnalyticsAlertSignal,
   type AnalyticsOverview,
+  type WorkspaceQuotaResponse,
+  type WorkspaceUsageResponse,
   type WorkflowAnalyticsRow,
 } from "../api";
 import {
@@ -26,6 +30,12 @@ export function DashboardPage() {
   const [alerts, setAlerts] = useState<AnalyticsAlertSignal[]>([]);
   const [workflowRows, setWorkflowRows] = useState<WorkflowAnalyticsRow[]>([]);
   const [adapterRows, setAdapterRows] = useState<AdapterAnalyticsRow[]>([]);
+  const [quotaSnapshot, setQuotaSnapshot] = useState<WorkspaceQuotaResponse | null>(
+    null,
+  );
+  const [usageSnapshot, setUsageSnapshot] = useState<WorkspaceUsageResponse | null>(
+    null,
+  );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -51,7 +61,8 @@ export function DashboardPage() {
     setError(null);
     try {
       const filters = buildWindowFilter(selectedWindow);
-      const [overviewPayload, workflowPayload, adapterPayload] = await Promise.all([
+      const [overviewPayload, workflowPayload, adapterPayload, quotaPayload, usagePayload] =
+        await Promise.all([
         getAnalyticsOverview(filters),
         getWorkflowAnalytics({
           ...filters,
@@ -61,11 +72,15 @@ export function DashboardPage() {
           ...filters,
           limit: 25,
         }),
+        getWorkspaceQuotas(),
+        getWorkspaceUsage(filters),
       ]);
       setOverview(overviewPayload.overview);
       setAlerts(overviewPayload.alerts);
       setWorkflowRows(workflowPayload);
       setAdapterRows(adapterPayload);
+      setQuotaSnapshot(quotaPayload);
+      setUsageSnapshot(usagePayload);
     } catch (loadError) {
       setError((loadError as Error).message || "Failed to load analytics.");
     } finally {
@@ -104,6 +119,68 @@ export function DashboardPage() {
 
       {overview ? (
         <>
+          {quotaSnapshot ? (
+            <section
+              style={{
+                border: "1px solid #d0d0d0",
+                borderRadius: 10,
+                padding: 12,
+                display: "grid",
+                gap: 8,
+              }}
+            >
+              <h3 style={{ marginTop: 0 }}>Scale Limits and Usage</h3>
+              <div style={{ display: "grid", gap: 6 }}>
+                <div>
+                  <strong>Active runs:</strong> {quotaSnapshot.usage.activeWorkflowRuns}/
+                  {quotaSnapshot.limits.maxActiveWorkflowRunsPerWorkspace}
+                </div>
+                <div>
+                  <strong>Queued jobs:</strong> {quotaSnapshot.usage.queuedJobs}/
+                  {quotaSnapshot.limits.maxQueuedJobsPerWorkspace}
+                </div>
+                <div>
+                  <strong>Scheduled waits:</strong> {quotaSnapshot.usage.scheduledWaits}/
+                  {quotaSnapshot.limits.maxScheduledWaitsPerWorkspace}
+                </div>
+                <div>
+                  <strong>Workflows:</strong> {quotaSnapshot.usage.workflows}/
+                  {quotaSnapshot.limits.maxWorkflowsPerWorkspace}
+                </div>
+                {usageSnapshot ? (
+                  <div style={{ fontSize: 13, color: "#555" }}>
+                    Window usage: runs started {usageSnapshot.usage.workflowRunsStarted}, runs
+                    completed {usageSnapshot.usage.workflowRunsCompleted}, retries{" "}
+                    {usageSnapshot.usage.workflowRetries}, adapter actions{" "}
+                    {usageSnapshot.usage.adapterActionsExecuted}
+                  </div>
+                ) : null}
+              </div>
+
+              {quotaSnapshot.warnings.length > 0 ? (
+                <div style={{ color: "#8a5100" }}>
+                  <strong>Warnings:</strong>
+                  <ul style={{ marginTop: 4 }}>
+                    {quotaSnapshot.warnings.map((warning) => (
+                      <li key={warning}>{warning}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+
+              {quotaSnapshot.violations.length > 0 ? (
+                <div style={{ color: "#8a1c1c" }}>
+                  <strong>Violations:</strong>
+                  <ul style={{ marginTop: 4 }}>
+                    {quotaSnapshot.violations.map((violation) => (
+                      <li key={violation}>{violation}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+            </section>
+          ) : null}
+
           {overview.totalRuns === 0 ? (
             <section
               style={{

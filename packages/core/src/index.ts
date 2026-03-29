@@ -77,6 +77,18 @@ export {
   getWorkflowTemplateById,
   validateWorkflowTemplates,
 } from "./templates";
+export {
+  evaluateWorkspaceQuotaState,
+  getAdapterScaleOverridesFromEnv,
+  getScaleLimitsFromEnv,
+  resolveAdapterScaleLimits,
+} from "./scale/config";
+export type {
+  AdapterScaleOverride,
+  ScaleLimits,
+  WorkspaceQuotaEvaluation,
+  WorkspaceQuotaUsage,
+} from "./scale/config";
 export type {
   WorkflowTemplate,
   WorkflowTemplateSummary,

@@ -1,7 +1,9 @@
 import { Router } from "express";
 import {
   evaluateAlertSignals,
+  evaluateWorkspaceQuotaState,
   getWorkflowTemplateById,
+  getScaleLimitsFromEnv,
   getDefaultAlertThresholds,
   listWorkflowTemplateSummaries,
   validateWorkflowDefinition,
@@ -362,6 +364,118 @@ export function createApiRouter(runtime: CoreRuntime): Router {
     });
   });
 
+  router.get("/quotas", requireAuth, async (req, res, next) => {
+    try {
+      const scope = req.auth!.scope;
+      const limits = getScaleLimitsFromEnv();
+      const [workflowCount, activeWorkflowRuns, pendingRetryJobs, scheduledWaits, workspaceBacklog] =
+        await Promise.all([
+          runtime.repositories.workflowRepository.countByWorkspace({
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+          }),
+          runtime.repositories.runRepository.countActiveRuns({
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+          }),
+          runtime.repositories.runRepository.countPendingRetryJobs({
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+          }),
+          runtime.repositories.runRepository.countPendingScheduledWaits({
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+          }),
+          runtime.eventQueue.getWorkspaceBacklog(scope.workspaceId),
+        ]);
+
+      const usage = {
+        activeWorkflowRuns,
+        queuedJobs: workspaceBacklog + pendingRetryJobs,
+        scheduledWaits,
+        workflows: workflowCount,
+      };
+      const quotaState = evaluateWorkspaceQuotaState({
+        limits,
+        usage,
+      });
+
+      res.json({
+        limits,
+        usage,
+        warnings: quotaState.warnings,
+        violations: quotaState.violations,
+        details: {
+          workspaceBacklog,
+          pendingRetryJobs,
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get("/usage", requireAuth, async (req, res, next) => {
+    try {
+      const scope = req.auth!.scope;
+      const query = analyticsQuerySchema.parse({
+        from: resolveOptionalQueryParam(req.query.from as string | string[] | undefined),
+        to: resolveOptionalQueryParam(req.query.to as string | string[] | undefined),
+        workspaceId: resolveOptionalQueryParam(
+          req.query.workspaceId as string | string[] | undefined,
+        ),
+      });
+
+      if (query.workspaceId && query.workspaceId !== scope.workspaceId) {
+        throw createHttpError(403, "Unauthorized.");
+      }
+
+      const [accounting, activeWorkflowRuns, pendingRetryJobs, scheduledWaits, workspaceBacklog] =
+        await Promise.all([
+          runtime.repositories.runRepository.getUsageAccounting({
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+            from: query.from,
+            to: query.to,
+          }),
+          runtime.repositories.runRepository.countActiveRuns({
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+          }),
+          runtime.repositories.runRepository.countPendingRetryJobs({
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+          }),
+          runtime.repositories.runRepository.countPendingScheduledWaits({
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+          }),
+          runtime.eventQueue.getWorkspaceBacklog(scope.workspaceId),
+        ]);
+
+      res.json({
+        usage: accounting,
+        live: {
+          activeWorkflowRuns,
+          queuedJobs: workspaceBacklog + pendingRetryJobs,
+          pendingRetryJobs,
+          scheduledWaits,
+          workspaceBacklog,
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.post(
     "/workflows/validate",
     requireRole(["owner", "admin"]),
@@ -392,6 +506,19 @@ export function createApiRouter(runtime: CoreRuntime): Router {
       try {
         const body = createWorkflowSchema.parse(req.body);
         const scope = req.auth!.scope;
+        const limits = getScaleLimitsFromEnv();
+        const workflowCount =
+          await runtime.repositories.workflowRepository.countByWorkspace({
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+          });
+        if (workflowCount >= limits.maxWorkflowsPerWorkspace) {
+          res.status(429).json({
+            error: `Workflow quota exceeded (${workflowCount}/${limits.maxWorkflowsPerWorkspace}).`,
+          });
+          return;
+        }
 
         const normalizedDefinition = {
           ...body.definition,

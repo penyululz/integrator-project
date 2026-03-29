@@ -96,6 +96,22 @@ export class WorkflowRepository {
     return result.rows;
   }
 
+  async countByWorkspace(input: {
+    tenantId: string;
+    organizationId: string;
+    workspaceId: string;
+  }): Promise<number> {
+    const result = await this.pool.query<{ total: string }>(
+      `SELECT COUNT(*)::bigint AS total
+       FROM workflows
+       WHERE tenant_id = $1
+         AND organization_id = $2
+         AND workspace_id = $3`,
+      [input.tenantId, input.organizationId, input.workspaceId],
+    );
+    return Number(result.rows[0]?.total || 0);
+  }
+
   async create(input: {
     tenantId: string;
     organizationId: string;

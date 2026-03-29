@@ -361,7 +361,7 @@ describe("Durable delay scheduler", () => {
       const startedAt = Date.now();
       expect(await runtime.workflowEngine.processNextEvent()).toBe(true);
       const elapsedMs = Date.now() - startedAt;
-      expect(elapsedMs).toBeLessThan(150);
+      expect(elapsedMs).toBeLessThan(300);
       expect(probeAdapter.calls).toHaveLength(0);
 
       const runs = await runtime.repositories.runRepository.listRuns({

@@ -2,6 +2,7 @@
 import { v4 as uuidv4 } from "uuid";
 import {
   AdapterError,
+  SlidingWindowRateLimiter,
   buildStepIdempotencyKey,
   calculateExponentialBackoffMs,
   sanitizeSensitiveMessage,
@@ -38,6 +39,13 @@ import {
   type ObservabilityRuntime,
   getGlobalObservabilityRuntime,
 } from "../observability/runtime";
+import {
+  getAdapterScaleOverridesFromEnv,
+  getScaleLimitsFromEnv,
+  resolveAdapterScaleLimits,
+  type AdapterScaleOverride,
+  type ScaleLimits,
+} from "../scale/config";
 
 type FailureClassification =
   | "network_timeout"
@@ -104,6 +112,19 @@ type ConditionEvaluationResult = {
   }>;
 };
 
+type RunAdmissionDecision =
+  | {
+      allowed: true;
+    }
+  | {
+      allowed: false;
+      reason:
+        | "workspace_active_run_limit"
+        | "workflow_active_run_limit"
+        | "workspace_scheduled_wait_limit";
+      message: string;
+    };
+
 class WorkflowDslError extends Error {
   constructor(
     message: string,
@@ -119,6 +140,21 @@ class WorkflowDslError extends Error {
   }
 }
 
+class ScaleControlError extends Error {
+  constructor(
+    message: string,
+    readonly statusCode: number,
+    readonly code:
+      | "QUEUE_QUOTA_EXCEEDED"
+      | "WORKFLOW_ADMISSION_DEFERRED"
+      | "WORKSPACE_QUOTA_EXCEEDED"
+      | "PROVIDER_THROTTLED",
+  ) {
+    super(message);
+    this.name = "ScaleControlError";
+  }
+}
+
 const DEFAULT_RETRY_POLICY: Omit<ResolvedRetryPolicy, "enabled"> = {
   maxAttempts: 3,
   baseDelayMs: 1_000,
@@ -131,6 +167,7 @@ const DEFAULT_INLINE_DELAY_THRESHOLD_MS = 2_000;
 const DEFAULT_SCHEDULED_WAIT_LEASE_MS = 60_000;
 const DEFAULT_SCHEDULED_WAIT_RETRY_BASE_DELAY_MS = 1_000;
 const MAX_SCHEDULED_WAIT_RETRY_DELAY_MS = 300_000;
+const DEFAULT_ADMISSION_DEFER_DELAY_MS = 500;
 
 function clampNumber(input: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, input));
@@ -250,6 +287,13 @@ function analyzeFailure(error: unknown): FailureAnalysis {
   }
 
   if (error instanceof AdapterError) {
+    if (error.code === "ADAPTER_THROTTLED") {
+      return {
+        retryable: true,
+        classification: "rate_limited",
+        message,
+      };
+    }
     if (error.retryable) {
       return {
         retryable: true,
@@ -644,11 +688,24 @@ function compareValues(left: unknown, right: unknown): number {
 export type WorkflowEngineOptions = {
   inlineDelayThresholdMs?: number;
   scheduledWaitLeaseMs?: number;
+  scaleLimits?: ScaleLimits;
+  adapterScaleOverrides?: Record<string, AdapterScaleOverride>;
 };
 
 export class WorkflowEngine {
   private readonly inlineDelayThresholdMs: number;
   private readonly scheduledWaitLeaseMs: number;
+  private readonly scaleLimits: ScaleLimits;
+  private readonly adapterScaleOverrides: Record<string, AdapterScaleOverride>;
+  private readonly adapterRateLimiters = new Map<string, SlidingWindowRateLimiter>();
+  private readonly activeAdapterExecutions = new Map<string, number>();
+  private readonly queueFairnessState = new Map<
+    string,
+    {
+      workspaceId: string;
+      consecutiveClaims: number;
+    }
+  >();
 
   constructor(
     private readonly pluginLoader: PluginLoader,
@@ -675,13 +732,280 @@ export class WorkflowEngine {
           "SCHEDULED_WAIT_LEASE_MS",
           DEFAULT_SCHEDULED_WAIT_LEASE_MS,
           3_600_000,
-        ),
+      ),
       1_000,
       3_600_000,
     );
+    this.scaleLimits = options.scaleLimits || getScaleLimitsFromEnv();
+    this.adapterScaleOverrides =
+      options.adapterScaleOverrides ||
+      getAdapterScaleOverridesFromEnv(this.scaleLimits);
+  }
+
+  private getFairnessState(queue: string): {
+    workspaceId: string;
+    consecutiveClaims: number;
+  } | null {
+    return this.queueFairnessState.get(queue) || null;
+  }
+
+  private registerFairnessClaim(queue: string, workspaceId: string): void {
+    const current = this.getFairnessState(queue);
+    if (!current || current.workspaceId !== workspaceId) {
+      this.queueFairnessState.set(queue, {
+        workspaceId,
+        consecutiveClaims: 1,
+      });
+      return;
+    }
+
+    this.queueFairnessState.set(queue, {
+      workspaceId,
+      consecutiveClaims: current.consecutiveClaims + 1,
+    });
+  }
+
+  private shouldDeprioritizeWorkspace(queue: string): string | undefined {
+    const state = this.getFairnessState(queue);
+    if (!state) {
+      return undefined;
+    }
+    if (
+      state.consecutiveClaims <
+      this.scaleLimits.fairnessMaxConsecutiveWorkspaceClaims
+    ) {
+      return undefined;
+    }
+    return state.workspaceId;
+  }
+
+  private async checkQueueFairnessForIncomingEvent(
+    event: IncomingEvent,
+  ): Promise<boolean> {
+    const currentState = this.getFairnessState(this.eventQueueKey);
+    if (!currentState || currentState.workspaceId !== event.workspaceId) {
+      return false;
+    }
+    if (
+      currentState.consecutiveClaims <
+      this.scaleLimits.fairnessMaxConsecutiveWorkspaceClaims
+    ) {
+      return false;
+    }
+
+    const backlogs = await this.eventQueue.getWorkspaceBacklogs();
+    const hasOtherWorkspaceBacklog = Object.entries(backlogs).some(
+      ([workspaceId, backlog]) => workspaceId !== event.workspaceId && backlog > 0,
+    );
+    if (!hasOtherWorkspaceBacklog) {
+      return false;
+    }
+
+    this.observability.metrics.queueFairnessEventsTotal.inc({
+      queue: this.eventQueueKey,
+      reason: "deprioritized_workspace",
+    });
+    return true;
+  }
+
+  private get eventQueueKey(): string {
+    return "integration:events";
+  }
+
+  private getRetryQueueKey(): string {
+    return "retry_queue";
+  }
+
+  private getScheduledWaitQueueKey(): string {
+    return "scheduled_waits";
+  }
+
+  private buildDeferredEvent(
+    event: IncomingEvent,
+    reason: string,
+    targetWorkflowId?: string,
+  ): IncomingEvent {
+    return {
+      ...event,
+      targetWorkflowId: targetWorkflowId || event.targetWorkflowId,
+      deferredCount: (event.deferredCount || 0) + 1,
+      deferredReason: reason,
+      receivedAt: new Date(Date.now() + DEFAULT_ADMISSION_DEFER_DELAY_MS).toISOString(),
+    };
+  }
+
+  private async deferIncomingEvent(input: {
+    event: IncomingEvent;
+    reason:
+      | "fairness_yield"
+      | "workspace_active_run_limit"
+      | "workflow_active_run_limit"
+      | "workspace_scheduled_wait_limit";
+    message: string;
+    workflowRecord?: WorkflowRecord;
+  }): Promise<void> {
+    const deferredEvent = this.buildDeferredEvent(
+      input.event,
+      input.reason,
+      input.workflowRecord?.id,
+    );
+    const deferredCount = deferredEvent.deferredCount || 0;
+
+    this.observability.metrics.workflowRunDeferredTotal.inc({
+      reason: input.reason,
+    });
+
+    if (deferredCount > this.scaleLimits.maxDeferAttempts) {
+      this.observability.metrics.quotaViolationsTotal.inc({
+        scope: "workspace",
+        reason: "defer_attempts_exhausted",
+      });
+      await this.runRepository.appendEventLog({
+        tenantId: input.event.tenantId,
+        organizationId: input.event.organizationId,
+        workspaceId: input.event.workspaceId,
+        workflowId: input.workflowRecord?.id,
+        eventType: "workflow.execution.dropped",
+        payload: {
+          reason: input.reason,
+          message: input.message,
+          deferredCount,
+          maxDeferAttempts: this.scaleLimits.maxDeferAttempts,
+          targetWorkflowId: deferredEvent.targetWorkflowId,
+        },
+      });
+      return;
+    }
+
+    await this.runRepository.appendEventLog({
+      tenantId: input.event.tenantId,
+      organizationId: input.event.organizationId,
+      workspaceId: input.event.workspaceId,
+      workflowId: input.workflowRecord?.id,
+      eventType: "workflow.execution.deferred",
+        payload: {
+          reason: input.reason,
+          message: input.message,
+          deferredCount,
+          targetWorkflowId: deferredEvent.targetWorkflowId,
+        },
+      });
+    await this.eventQueue.requeue(deferredEvent);
+  }
+
+  private async evaluateRunAdmission(
+    workflowRecord: WorkflowRecord,
+    event: IncomingEvent,
+  ): Promise<RunAdmissionDecision> {
+    const [activeRunsInWorkspace, activeRunsForWorkflow, pendingScheduledWaits] =
+      await Promise.all([
+        this.runRepository.countActiveRuns({
+          tenantId: event.tenantId,
+          organizationId: event.organizationId,
+          workspaceId: event.workspaceId,
+        }),
+        this.runRepository.countActiveRunsForWorkflow({
+          tenantId: event.tenantId,
+          organizationId: event.organizationId,
+          workspaceId: event.workspaceId,
+          workflowId: workflowRecord.id,
+        }),
+        this.runRepository.countPendingScheduledWaits({
+          tenantId: event.tenantId,
+          organizationId: event.organizationId,
+          workspaceId: event.workspaceId,
+        }),
+      ]);
+
+    if (activeRunsInWorkspace >= this.scaleLimits.maxActiveWorkflowRunsPerWorkspace) {
+      return {
+        allowed: false,
+        reason: "workspace_active_run_limit",
+        message: `Workspace active run quota exceeded (${activeRunsInWorkspace}/${this.scaleLimits.maxActiveWorkflowRunsPerWorkspace}).`,
+      };
+    }
+
+    if (activeRunsForWorkflow >= this.scaleLimits.maxActiveRunsPerWorkflow) {
+      return {
+        allowed: false,
+        reason: "workflow_active_run_limit",
+        message: `Workflow active run concurrency exceeded (${activeRunsForWorkflow}/${this.scaleLimits.maxActiveRunsPerWorkflow}).`,
+      };
+    }
+
+    if (pendingScheduledWaits >= this.scaleLimits.maxScheduledWaitsPerWorkspace) {
+      return {
+        allowed: false,
+        reason: "workspace_scheduled_wait_limit",
+        message: `Workspace scheduled wait quota exceeded (${pendingScheduledWaits}/${this.scaleLimits.maxScheduledWaitsPerWorkspace}).`,
+      };
+    }
+
+    return {
+      allowed: true,
+    };
+  }
+
+  private async enforceIncomingQueueQuota(event: IncomingEvent): Promise<void> {
+    const [workspaceBacklog, pendingRetries] = await Promise.all([
+      this.eventQueue.getWorkspaceBacklog(event.workspaceId),
+      this.runRepository.countPendingRetryJobs({
+        tenantId: event.tenantId,
+        organizationId: event.organizationId,
+        workspaceId: event.workspaceId,
+      }),
+    ]);
+    const queuedJobs = workspaceBacklog + pendingRetries;
+
+    if (queuedJobs >= this.scaleLimits.maxQueuedJobsPerWorkspace) {
+      this.observability.metrics.quotaViolationsTotal.inc({
+        scope: "workspace",
+        reason: "queued_jobs",
+      });
+      await this.runRepository.appendEventLog({
+        tenantId: event.tenantId,
+        organizationId: event.organizationId,
+        workspaceId: event.workspaceId,
+        eventType: "workflow.queue.rejected",
+        payload: {
+          reason: "queued_jobs_quota_exceeded",
+          queuedJobs,
+          maxQueuedJobs: this.scaleLimits.maxQueuedJobsPerWorkspace,
+          pendingRetries,
+          workspaceBacklog,
+        },
+      });
+      throw new ScaleControlError(
+        `Workspace queued job quota exceeded (${queuedJobs}/${this.scaleLimits.maxQueuedJobsPerWorkspace}).`,
+        429,
+        "QUEUE_QUOTA_EXCEEDED",
+      );
+    }
+
+    const warningThreshold =
+      this.scaleLimits.maxQueuedJobsPerWorkspace *
+      this.scaleLimits.queueBackpressureWarningThreshold;
+    if (queuedJobs >= warningThreshold) {
+      this.observability.logger.warn(
+        "workflow.queue.backpressure_warning",
+        {
+          correlationId: event.correlationId,
+          tenantId: event.tenantId,
+          organizationId: event.organizationId,
+          workspaceId: event.workspaceId,
+        },
+        {
+          queuedJobs,
+          maxQueuedJobs: this.scaleLimits.maxQueuedJobsPerWorkspace,
+          pendingRetries,
+          workspaceBacklog,
+        },
+      );
+    }
   }
 
   async queueIncomingEvent(event: IncomingEvent): Promise<void> {
+    await this.enforceIncomingQueueQuota(event);
     await this.runRepository.appendEventLog({
       tenantId: event.tenantId,
       organizationId: event.organizationId,
@@ -711,17 +1035,63 @@ export class WorkflowEngine {
       return false;
     }
 
-    const workflows = await this.workflowRepository.findActiveByTrigger({
-      tenantId: event.tenantId,
-      organizationId: event.organizationId,
-      workspaceId: event.workspaceId,
-      adapterKey: event.adapterKey,
-      triggerKey: event.triggerKey,
-    });
+    if (await this.checkQueueFairnessForIncomingEvent(event)) {
+      await this.deferIncomingEvent({
+        event,
+        reason: "fairness_yield",
+        message:
+          "Event yielded due to workspace fairness policy and competing backlog.",
+      });
+      return true;
+    }
+
+    const workflows: WorkflowRecord[] = [];
+    if (event.targetWorkflowId) {
+      const workflowRecord = await this.workflowRepository.findByIdScoped({
+        workflowId: event.targetWorkflowId,
+        tenantId: event.tenantId,
+        organizationId: event.organizationId,
+        workspaceId: event.workspaceId,
+      });
+      if (
+        workflowRecord &&
+        workflowRecord.status === "active" &&
+        workflowRecord.definition_json.trigger.adapter === event.adapterKey &&
+        workflowRecord.definition_json.trigger.trigger === event.triggerKey
+      ) {
+        workflows.push(workflowRecord);
+      }
+    } else {
+      const triggerWorkflows = await this.workflowRepository.findActiveByTrigger({
+        tenantId: event.tenantId,
+        organizationId: event.organizationId,
+        workspaceId: event.workspaceId,
+        adapterKey: event.adapterKey,
+        triggerKey: event.triggerKey,
+      });
+      workflows.push(...triggerWorkflows);
+    }
 
     for (const workflowRecord of workflows) {
+      const admission = await this.evaluateRunAdmission(workflowRecord, event);
+      if (!admission.allowed) {
+        this.observability.metrics.quotaViolationsTotal.inc({
+          scope: "workspace",
+          reason: admission.reason,
+        });
+        await this.deferIncomingEvent({
+          event,
+          workflowRecord,
+          reason: admission.reason,
+          message: admission.message,
+        });
+        continue;
+      }
+
       await this.executeWorkflow(workflowRecord, event);
     }
+
+    this.registerFairnessClaim(this.eventQueueKey, event.workspaceId);
 
     return true;
   }
@@ -836,13 +1206,30 @@ export class WorkflowEngine {
     const reclaimBefore = new Date(
       referenceTime.getTime() - this.scheduledWaitLeaseMs,
     ).toISOString();
+    const deprioritizeWorkspaceId = this.shouldDeprioritizeWorkspace(
+      this.getScheduledWaitQueueKey(),
+    );
     const scheduledWait = await this.runRepository.claimDueScheduledWait({
       dueBefore,
       reclaimProcessingBefore: reclaimBefore,
+      deprioritizeWorkspaceId,
     });
     if (!scheduledWait) {
       return false;
     }
+    if (
+      deprioritizeWorkspaceId &&
+      scheduledWait.workspace_id !== deprioritizeWorkspaceId
+    ) {
+      this.observability.metrics.queueFairnessEventsTotal.inc({
+        queue: this.getScheduledWaitQueueKey(),
+        reason: "deprioritized_workspace",
+      });
+    }
+    this.registerFairnessClaim(
+      this.getScheduledWaitQueueKey(),
+      scheduledWait.workspace_id,
+    );
 
     this.observability.metrics.queueJobsProcessedTotal.inc({
       queue: "scheduled_waits",
@@ -1024,11 +1411,33 @@ export class WorkflowEngine {
   }
 
   async processNextRetry(referenceTime = new Date()): Promise<boolean> {
+    const deprioritizeWorkspaceId = this.shouldDeprioritizeWorkspace(
+      this.getRetryQueueKey(),
+    );
     const retryJob = await this.runRepository.claimDueRetryJob(
       referenceTime.toISOString(),
+      {
+        deprioritizeWorkspaceId,
+      },
     );
     if (!retryJob) {
       return false;
+    }
+    if (
+      deprioritizeWorkspaceId &&
+      retryJob.workspace_id &&
+      retryJob.workspace_id !== deprioritizeWorkspaceId
+    ) {
+      this.observability.metrics.queueFairnessEventsTotal.inc({
+        queue: this.getRetryQueueKey(),
+        reason: "deprioritized_workspace",
+      });
+    }
+    if (retryJob.workspace_id) {
+      this.registerFairnessClaim(
+        this.getRetryQueueKey(),
+        retryJob.workspace_id,
+      );
     }
     this.observability.metrics.queueJobsProcessedTotal.inc({
       queue: "retry_queue",
@@ -1212,6 +1621,21 @@ export class WorkflowEngine {
     workflowRecord: WorkflowRecord,
     event: IncomingEvent,
   ): Promise<void> {
+    const admission = await this.evaluateRunAdmission(workflowRecord, event);
+    if (!admission.allowed) {
+      this.observability.metrics.quotaViolationsTotal.inc({
+        scope: "workspace",
+        reason: admission.reason,
+      });
+      await this.deferIncomingEvent({
+        event,
+        workflowRecord,
+        reason: admission.reason,
+        message: admission.message,
+      });
+      return;
+    }
+
     const workflowKey = getWorkflowKey(workflowRecord);
     this.observability.metrics.workflowRunsTotal.inc({
       workflow_key: workflowKey,
@@ -1598,6 +2022,102 @@ export class WorkflowEngine {
     };
   }
 
+  private getAdapterExecutionKey(
+    state: ExecutionState,
+    adapterKey: string,
+  ): string {
+    return `${state.triggerEvent.workspaceId}:${adapterKey}`;
+  }
+
+  private getAdapterLimiterForKey(
+    key: string,
+    limits: AdapterScaleOverride,
+  ): SlidingWindowRateLimiter {
+    const existing = this.adapterRateLimiters.get(key);
+    if (existing) {
+      return existing;
+    }
+
+    const created = new SlidingWindowRateLimiter(
+      limits.maxActionsPerWindow,
+      limits.windowMs,
+    );
+    this.adapterRateLimiters.set(key, created);
+    return created;
+  }
+
+  private async acquireAdapterExecutionPermit(input: {
+    state: ExecutionState;
+    step: WorkflowActionStep;
+  }): Promise<
+    | {
+        allowed: true;
+        release: () => void;
+      }
+    | {
+        allowed: false;
+        reason: "provider_concurrency_limit" | "provider_rate_limit";
+        message: string;
+      }
+  > {
+    const adapterLimits = resolveAdapterScaleLimits(
+      input.step.adapter,
+      this.scaleLimits,
+      this.adapterScaleOverrides,
+    );
+    const executionKey = this.getAdapterExecutionKey(
+      input.state,
+      input.step.adapter,
+    );
+    const currentConcurrency = this.activeAdapterExecutions.get(executionKey) || 0;
+    if (currentConcurrency >= adapterLimits.maxConcurrency) {
+      return {
+        allowed: false,
+        reason: "provider_concurrency_limit",
+        message: `Adapter concurrency limit exceeded for ${input.step.adapter} (${currentConcurrency}/${adapterLimits.maxConcurrency}).`,
+      };
+    }
+
+    const limiter = this.getAdapterLimiterForKey(executionKey, adapterLimits);
+    if (!limiter.allow("window")) {
+      return {
+        allowed: false,
+        reason: "provider_rate_limit",
+        message: `Adapter rate limit exceeded for ${input.step.adapter}.`,
+      };
+    }
+
+    const windowStartIso = new Date(Date.now() - adapterLimits.windowMs).toISOString();
+    const persistedAttempts =
+      await this.runRepository.getAdapterActionAttemptsInWindow({
+        tenantId: input.state.triggerEvent.tenantId,
+        organizationId: input.state.triggerEvent.organizationId,
+        workspaceId: input.state.triggerEvent.workspaceId,
+        adapterKey: input.step.adapter,
+        windowStartIso,
+      });
+    if (persistedAttempts >= adapterLimits.maxActionsPerWindow) {
+      return {
+        allowed: false,
+        reason: "provider_rate_limit",
+        message: `Adapter rate limit exceeded for ${input.step.adapter} (${persistedAttempts}/${adapterLimits.maxActionsPerWindow} in window).`,
+      };
+    }
+
+    this.activeAdapterExecutions.set(executionKey, currentConcurrency + 1);
+    return {
+      allowed: true,
+      release: () => {
+        const next = (this.activeAdapterExecutions.get(executionKey) || 1) - 1;
+        if (next <= 0) {
+          this.activeAdapterExecutions.delete(executionKey);
+          return;
+        }
+        this.activeAdapterExecutions.set(executionKey, next);
+      },
+    };
+  }
+
   private async executeActionStep(
     state: ExecutionState,
     mutableState: MutableExecutionState,
@@ -1666,6 +2186,7 @@ export class WorkflowEngine {
     const stepStartedAt = Date.now();
     let actionAttempted = false;
     let adapterActionStartedAt: number | null = null;
+    let releaseAdapterPermit: (() => void) | null = null;
 
     try {
       const resolvedCredentials = await this.credentialResolver.resolveForAdapter({
@@ -1725,6 +2246,31 @@ export class WorkflowEngine {
       if (stepInput.idempotencyKey === undefined) {
         stepInput.idempotencyKey = stepIdempotencyKey;
       }
+
+      const adapterPermit = await this.acquireAdapterExecutionPermit({
+        state,
+        step,
+      });
+      if (!adapterPermit.allowed) {
+        this.observability.metrics.workflowThrottledTotal.inc({
+          adapter_key: step.adapter,
+          reason: adapterPermit.reason,
+        });
+        await this.appendRunLog(state, "workflow.step.throttled", {
+          stepId: step.id,
+          stepPath,
+          adapter: step.adapter,
+          action: step.action,
+          attempt,
+          reason: adapterPermit.reason,
+          message: adapterPermit.message,
+        });
+        throw new AdapterError(adapterPermit.message, {
+          code: "ADAPTER_THROTTLED",
+          retryable: true,
+        });
+      }
+      releaseAdapterPermit = adapterPermit.release;
 
       actionAttempted = true;
       adapterActionStartedAt = Date.now();
@@ -2048,6 +2594,10 @@ export class WorkflowEngine {
       return {
         halted: true,
       };
+    } finally {
+      if (releaseAdapterPermit) {
+        releaseAdapterPermit();
+      }
     }
   }
   private async executeDelayStep(
@@ -2199,6 +2749,48 @@ export class WorkflowEngine {
     }
 
     if (delayMs > this.inlineDelayThresholdMs) {
+      const pendingScheduledWaits =
+        await this.runRepository.countPendingScheduledWaits({
+          tenantId: state.triggerEvent.tenantId,
+          organizationId: state.triggerEvent.organizationId,
+          workspaceId: state.triggerEvent.workspaceId,
+        });
+      if (pendingScheduledWaits >= this.scaleLimits.maxScheduledWaitsPerWorkspace) {
+        const message = `Scheduled wait quota exceeded (${pendingScheduledWaits}/${this.scaleLimits.maxScheduledWaitsPerWorkspace}).`;
+        this.observability.metrics.quotaViolationsTotal.inc({
+          scope: "workspace",
+          reason: "scheduled_waits",
+        });
+        await this.appendRunLog(state, "workflow.delay.rejected", {
+          stepId: step.id,
+          stepPath,
+          attempt,
+          delayMs,
+          message,
+          pendingScheduledWaits,
+          maxScheduledWaits: this.scaleLimits.maxScheduledWaitsPerWorkspace,
+        });
+        await this.runRepository.completeRun({
+          runId: state.run.id,
+          status: "failed",
+          result: {
+            error: message,
+            failedStepId: step.id,
+            failedStepPath: stepPath,
+            classification: "invalid_config",
+            steps: mutableState.stepResults,
+          },
+          attemptCount: attempt,
+          maxAttempts: state.run.max_attempts || attempt,
+          lastError: message,
+          deadLetteredAt: null,
+        });
+        this.observeRunCompletion(state, "failed");
+        return {
+          halted: true,
+        };
+      }
+
       const scheduledFor = new Date(Date.now() + delayMs).toISOString();
       const scheduledPayload: ScheduledDelayPayload = {
         runId: state.run.id,

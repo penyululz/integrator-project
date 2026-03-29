@@ -211,6 +211,55 @@ export type WorkflowTemplate = Omit<WorkflowTemplateSummary, "triggerSummary" | 
   workflow: WorkflowDefinition;
 };
 
+export type ScaleLimits = {
+  maxActiveWorkflowRunsPerWorkspace: number;
+  maxQueuedJobsPerWorkspace: number;
+  maxScheduledWaitsPerWorkspace: number;
+  maxWorkflowsPerWorkspace: number;
+  maxActiveRunsPerWorkflow: number;
+  fairnessMaxConsecutiveWorkspaceClaims: number;
+  maxDeferAttempts: number;
+  adapterDefaultRateLimitPerWindow: number;
+  adapterRateLimitWindowMs: number;
+  adapterDefaultConcurrency: number;
+  queueBackpressureWarningThreshold: number;
+};
+
+export type WorkspaceQuotaUsage = {
+  activeWorkflowRuns: number;
+  queuedJobs: number;
+  scheduledWaits: number;
+  workflows: number;
+};
+
+export type WorkspaceQuotaResponse = {
+  limits: ScaleLimits;
+  usage: WorkspaceQuotaUsage;
+  warnings: string[];
+  violations: string[];
+  details: {
+    workspaceBacklog: number;
+    pendingRetryJobs: number;
+  };
+};
+
+export type WorkspaceUsageResponse = {
+  usage: {
+    workflowRunsStarted: number;
+    workflowRunsCompleted: number;
+    workflowRetries: number;
+    adapterActionsExecuted: number;
+    updatedAt: string | null;
+  };
+  live: {
+    activeWorkflowRuns: number;
+    queuedJobs: number;
+    pendingRetryJobs: number;
+    scheduledWaits: number;
+    workspaceBacklog: number;
+  };
+};
+
 type LoginInput = {
   email: string;
   password: string;
@@ -456,4 +505,19 @@ export async function getAdapterAnalytics(
     params: input,
   });
   return response.data.adapters || [];
+}
+
+export async function getWorkspaceQuotas(): Promise<WorkspaceQuotaResponse> {
+  const response = await apiClient().get("/quotas");
+  return response.data as WorkspaceQuotaResponse;
+}
+
+export async function getWorkspaceUsage(input: {
+  from?: string;
+  to?: string;
+} = {}): Promise<WorkspaceUsageResponse> {
+  const response = await apiClient().get("/usage", {
+    params: input,
+  });
+  return response.data as WorkspaceUsageResponse;
 }
