@@ -12,6 +12,8 @@ import {
 import { redactSensitiveRecord } from "@integration/shared";
 import { requireAuth, requireRole } from "../middleware/auth";
 import {
+  alertConfigSchema,
+  alertTestSchema,
   analyticsQuerySchema,
   auditLogsQuerySchema,
   createIntegrationSchema,
@@ -46,6 +48,20 @@ function createHttpError(statusCode: number, message: string): Error & { statusC
   const error = new Error(message) as Error & { statusCode: number };
   error.statusCode = statusCode;
   return error;
+}
+
+function requireAlertService(runtime: CoreRuntime) {
+  if (!runtime.alertDeliveryService) {
+    throw createHttpError(503, "Alert delivery service is unavailable.");
+  }
+  return runtime.alertDeliveryService;
+}
+
+function requireRetentionCleanupService(runtime: CoreRuntime) {
+  if (!runtime.retentionCleanupService) {
+    throw createHttpError(503, "Retention cleanup service is unavailable.");
+  }
+  return runtime.retentionCleanupService;
 }
 
 function toNullableString(value: unknown): string | null {
@@ -551,6 +567,151 @@ export function createApiRouter(runtime: CoreRuntime): Router {
       next(error);
     }
   });
+
+  router.get(
+    "/retention",
+    requireRole(["owner", "admin"]),
+    async (_req, res, next) => {
+      try {
+        const retentionService = requireRetentionCleanupService(runtime);
+        res.json({
+          policy: retentionService.getPolicySummary(),
+        });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.get(
+    "/retention/status",
+    requireRole(["owner", "admin"]),
+    async (_req, res, next) => {
+      try {
+        const retentionService = requireRetentionCleanupService(runtime);
+        res.json({
+          status: await retentionService.getStatusSummary(),
+        });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.get(
+    "/alerts/config",
+    requireRole(["owner", "admin"]),
+    async (req, res, next) => {
+      try {
+        const scope = req.auth!.scope;
+        const alertService = requireAlertService(runtime);
+        const [config, deliveryLogs] = await Promise.all([
+          alertService.getConfig({
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+          }),
+          alertService.getRecentDeliveryLogs({
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+          }),
+        ]);
+
+        res.json({
+          config,
+          deliveryLogs,
+        });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.put(
+    "/alerts/config",
+    requireRole(["owner", "admin"]),
+    async (req, res, next) => {
+      try {
+        const body = alertConfigSchema.parse(req.body || {});
+        const scope = req.auth!.scope;
+        const actor = req.auth!.user;
+        const alertService = requireAlertService(runtime);
+        const config = await alertService.updateConfig({
+          scope: {
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+          },
+          actorUserId: actor.id,
+          config: body,
+        });
+
+        await runtime.repositories.runRepository.appendAuditLog({
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+          actorUserId: actor.id,
+          action: "alerts.config.update",
+          entityType: "alert_config",
+          entityId: scope.workspaceId,
+          metadata: {
+            enabled: config.enabled,
+            eventTypes: config.eventTypes,
+            severities: config.severities,
+            cooldownSeconds: config.cooldownSeconds,
+            channels: config.channels,
+          },
+        });
+
+        res.status(200).json({ config });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.post(
+    "/alerts/test",
+    requireRole(["owner", "admin"]),
+    async (req, res, next) => {
+      try {
+        const body = alertTestSchema.parse(req.body || {});
+        const scope = req.auth!.scope;
+        const actor = req.auth!.user;
+        const alertService = requireAlertService(runtime);
+        const result = await alertService.sendTestAlert({
+          scope: {
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+          },
+          actorUserId: actor.id,
+          message: body.message,
+          severity: body.severity,
+        });
+
+        await runtime.repositories.runRepository.appendAuditLog({
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+          actorUserId: actor.id,
+          action: "alerts.test.send",
+          entityType: "alert_config",
+          entityId: scope.workspaceId,
+          metadata: {
+            deduped: result.deduped,
+            queued: result.queued,
+            severity: body.severity || "warn",
+          },
+        });
+
+        res.status(202).json(result);
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
 
   router.post(
     "/workflows/validate",

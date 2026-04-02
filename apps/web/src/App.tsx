@@ -8,6 +8,7 @@ import { OnboardingPage } from "./pages/OnboardingPage";
 import { WorkflowsPage } from "./pages/WorkflowsPage";
 import { RunsPage } from "./pages/RunsPage";
 import { AuditLogsPage } from "./pages/AuditLogsPage";
+import { AlertSettingsPage } from "./pages/AlertSettingsPage";
 
 function ProtectedRoute({ children }: { children: JSX.Element }) {
   const session = getAuthSession();
@@ -42,6 +43,7 @@ export default function App() {
         <Link to="/workflows">Workflows</Link>
         <Link to="/runs">Runs</Link>
         {isOperator ? <Link to="/audit-logs">Audit</Link> : null}
+        {isOperator ? <Link to="/alerts">Alerts</Link> : null}
         {session ? (
           <button type="button" onClick={() => void onLogout()}>
             Logout
@@ -108,6 +110,14 @@ export default function App() {
           element={
             <ProtectedRoute>
               <AuditLogsPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/alerts"
+          element={
+            <ProtectedRoute>
+              <AlertSettingsPage />
             </ProtectedRoute>
           }
         />

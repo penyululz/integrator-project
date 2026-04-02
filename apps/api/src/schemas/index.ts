@@ -302,3 +302,62 @@ export const waitRescheduleSchema = z.object({
   scheduledFor: isoDateTimeSchema,
   reason: z.string().trim().min(1).max(500).optional(),
 });
+
+const alertChannelEmailSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    recipients: z.array(z.string().email()).max(50).optional(),
+    from: z.string().trim().min(1).max(320).optional(),
+    subjectPrefix: z.string().trim().min(1).max(120).optional(),
+  })
+  .strict()
+  .optional();
+
+const alertChannelSlackSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+  })
+  .strict()
+  .optional();
+
+const alertChannelWebhookSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    method: z.enum(["POST", "PUT"]).optional(),
+    headers: z.record(z.string()).optional(),
+  })
+  .strict()
+  .optional();
+
+const alertSecretsSchema = z
+  .object({
+    slackWebhookUrl: z.union([z.string().url(), z.null()]).optional(),
+    webhookUrl: z.union([z.string().url(), z.null()]).optional(),
+    webhookAuthHeader: z.union([z.string().trim().min(1).max(2048), z.null()]).optional(),
+  })
+  .strict()
+  .optional();
+
+export const alertConfigSchema = z
+  .object({
+    enabled: z.boolean(),
+    eventTypes: z.array(z.string().trim().min(1).max(120)).max(50).default([]),
+    severities: z.array(z.enum(["warn", "critical"])).max(2).default(["warn", "critical"]),
+    cooldownSeconds: z.coerce.number().int().min(30).max(86_400).default(300),
+    channels: z
+      .object({
+        slack: alertChannelSlackSchema,
+        email: alertChannelEmailSchema,
+        webhook: alertChannelWebhookSchema,
+      })
+      .strict(),
+    secrets: alertSecretsSchema,
+  })
+  .strict();
+
+export const alertTestSchema = z
+  .object({
+    message: z.string().trim().min(1).max(500).optional(),
+    severity: z.enum(["warn", "critical"]).optional(),
+  })
+  .strict();

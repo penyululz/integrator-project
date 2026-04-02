@@ -39,6 +39,7 @@ import {
   type ObservabilityRuntime,
   getGlobalObservabilityRuntime,
 } from "../observability/runtime";
+import type { AlertDeliveryService } from "../alerts/alert-delivery-service";
 import {
   getAdapterScaleOverridesFromEnv,
   getScaleLimitsFromEnv,
@@ -690,6 +691,7 @@ export type WorkflowEngineOptions = {
   scheduledWaitLeaseMs?: number;
   scaleLimits?: ScaleLimits;
   adapterScaleOverrides?: Record<string, AdapterScaleOverride>;
+  alertDeliveryService?: AlertDeliveryService;
 };
 
 export class WorkflowEngine {
@@ -697,6 +699,7 @@ export class WorkflowEngine {
   private readonly scheduledWaitLeaseMs: number;
   private readonly scaleLimits: ScaleLimits;
   private readonly adapterScaleOverrides: Record<string, AdapterScaleOverride>;
+  private readonly alertDeliveryService?: AlertDeliveryService;
   private readonly adapterRateLimiters = new Map<string, SlidingWindowRateLimiter>();
   private readonly activeAdapterExecutions = new Map<string, number>();
   private readonly queueFairnessState = new Map<
@@ -740,6 +743,7 @@ export class WorkflowEngine {
     this.adapterScaleOverrides =
       options.adapterScaleOverrides ||
       getAdapterScaleOverridesFromEnv(this.scaleLimits);
+    this.alertDeliveryService = options.alertDeliveryService;
   }
 
   private getFairnessState(queue: string): {
@@ -820,6 +824,52 @@ export class WorkflowEngine {
     return "scheduled_waits";
   }
 
+  private emitAlert(input: {
+    tenantId: string;
+    organizationId: string;
+    workspaceId: string;
+    eventType: string;
+    severity: "warn" | "critical";
+    title: string;
+    message: string;
+    dedupeKey: string;
+    payload?: Record<string, unknown>;
+    force?: boolean;
+  }): void {
+    if (!this.alertDeliveryService) {
+      return;
+    }
+
+    void this.alertDeliveryService
+      .queueAlert({
+        tenantId: input.tenantId,
+        organizationId: input.organizationId,
+        workspaceId: input.workspaceId,
+        eventType: input.eventType,
+        severity: input.severity,
+        title: sanitizeSensitiveMessage(input.title),
+        message: sanitizeSensitiveMessage(input.message),
+        dedupeKey: input.dedupeKey,
+        payload: input.payload,
+        force: input.force,
+      })
+      .catch((error) => {
+        this.observability.logger.error(
+          "alerts.enqueue.failed",
+          {
+            tenantId: input.tenantId,
+            organizationId: input.organizationId,
+            workspaceId: input.workspaceId,
+          },
+          error,
+          {
+            eventType: input.eventType,
+            dedupeKey: input.dedupeKey,
+          },
+        );
+      });
+  }
+
   private buildDeferredEvent(
     event: IncomingEvent,
     reason: string,
@@ -859,6 +909,22 @@ export class WorkflowEngine {
       this.observability.metrics.quotaViolationsTotal.inc({
         scope: "workspace",
         reason: "defer_attempts_exhausted",
+      });
+      this.emitAlert({
+        tenantId: input.event.tenantId,
+        organizationId: input.event.organizationId,
+        workspaceId: input.event.workspaceId,
+        eventType: "scale.quota_violation",
+        severity: "critical",
+        title: "Workflow event dropped after repeated deferrals",
+        message: `Event was deferred ${deferredCount} times and dropped.`,
+        dedupeKey: `scale.quota_violation:defer_attempts_exhausted:${input.event.workspaceId}`,
+        payload: {
+          reason: input.reason,
+          deferredCount,
+          maxDeferAttempts: this.scaleLimits.maxDeferAttempts,
+          workflowId: input.workflowRecord?.id,
+        },
       });
       await this.runRepository.appendEventLog({
         tenantId: input.event.tenantId,
@@ -962,6 +1028,23 @@ export class WorkflowEngine {
         scope: "workspace",
         reason: "queued_jobs",
       });
+      this.emitAlert({
+        tenantId: event.tenantId,
+        organizationId: event.organizationId,
+        workspaceId: event.workspaceId,
+        eventType: "scale.quota_violation",
+        severity: "critical",
+        title: "Workspace queued-job quota exceeded",
+        message: `Queued jobs reached ${queuedJobs}/${this.scaleLimits.maxQueuedJobsPerWorkspace}. Incoming events are being rejected.`,
+        dedupeKey: `scale.quota_violation:queued_jobs:${event.workspaceId}`,
+        payload: {
+          reason: "queued_jobs",
+          queuedJobs,
+          maxQueuedJobs: this.scaleLimits.maxQueuedJobsPerWorkspace,
+          pendingRetries,
+          workspaceBacklog,
+        },
+      });
       await this.runRepository.appendEventLog({
         tenantId: event.tenantId,
         organizationId: event.organizationId,
@@ -986,6 +1069,23 @@ export class WorkflowEngine {
       this.scaleLimits.maxQueuedJobsPerWorkspace *
       this.scaleLimits.queueBackpressureWarningThreshold;
     if (queuedJobs >= warningThreshold) {
+      this.emitAlert({
+        tenantId: event.tenantId,
+        organizationId: event.organizationId,
+        workspaceId: event.workspaceId,
+        eventType: "signal.queue_lag",
+        severity: "warn",
+        title: "Queue backlog warning",
+        message: `Workspace queue backlog is elevated (${queuedJobs} queued jobs).`,
+        dedupeKey: `signal.queue_lag:backpressure:${event.workspaceId}`,
+        payload: {
+          queuedJobs,
+          warningThreshold,
+          maxQueuedJobs: this.scaleLimits.maxQueuedJobsPerWorkspace,
+          pendingRetries,
+          workspaceBacklog,
+        },
+      });
       this.observability.logger.warn(
         "workflow.queue.backpressure_warning",
         {
@@ -1079,6 +1179,20 @@ export class WorkflowEngine {
           scope: "workspace",
           reason: admission.reason,
         });
+        this.emitAlert({
+          tenantId: event.tenantId,
+          organizationId: event.organizationId,
+          workspaceId: event.workspaceId,
+          eventType: "scale.quota_violation",
+          severity: "warn",
+          title: "Workflow execution deferred by scale controls",
+          message: admission.message,
+          dedupeKey: `scale.quota_violation:${admission.reason}:${event.workspaceId}`,
+          payload: {
+            reason: admission.reason,
+            workflowId: workflowRecord.id,
+          },
+        });
         await this.deferIncomingEvent({
           event,
           workflowRecord,
@@ -1129,6 +1243,23 @@ export class WorkflowEngine {
       maxAttempts: run.max_attempts || 1,
       lastError: input.message,
       deadLetteredAt: null,
+    });
+    this.emitAlert({
+      tenantId: input.scheduledWait.tenant_id,
+      organizationId: input.scheduledWait.organization_id,
+      workspaceId: input.scheduledWait.workspace_id,
+      eventType: "workflow.failed.non_retryable",
+      severity: "critical",
+      title: "Workflow failed with non-retryable error",
+      message: `Run ${run.id} failed during delay resume. ${input.message}`,
+      dedupeKey: `workflow.failed.non_retryable:${run.id}:scheduled_wait`,
+      payload: {
+        runId: run.id,
+        workflowId: input.scheduledWait.workflow_id,
+        stepId: input.scheduledWait.step_id,
+        stepPath: input.scheduledWait.step_path,
+        classification: "invalid_config",
+      },
     });
   }
 
@@ -1782,6 +1913,20 @@ export class WorkflowEngine {
       this.observability.metrics.quotaViolationsTotal.inc({
         scope: "workspace",
         reason: admission.reason,
+      });
+      this.emitAlert({
+        tenantId: event.tenantId,
+        organizationId: event.organizationId,
+        workspaceId: event.workspaceId,
+        eventType: "scale.quota_violation",
+        severity: "warn",
+        title: "Workflow execution deferred by scale controls",
+        message: admission.message,
+        dedupeKey: `scale.quota_violation:${admission.reason}:${event.workspaceId}`,
+        payload: {
+          reason: admission.reason,
+          workflowId: workflowRecord.id,
+        },
       });
       await this.deferIncomingEvent({
         event,
@@ -2442,6 +2587,23 @@ export class WorkflowEngine {
           adapter_key: step.adapter,
           reason: adapterPermit.reason,
         });
+        this.emitAlert({
+          tenantId: state.triggerEvent.tenantId,
+          organizationId: state.triggerEvent.organizationId,
+          workspaceId: state.triggerEvent.workspaceId,
+          eventType: "scale.throttling_sustained",
+          severity: "warn",
+          title: "Adapter throttling detected",
+          message: adapterPermit.message,
+          dedupeKey: `scale.throttling_sustained:${state.triggerEvent.workspaceId}:${step.adapter}:${adapterPermit.reason}`,
+          payload: {
+            adapter: step.adapter,
+            action: step.action,
+            reason: adapterPermit.reason,
+            stepId: step.id,
+            stepPath,
+          },
+        });
         await this.appendRunLog(state, "workflow.step.throttled", {
           stepId: step.id,
           stepPath,
@@ -2777,6 +2939,46 @@ export class WorkflowEngine {
         deadLetteredAt: status === "dead_lettered" ? new Date().toISOString() : null,
       });
       this.observeRunCompletion(state, status);
+      if (status === "dead_lettered") {
+        this.emitAlert({
+          tenantId: state.triggerEvent.tenantId,
+          organizationId: state.triggerEvent.organizationId,
+          workspaceId: state.triggerEvent.workspaceId,
+          eventType: "workflow.dead_lettered",
+          severity: "critical",
+          title: "Workflow moved to dead-letter state",
+          message: `Run ${state.run.id} dead-lettered at step ${step.id}. ${failure.message}`,
+          dedupeKey: `workflow.dead_lettered:${state.run.id}`,
+          payload: {
+            runId: state.run.id,
+            workflowId: state.workflowRecord.id,
+            stepId: step.id,
+            stepPath,
+            classification: failure.classification,
+            attempt,
+            maxAttempts: retryPolicy.maxAttempts,
+          },
+        });
+      } else if (!failure.retryable) {
+        this.emitAlert({
+          tenantId: state.triggerEvent.tenantId,
+          organizationId: state.triggerEvent.organizationId,
+          workspaceId: state.triggerEvent.workspaceId,
+          eventType: "workflow.failed.non_retryable",
+          severity: "critical",
+          title: "Workflow failed with non-retryable error",
+          message: `Run ${state.run.id} failed at step ${step.id}. ${failure.message}`,
+          dedupeKey: `workflow.failed.non_retryable:${state.run.id}`,
+          payload: {
+            runId: state.run.id,
+            workflowId: state.workflowRecord.id,
+            stepId: step.id,
+            stepPath,
+            classification: failure.classification,
+            retryable: failure.retryable,
+          },
+        });
+      }
       return {
         halted: true,
       };
@@ -2947,6 +3149,24 @@ export class WorkflowEngine {
           scope: "workspace",
           reason: "scheduled_waits",
         });
+        this.emitAlert({
+          tenantId: state.triggerEvent.tenantId,
+          organizationId: state.triggerEvent.organizationId,
+          workspaceId: state.triggerEvent.workspaceId,
+          eventType: "scale.quota_violation",
+          severity: "critical",
+          title: "Scheduled-wait quota exceeded",
+          message,
+          dedupeKey: `scale.quota_violation:scheduled_waits:${state.triggerEvent.workspaceId}`,
+          payload: {
+            runId: state.run.id,
+            workflowId: state.workflowRecord.id,
+            stepId: step.id,
+            stepPath,
+            pendingScheduledWaits,
+            maxScheduledWaits: this.scaleLimits.maxScheduledWaitsPerWorkspace,
+          },
+        });
         await this.appendRunLog(state, "workflow.delay.rejected", {
           stepId: step.id,
           stepPath,
@@ -2972,6 +3192,23 @@ export class WorkflowEngine {
           deadLetteredAt: null,
         });
         this.observeRunCompletion(state, "failed");
+        this.emitAlert({
+          tenantId: state.triggerEvent.tenantId,
+          organizationId: state.triggerEvent.organizationId,
+          workspaceId: state.triggerEvent.workspaceId,
+          eventType: "workflow.failed.non_retryable",
+          severity: "critical",
+          title: "Workflow failed with non-retryable error",
+          message: `Run ${state.run.id} failed at delay step ${step.id}. ${message}`,
+          dedupeKey: `workflow.failed.non_retryable:${state.run.id}:delay`,
+          payload: {
+            runId: state.run.id,
+            workflowId: state.workflowRecord.id,
+            stepId: step.id,
+            stepPath,
+            classification: "invalid_config",
+          },
+        });
         return {
           halted: true,
         };
@@ -3368,6 +3605,22 @@ export class WorkflowEngine {
         deadLetteredAt: null,
       });
       this.observeRunCompletion(state, "failed");
+      this.emitAlert({
+        tenantId: state.triggerEvent.tenantId,
+        organizationId: state.triggerEvent.organizationId,
+        workspaceId: state.triggerEvent.workspaceId,
+        eventType: "workflow.failed.non_retryable",
+        severity: "critical",
+        title: "Workflow failed with non-retryable error",
+        message: `Run ${state.run.id} failed to resume. ${message}`,
+        dedupeKey: `workflow.failed.non_retryable:${state.run.id}:resume`,
+        payload: {
+          runId: state.run.id,
+          workflowId: state.workflowRecord.id,
+          stepPath: mutableState.resume.targetPath,
+          classification: "invalid_config",
+        },
+      });
       return;
     }
 

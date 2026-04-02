@@ -313,6 +313,141 @@ export type WorkspaceUsageResponse = {
   };
 };
 
+export type RetentionPolicy = {
+  workflowRunsDays: number;
+  eventLogsDays: number;
+  retryRecordsDays: number;
+  scheduledWaitsDays: number;
+  alertLogsDays: number;
+  auditLogsDays: number;
+};
+
+export type RetentionPolicySummary = {
+  policy: RetentionPolicy;
+  cleanupIntervalSeconds: number;
+  cleanupBatchSize: number;
+  maxBatchesPerDomain: number;
+  warnings: string[];
+};
+
+export type RetentionDomainStatus = {
+  domain:
+    | "workflow_runs"
+    | "event_logs"
+    | "retry_records"
+    | "scheduled_waits"
+    | "alert_logs"
+    | "audit_logs";
+  status: "success" | "failed";
+  retentionDays: number;
+  cutoffAt: string;
+  batchSize: number;
+  batches: number;
+  deletedRecords: number;
+  durationMs: number;
+  errorMessage: string | null;
+  startedAt: string;
+  finishedAt: string;
+};
+
+export type RetentionStatusSummary = {
+  running: boolean;
+  lastRunAt: string | null;
+  nextRunAt: string | null;
+  lastCycle: {
+    startedAt: string;
+    finishedAt: string;
+    domains: RetentionDomainStatus[];
+  } | null;
+  domains: RetentionDomainStatus[];
+};
+
+export type AlertSeverity = "warn" | "critical";
+
+export type AlertEventType =
+  | "workflow.dead_lettered"
+  | "workflow.failed.non_retryable"
+  | "signal.failure_rate"
+  | "signal.dead_letter_rate"
+  | "signal.queue_lag"
+  | "signal.credential_validation_failures"
+  | "scale.quota_violation"
+  | "scale.throttling_sustained"
+  | "alert.test";
+
+export type AlertConfigPublicView = {
+  enabled: boolean;
+  eventTypes: string[];
+  severities: AlertSeverity[];
+  cooldownSeconds: number;
+  channels: {
+    slack: {
+      enabled: boolean;
+      hasWebhookUrl: boolean;
+    };
+    email: {
+      enabled: boolean;
+      recipients: string[];
+      from: string | null;
+      subjectPrefix: string | null;
+    };
+    webhook: {
+      enabled: boolean;
+      method: "POST" | "PUT";
+      headers: Record<string, string>;
+      hasWebhookUrl: boolean;
+      hasAuthHeader: boolean;
+    };
+  };
+  updatedAt: string | null;
+  createdAt: string | null;
+  lastDeliveryStatus: string | null;
+  lastDeliveryAt: string | null;
+  lastTestedAt: string | null;
+};
+
+export type AlertConfigInput = {
+  enabled: boolean;
+  eventTypes: string[];
+  severities: AlertSeverity[];
+  cooldownSeconds: number;
+  channels: {
+    slack?: {
+      enabled?: boolean;
+    };
+    email?: {
+      enabled?: boolean;
+      recipients?: string[];
+      from?: string;
+      subjectPrefix?: string;
+    };
+    webhook?: {
+      enabled?: boolean;
+      method?: "POST" | "PUT";
+      headers?: Record<string, string>;
+    };
+  };
+  secrets?: {
+    slackWebhookUrl?: string | null;
+    webhookUrl?: string | null;
+    webhookAuthHeader?: string | null;
+  };
+};
+
+export type AlertDeliveryLogRecord = {
+  id: string;
+  dispatchId: string | null;
+  eventType: string;
+  severity: string;
+  channel: string;
+  status: "sent" | "failed" | "deduped";
+  attemptCount: number;
+  errorMessage: string | null;
+  responseCode: number | null;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+};
+
 type LoginInput = {
   email: string;
   password: string;
@@ -662,4 +797,43 @@ export async function getWorkspaceUsage(input: {
     params: input,
   });
   return response.data as WorkspaceUsageResponse;
+}
+
+export async function getRetentionPolicy(): Promise<RetentionPolicySummary> {
+  const response = await apiClient().get("/retention");
+  return response.data.policy as RetentionPolicySummary;
+}
+
+export async function getRetentionStatus(): Promise<RetentionStatusSummary> {
+  const response = await apiClient().get("/retention/status");
+  return response.data.status as RetentionStatusSummary;
+}
+
+export async function getAlertConfig(): Promise<{
+  config: AlertConfigPublicView;
+  deliveryLogs: AlertDeliveryLogRecord[];
+}> {
+  const response = await apiClient().get("/alerts/config");
+  return {
+    config: response.data.config,
+    deliveryLogs: response.data.deliveryLogs || [],
+  };
+}
+
+export async function updateAlertConfig(
+  config: AlertConfigInput,
+): Promise<AlertConfigPublicView> {
+  const response = await apiClient().put("/alerts/config", config);
+  return response.data.config;
+}
+
+export async function sendTestAlert(input: {
+  message?: string;
+  severity?: AlertSeverity;
+} = {}): Promise<{
+  queued: boolean;
+  deduped: boolean;
+}> {
+  const response = await apiClient().post("/alerts/test", input);
+  return response.data;
 }

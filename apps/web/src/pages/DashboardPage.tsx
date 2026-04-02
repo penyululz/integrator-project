@@ -1,14 +1,19 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
+  getAuthSession,
   getWorkspaceQuotas,
   getWorkspaceUsage,
+  getRetentionPolicy,
+  getRetentionStatus,
   getAdapterAnalytics,
   getAnalyticsOverview,
   getWorkflowAnalytics,
   type AdapterAnalyticsRow,
   type AnalyticsAlertSignal,
   type AnalyticsOverview,
+  type RetentionPolicySummary,
+  type RetentionStatusSummary,
   type WorkspaceQuotaResponse,
   type WorkspaceUsageResponse,
   type WorkflowAnalyticsRow,
@@ -25,6 +30,12 @@ import {
 } from "./dashboard-helpers";
 
 export function DashboardPage() {
+  const session = getAuthSession();
+  const isOperator =
+    session?.scope.orgRole === "owner" ||
+    session?.scope.orgRole === "admin" ||
+    session?.scope.workspaceRole === "owner" ||
+    session?.scope.workspaceRole === "admin";
   const [window, setWindow] = useState<DashboardWindow>("24h");
   const [overview, setOverview] = useState<AnalyticsOverview | null>(null);
   const [alerts, setAlerts] = useState<AnalyticsAlertSignal[]>([]);
@@ -34,6 +45,12 @@ export function DashboardPage() {
     null,
   );
   const [usageSnapshot, setUsageSnapshot] = useState<WorkspaceUsageResponse | null>(
+    null,
+  );
+  const [retentionPolicy, setRetentionPolicy] = useState<RetentionPolicySummary | null>(
+    null,
+  );
+  const [retentionStatus, setRetentionStatus] = useState<RetentionStatusSummary | null>(
     null,
   );
   const [loading, setLoading] = useState(false);
@@ -61,8 +78,15 @@ export function DashboardPage() {
     setError(null);
     try {
       const filters = buildWindowFilter(selectedWindow);
-      const [overviewPayload, workflowPayload, adapterPayload, quotaPayload, usagePayload] =
-        await Promise.all([
+      const [
+        overviewPayload,
+        workflowPayload,
+        adapterPayload,
+        quotaPayload,
+        usagePayload,
+        retentionPolicyPayload,
+        retentionStatusPayload,
+      ] = await Promise.all([
         getAnalyticsOverview(filters),
         getWorkflowAnalytics({
           ...filters,
@@ -74,6 +98,8 @@ export function DashboardPage() {
         }),
         getWorkspaceQuotas(),
         getWorkspaceUsage(filters),
+        isOperator ? getRetentionPolicy() : Promise.resolve(null),
+        isOperator ? getRetentionStatus() : Promise.resolve(null),
       ]);
       setOverview(overviewPayload.overview);
       setAlerts(overviewPayload.alerts);
@@ -81,6 +107,8 @@ export function DashboardPage() {
       setAdapterRows(adapterPayload);
       setQuotaSnapshot(quotaPayload);
       setUsageSnapshot(usagePayload);
+      setRetentionPolicy(retentionPolicyPayload);
+      setRetentionStatus(retentionStatusPayload);
     } catch (loadError) {
       setError((loadError as Error).message || "Failed to load analytics.");
     } finally {
@@ -181,6 +209,94 @@ export function DashboardPage() {
             </section>
           ) : null}
 
+          {isOperator && retentionPolicy ? (
+            <section
+              style={{
+                border: "1px solid #d0d0d0",
+                borderRadius: 10,
+                padding: 12,
+                display: "grid",
+                gap: 8,
+              }}
+            >
+              <h3 style={{ marginTop: 0 }}>Retention and Cleanup</h3>
+              <div style={{ fontSize: 13, color: "#444" }}>
+                Interval: every {retentionPolicy.cleanupIntervalSeconds}s | Batch size:{" "}
+                {retentionPolicy.cleanupBatchSize} | Max batches/domain:{" "}
+                {retentionPolicy.maxBatchesPerDomain}
+              </div>
+              <div style={{ display: "grid", gap: 4 }}>
+                <div>
+                  <strong>Workflow runs:</strong> {retentionPolicy.policy.workflowRunsDays} days
+                </div>
+                <div>
+                  <strong>Event logs:</strong> {retentionPolicy.policy.eventLogsDays} days
+                </div>
+                <div>
+                  <strong>Retry records:</strong> {retentionPolicy.policy.retryRecordsDays} days
+                </div>
+                <div>
+                  <strong>Scheduled waits:</strong> {retentionPolicy.policy.scheduledWaitsDays} days
+                </div>
+                <div>
+                  <strong>Alert logs:</strong> {retentionPolicy.policy.alertLogsDays} days
+                </div>
+                <div>
+                  <strong>Audit logs:</strong> {retentionPolicy.policy.auditLogsDays} days
+                </div>
+              </div>
+              {retentionPolicy.warnings.length > 0 ? (
+                <div style={{ color: "#8a5100" }}>
+                  <strong>Warnings:</strong>
+                  <ul style={{ marginTop: 4 }}>
+                    {retentionPolicy.warnings.map((warning) => (
+                      <li key={warning}>{warning}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+              {retentionStatus ? (
+                <div style={{ borderTop: "1px solid #ececec", paddingTop: 8 }}>
+                  <div>
+                    <strong>Running:</strong> {retentionStatus.running ? "yes" : "no"}
+                  </div>
+                  <div>
+                    <strong>Last run:</strong> {retentionStatus.lastRunAt || "never"}
+                  </div>
+                  <div>
+                    <strong>Next run:</strong> {retentionStatus.nextRunAt || "n/a"}
+                  </div>
+                  {retentionStatus.domains.length > 0 ? (
+                    <table style={{ width: "100%", borderCollapse: "collapse", marginTop: 8 }}>
+                      <thead>
+                        <tr>
+                          <th align="left">Domain</th>
+                          <th align="left">Status</th>
+                          <th align="left">Deleted</th>
+                          <th align="left">Batches</th>
+                          <th align="left">Finished</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {retentionStatus.domains.map((domain) => (
+                          <tr key={domain.domain} style={{ borderTop: "1px solid #ececec" }}>
+                            <td>{domain.domain}</td>
+                            <td>{domain.status}</td>
+                            <td>{domain.deletedRecords}</td>
+                            <td>{domain.batches}</td>
+                            <td>{domain.finishedAt}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  ) : (
+                    <p style={{ marginBottom: 0 }}>No cleanup history yet.</p>
+                  )}
+                </div>
+              ) : null}
+            </section>
+          ) : null}
+
           {overview.totalRuns === 0 ? (
             <section
               style={{
@@ -276,6 +392,9 @@ export function DashboardPage() {
                 </li>
               ))}
             </ul>
+            <p style={{ marginBottom: 0 }}>
+              Configure outbound alert delivery in <Link to="/alerts">Alert Settings</Link>.
+            </p>
           </section>
 
           <section

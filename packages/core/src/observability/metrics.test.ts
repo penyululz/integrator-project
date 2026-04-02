@@ -54,6 +54,39 @@ describe("PlatformMetrics", () => {
       queue: "integration:events",
       reason: "deprioritized_workspace",
     });
+    metrics.alertsSentTotal.inc({
+      event_type: "workflow.dead_lettered",
+      severity: "critical",
+    });
+    metrics.alertsFailedTotal.inc({
+      event_type: "signal.failure_rate",
+      severity: "warn",
+    });
+    metrics.alertsDedupedTotal.inc({
+      event_type: "signal.queue_lag",
+      severity: "warn",
+    });
+    metrics.alertsByChannelTotal.inc({
+      channel: "slack",
+      status: "sent",
+    });
+    metrics.alertsByChannelTotal.inc({
+      channel: "email",
+      status: "failed",
+    });
+    metrics.cleanupRunsTotal.inc({
+      domain: "workflow_runs",
+      status: "success",
+    });
+    metrics.cleanupDeletedRecordsTotal.inc(
+      {
+        domain: "event_logs",
+      },
+      42,
+    );
+    metrics.cleanupFailuresTotal.inc({
+      domain: "audit_logs",
+    });
 
     const output = metrics.render();
     expect(output).toContain(`workflow_runs_total{workflow_key="wf_observe"} 1`);
@@ -79,6 +112,21 @@ describe("PlatformMetrics", () => {
     expect(output).toContain(
       `quota_violations_total{scope="workspace",reason="queued_jobs"} 1`,
     );
+    expect(output).toContain(
+      `alerts_sent_total{event_type="workflow.dead_lettered",severity="critical"} 1`,
+    );
+    expect(output).toContain(
+      `alerts_failed_total{event_type="signal.failure_rate",severity="warn"} 1`,
+    );
+    expect(output).toContain(
+      `alerts_deduped_total{event_type="signal.queue_lag",severity="warn"} 1`,
+    );
+    expect(output).toContain(`alerts_by_channel_total{channel="slack",status="sent"} 1`);
+    expect(output).toContain(
+      `cleanup_runs_total{domain="workflow_runs",status="success"} 1`,
+    );
+    expect(output).toContain(`cleanup_deleted_records_total{domain="event_logs"} 42`);
+    expect(output).toContain(`cleanup_failures_total{domain="audit_logs"} 1`);
     expect(output).toContain(`credential_validation_failures_total`);
   });
 
@@ -114,6 +162,10 @@ describe("PlatformMetrics", () => {
       { queue: "integration:events" },
       42,
     );
+    metrics.cleanupDurationSeconds.observe(
+      { domain: "workflow_runs", status: "success" },
+      0.75,
+    );
 
     const output = metrics.render();
     expect(output).toContain(
@@ -131,6 +183,9 @@ describe("PlatformMetrics", () => {
     );
     expect(output).toContain(
       `workspace_queue_backlog_items_count{queue="integration:events"} 1`,
+    );
+    expect(output).toContain(
+      `cleanup_duration_seconds_count{domain="workflow_runs",status="success"} 1`,
     );
   });
 });

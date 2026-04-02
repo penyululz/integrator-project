@@ -12,10 +12,27 @@ async function runWorker(): Promise<void> {
       if (handledScheduledDelay) {
         continue;
       }
+
+      const handledAlertDispatch = runtime.alertDeliveryService
+        ? await runtime.alertDeliveryService.processNextDispatch()
+        : false;
+      if (handledAlertDispatch) {
+        continue;
+      }
+
       const handledRetry = await runtime.workflowEngine.processNextRetry();
       if (handledRetry) {
         continue;
       }
+
+      if (runtime.alertDeliveryService) {
+        await runtime.alertDeliveryService.evaluateAndQueueSignalAlerts();
+      }
+
+      if (runtime.retentionCleanupService) {
+        await runtime.retentionCleanupService.runIfDue();
+      }
+
       await runtime.workflowEngine.processNextEvent(2);
     } catch (error) {
       console.error("[worker] process error", error);

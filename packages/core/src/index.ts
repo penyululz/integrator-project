@@ -6,6 +6,8 @@ import { IntegrationRepository } from "./repositories/integration-repository";
 import { CredentialRepository } from "./repositories/credential-repository";
 import { WorkflowRepository } from "./repositories/workflow-repository";
 import { RunRepository } from "./repositories/run-repository";
+import { AlertRepository } from "./repositories/alert-repository";
+import { RetentionRepository } from "./repositories/retention-repository";
 import { PluginLoader } from "./engine/plugin-loader";
 import { EventQueue } from "./engine/event-queue";
 import { WorkflowEngine } from "./engine/workflow-engine";
@@ -16,6 +18,8 @@ import { AuthRepository } from "./repositories/auth-repository";
 import { validateWorkflowDefinition } from "./workflow/schema";
 import { getCoreEnv } from "./db/env";
 import { parseEnabledAdapterSetFromEnv } from "./engine/plugin-loader";
+import { AlertDeliveryService } from "./alerts/alert-delivery-service";
+import { RetentionCleanupService } from "./retention/cleanup-service";
 import {
   createObservabilityRuntime,
   type ObservabilityRuntime,
@@ -27,6 +31,8 @@ export type CoreRuntime = {
   eventQueue: EventQueue;
   workflowEngine: WorkflowEngine;
   observability: ObservabilityRuntime;
+  alertDeliveryService?: AlertDeliveryService;
+  retentionCleanupService?: RetentionCleanupService;
   oauthService: OAuthService;
   authService: AuthService;
   credentialResolver: CredentialResolver;
@@ -37,6 +43,8 @@ export type CoreRuntime = {
     workflowRepository: WorkflowRepository;
     runRepository: RunRepository;
     authRepository: AuthRepository;
+    alertRepository?: AlertRepository;
+    retentionRepository?: RetentionRepository;
   };
   close: () => Promise<void>;
 };
@@ -54,6 +62,25 @@ export {
   evaluateAlertSignals,
   getDefaultAlertThresholds,
 } from "./observability/alerting";
+export { AlertDeliveryService } from "./alerts/alert-delivery-service";
+export { RetentionCleanupService } from "./retention/cleanup-service";
+export { getRetentionConfigFromEnv } from "./retention/config";
+export type {
+  AlertConfigInput,
+  AlertConfigPublicView,
+  AlertDeliveryLogItem,
+  AlertEventType,
+  AlertSeverity,
+} from "./alerts/types";
+export type {
+  RetentionCleanupConfig,
+  RetentionCleanupCycleSummary,
+  RetentionDomain,
+  RetentionDomainResult,
+  RetentionPolicy,
+  RetentionPolicySummary,
+  RetentionStatusSummary,
+} from "./retention/types";
 export type {
   AlertSignal,
   AlertThresholds,
@@ -108,6 +135,8 @@ export async function createCoreRuntime(): Promise<CoreRuntime> {
   const workflowRepository = new WorkflowRepository(pool);
   const runRepository = new RunRepository(pool);
   const authRepository = new AuthRepository(pool);
+  const alertRepository = new AlertRepository(pool);
+  const retentionRepository = new RetentionRepository(pool);
 
   const pluginLoader = new PluginLoader();
   const discovered = await pluginLoader.loadFromManifests({
@@ -165,6 +194,16 @@ export async function createCoreRuntime(): Promise<CoreRuntime> {
 
   const eventQueue = new EventQueue(redis, "integration:events", observability);
   const credentialResolver = new CredentialResolver(credentialRepository);
+  const alertDeliveryService = new AlertDeliveryService(
+    alertRepository,
+    runRepository,
+    pluginLoader,
+    observability,
+  );
+  const retentionCleanupService = new RetentionCleanupService(
+    retentionRepository,
+    observability,
+  );
   const workflowEngine = new WorkflowEngine(
     pluginLoader,
     eventQueue,
@@ -172,6 +211,9 @@ export async function createCoreRuntime(): Promise<CoreRuntime> {
     runRepository,
     credentialResolver,
     observability,
+    {
+      alertDeliveryService,
+    },
   );
   const oauthService = new OAuthService(credentialRepository);
   const authService = new AuthService(authRepository, env);
@@ -181,6 +223,8 @@ export async function createCoreRuntime(): Promise<CoreRuntime> {
     eventQueue,
     workflowEngine,
     observability,
+    alertDeliveryService,
+    retentionCleanupService,
     oauthService,
     authService,
     credentialResolver,
@@ -191,6 +235,8 @@ export async function createCoreRuntime(): Promise<CoreRuntime> {
       workflowRepository,
       runRepository,
       authRepository,
+      alertRepository,
+      retentionRepository,
     },
     close: async () => {
       await closeRedisClient();
