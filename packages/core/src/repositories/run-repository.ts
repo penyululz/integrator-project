@@ -165,6 +165,44 @@ export type RunCancellationOutcome =
   | "already_cancelled"
   | "already_terminal";
 
+export type AuditLogRecord = {
+  id: string;
+  tenant_id: string;
+  organization_id: string | null;
+  workspace_id: string | null;
+  actor_user_id: string | null;
+  action: string;
+  entity_type: string | null;
+  entity_id: string | null;
+  metadata_json: Record<string, unknown>;
+  created_at: string;
+  actor_email?: string | null;
+  actor_full_name?: string | null;
+  actor_role?: string | null;
+};
+
+export type AuditLogFilter = {
+  tenantId: string;
+  organizationId: string;
+  workspaceId: string;
+  actorUserId?: string;
+  action?: string;
+  targetType?: string;
+  targetId?: string;
+  from?: string;
+  to?: string;
+  limit?: number;
+  page?: number;
+};
+
+export type AuditLogListResult = {
+  logs: AuditLogRecord[];
+  total: number;
+  page: number;
+  limit: number;
+  hasMore: boolean;
+};
+
 function toIsoIfPossible(value: unknown): string | null {
   if (typeof value === "string") {
     return value;
@@ -250,6 +288,52 @@ export class RunRepository {
     if (input.adapterKey) {
       values.push(input.adapterKey);
       predicates.push(`payload_json->>'adapter' = $${values.length}`);
+    }
+
+    return {
+      predicates,
+      values,
+    };
+  }
+
+  private buildAuditFilter(input: AuditLogFilter): {
+    predicates: string[];
+    values: unknown[];
+  } {
+    const predicates = [
+      "al.tenant_id = $1",
+      "al.organization_id = $2",
+      "al.workspace_id = $3",
+    ];
+    const values: unknown[] = [
+      input.tenantId,
+      input.organizationId,
+      input.workspaceId,
+    ];
+
+    if (input.actorUserId) {
+      values.push(input.actorUserId);
+      predicates.push(`al.actor_user_id = $${values.length}`);
+    }
+    if (input.action) {
+      values.push(input.action);
+      predicates.push(`al.action = $${values.length}`);
+    }
+    if (input.targetType) {
+      values.push(input.targetType);
+      predicates.push(`al.entity_type = $${values.length}`);
+    }
+    if (input.targetId) {
+      values.push(input.targetId);
+      predicates.push(`al.entity_id::text = $${values.length}`);
+    }
+    if (input.from) {
+      values.push(input.from);
+      predicates.push(`al.created_at >= $${values.length}`);
+    }
+    if (input.to) {
+      values.push(input.to);
+      predicates.push(`al.created_at <= $${values.length}`);
     }
 
     return {
@@ -1758,6 +1842,108 @@ export class RunRepository {
       actionFailures: Number(row.action_failures || 0),
       avgActionDurationMs: Number(row.avg_action_duration_ms || 0),
     }));
+  }
+
+  async listAuditLogs(input: AuditLogFilter): Promise<AuditLogListResult> {
+    const auditFilter = this.buildAuditFilter(input);
+    const limit = Math.max(1, Math.min(input.limit || 25, 100));
+    const page = Math.max(1, input.page || 1);
+    const offset = (page - 1) * limit;
+
+    const countResult = await this.pool.query<{ total: string }>(
+      `SELECT COUNT(*)::bigint AS total
+       FROM audit_logs al
+       WHERE ${auditFilter.predicates.join("\n         AND ")}`,
+      auditFilter.values,
+    );
+
+    const values = [...auditFilter.values, limit, offset];
+    const limitPosition = values.length - 1;
+    const offsetPosition = values.length;
+
+    const result = await this.pool.query<AuditLogRecord>(
+      `SELECT
+         al.*,
+         u.email AS actor_email,
+         u.full_name AS actor_full_name,
+         COALESCE(wm.role, om.role, u.role)::text AS actor_role
+       FROM audit_logs al
+       LEFT JOIN users u
+         ON u.id = al.actor_user_id
+       LEFT JOIN workspace_memberships wm
+         ON wm.user_id = al.actor_user_id
+        AND wm.workspace_id = al.workspace_id
+        AND wm.status = 'active'
+       LEFT JOIN organization_memberships om
+         ON om.user_id = al.actor_user_id
+        AND om.organization_id = al.organization_id
+        AND om.status = 'active'
+       WHERE ${auditFilter.predicates.join("\n         AND ")}
+       ORDER BY al.created_at DESC, al.id DESC
+       LIMIT $${limitPosition}
+       OFFSET $${offsetPosition}`,
+      values,
+    );
+
+    const logs = result.rows.map((row) => ({
+      ...row,
+      metadata_json: redactSensitiveRecord((row.metadata_json || {}) as Record<string, unknown>),
+    }));
+    const total = Number(countResult.rows[0]?.total || 0);
+
+    return {
+      logs,
+      total,
+      page,
+      limit,
+      hasMore: page * limit < total,
+    };
+  }
+
+  async findAuditLogByIdScoped(input: {
+    auditLogId: string;
+    tenantId: string;
+    organizationId: string;
+    workspaceId: string;
+  }): Promise<AuditLogRecord | null> {
+    const result = await this.pool.query<AuditLogRecord>(
+      `SELECT
+         al.*,
+         u.email AS actor_email,
+         u.full_name AS actor_full_name,
+         COALESCE(wm.role, om.role, u.role)::text AS actor_role
+       FROM audit_logs al
+       LEFT JOIN users u
+         ON u.id = al.actor_user_id
+       LEFT JOIN workspace_memberships wm
+         ON wm.user_id = al.actor_user_id
+        AND wm.workspace_id = al.workspace_id
+        AND wm.status = 'active'
+       LEFT JOIN organization_memberships om
+         ON om.user_id = al.actor_user_id
+        AND om.organization_id = al.organization_id
+        AND om.status = 'active'
+       WHERE al.id::text = $1
+         AND al.tenant_id = $2
+         AND al.organization_id = $3
+         AND al.workspace_id = $4
+       LIMIT 1`,
+      [
+        input.auditLogId,
+        input.tenantId,
+        input.organizationId,
+        input.workspaceId,
+      ],
+    );
+
+    const row = result.rows[0];
+    if (!row) {
+      return null;
+    }
+    return {
+      ...row,
+      metadata_json: redactSensitiveRecord((row.metadata_json || {}) as Record<string, unknown>),
+    };
   }
 
   async appendAuditLog(input: {

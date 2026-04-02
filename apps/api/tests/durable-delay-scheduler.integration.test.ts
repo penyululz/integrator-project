@@ -165,6 +165,9 @@ async function createDurableDelayRuntime(input: {
   await pool.query(
     fs.readFileSync(migrationPath("008_operator_controls_run_recovery.sql"), "utf8"),
   );
+  await pool.query(
+    fs.readFileSync(migrationPath("009_audit_log_read_indexes.sql"), "utf8"),
+  );
 
   const organization = await pool.query<{ id: string; tenant_id: string }>(
     `INSERT INTO organizations (name, slug)

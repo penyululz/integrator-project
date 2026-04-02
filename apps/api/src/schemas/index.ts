@@ -47,6 +47,35 @@ export const analyticsQuerySchema = z
     }
   });
 
+export const auditLogsQuerySchema = z
+  .object({
+    workspaceId: z.string().min(1).optional(),
+    organizationId: z.string().min(1).optional(),
+    actorUserId: z.string().uuid().optional(),
+    action: z.string().trim().min(1).max(120).optional(),
+    targetType: z.string().trim().min(1).max(120).optional(),
+    targetId: z.string().trim().min(1).max(120).optional(),
+    from: isoDateTimeSchema.optional(),
+    to: isoDateTimeSchema.optional(),
+    page: z.coerce.number().int().min(1).max(100000).optional(),
+    limit: z.coerce.number().int().min(1).max(100).optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (!value.from || !value.to) {
+      return;
+    }
+    const from = Date.parse(value.from);
+    const to = Date.parse(value.to);
+    if (Number.isFinite(from) && Number.isFinite(to) && from > to) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["from"],
+        message: "`from` must be less than or equal to `to`.",
+      });
+    }
+  });
+
 export const loginSchema = z.object({
   email: z.string().email(),
   password: z.string().min(1),

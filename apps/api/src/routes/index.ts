@@ -9,9 +9,11 @@ import {
   validateWorkflowDefinition,
   type CoreRuntime,
 } from "@integration/core";
+import { redactSensitiveRecord } from "@integration/shared";
 import { requireAuth, requireRole } from "../middleware/auth";
 import {
   analyticsQuerySchema,
+  auditLogsQuerySchema,
   createIntegrationSchema,
   createWorkspaceSchema,
   createWorkflowSchema,
@@ -44,6 +46,77 @@ function createHttpError(statusCode: number, message: string): Error & { statusC
   const error = new Error(message) as Error & { statusCode: number };
   error.statusCode = statusCode;
   return error;
+}
+
+function toNullableString(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value : null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function summarizeStateChange(
+  metadata: Record<string, unknown>,
+  direction: "previous" | "new",
+): Record<string, unknown> | null {
+  const prefix = direction === "previous" ? "previous" : "new";
+  const statusKey = `${prefix}Status`;
+  const scheduledForKey = `${prefix}ScheduledFor`;
+  const state: Record<string, unknown> = {};
+
+  if (metadata[statusKey] !== undefined) {
+    state.status = metadata[statusKey];
+  }
+  if (metadata[scheduledForKey] !== undefined) {
+    state.scheduledFor = metadata[scheduledForKey];
+  }
+  if (prefix === "new" && metadata.outcome !== undefined) {
+    state.outcome = metadata.outcome;
+  }
+
+  return Object.keys(state).length > 0 ? state : null;
+}
+
+function mapAuditLogForResponse(entry: {
+  id: string;
+  created_at: string;
+  organization_id: string | null;
+  workspace_id: string | null;
+  actor_user_id: string | null;
+  actor_role?: string | null;
+  actor_email?: string | null;
+  actor_full_name?: string | null;
+  action: string;
+  entity_type: string | null;
+  entity_id: string | null;
+  metadata_json: Record<string, unknown>;
+}) {
+  const rawMetadata = isRecord(entry.metadata_json) ? entry.metadata_json : {};
+  const safeMetadata = redactSensitiveRecord(rawMetadata);
+  const previousStateSummary = summarizeStateChange(safeMetadata, "previous");
+  const newStateSummary = summarizeStateChange(safeMetadata, "new");
+
+  return {
+    id: entry.id,
+    timestamp: entry.created_at,
+    createdAt: entry.created_at,
+    organizationId: entry.organization_id,
+    workspaceId: entry.workspace_id,
+    actorUserId: entry.actor_user_id,
+    actorRole: entry.actor_role || null,
+    actorEmail: entry.actor_email || null,
+    actorName: entry.actor_full_name || null,
+    actionType: entry.action,
+    targetType: entry.entity_type,
+    targetId: entry.entity_id,
+    previousStateSummary,
+    newStateSummary,
+    reason: toNullableString(safeMetadata.reason),
+    note: toNullableString(safeMetadata.note),
+    correlationId: toNullableString(safeMetadata.correlationId),
+    metadata: safeMetadata,
+  };
 }
 
 export function createApiRouter(runtime: CoreRuntime): Router {
@@ -1198,6 +1271,100 @@ export function createApiRouter(runtime: CoreRuntime): Router {
       next(error);
     }
   });
+
+  router.get(
+    "/audit-logs",
+    requireRole(["owner", "admin"]),
+    async (req, res, next) => {
+      try {
+        const scope = req.auth!.scope;
+        const query = auditLogsQuerySchema.parse({
+          workspaceId: resolveOptionalQueryParam(
+            req.query.workspaceId as string | string[] | undefined,
+          ),
+          organizationId: resolveOptionalQueryParam(
+            req.query.organizationId as string | string[] | undefined,
+          ),
+          actorUserId: resolveOptionalQueryParam(
+            req.query.actorUserId as string | string[] | undefined,
+          ),
+          action: resolveOptionalQueryParam(
+            req.query.action as string | string[] | undefined,
+          ),
+          targetType: resolveOptionalQueryParam(
+            req.query.targetType as string | string[] | undefined,
+          ),
+          targetId: resolveOptionalQueryParam(
+            req.query.targetId as string | string[] | undefined,
+          ),
+          from: resolveOptionalQueryParam(req.query.from as string | string[] | undefined),
+          to: resolveOptionalQueryParam(req.query.to as string | string[] | undefined),
+          page: resolveOptionalQueryParam(req.query.page as string | string[] | undefined),
+          limit: resolveOptionalQueryParam(req.query.limit as string | string[] | undefined),
+        });
+
+        if (query.organizationId && query.organizationId !== scope.organizationId) {
+          throw createHttpError(403, "Unauthorized.");
+        }
+        if (query.workspaceId && query.workspaceId !== scope.workspaceId) {
+          throw createHttpError(403, "Unauthorized.");
+        }
+
+        const result = await runtime.repositories.runRepository.listAuditLogs({
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+          actorUserId: query.actorUserId,
+          action: query.action,
+          targetType: query.targetType,
+          targetId: query.targetId,
+          from: query.from,
+          to: query.to,
+          page: query.page,
+          limit: query.limit,
+        });
+
+        res.json({
+          logs: result.logs.map((entry) => mapAuditLogForResponse(entry)),
+          pagination: {
+            page: result.page,
+            limit: result.limit,
+            total: result.total,
+            hasMore: result.hasMore,
+          },
+        });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.get(
+    "/audit-logs/:id",
+    requireRole(["owner", "admin"]),
+    async (req, res, next) => {
+      try {
+        const scope = req.auth!.scope;
+        const auditLogId = resolveRouteParam(req.params.id);
+        const entry = await runtime.repositories.runRepository.findAuditLogByIdScoped({
+          auditLogId,
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+        });
+        if (!entry) {
+          res.status(404).json({ error: "Not found." });
+          return;
+        }
+
+        res.json({
+          log: mapAuditLogForResponse(entry),
+        });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
 
   router.get("/analytics/overview", requireAuth, async (req, res, next) => {
     try {

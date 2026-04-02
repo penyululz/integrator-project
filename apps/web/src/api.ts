@@ -151,6 +151,50 @@ export type EventLogRecord = {
   payload_json: Record<string, unknown>;
 };
 
+export type AuditLogRecord = {
+  id: string;
+  timestamp: string;
+  createdAt: string;
+  organizationId: string | null;
+  workspaceId: string | null;
+  actorUserId: string | null;
+  actorRole: string | null;
+  actorEmail: string | null;
+  actorName: string | null;
+  actionType: string;
+  targetType: string | null;
+  targetId: string | null;
+  previousStateSummary: Record<string, unknown> | null;
+  newStateSummary: Record<string, unknown> | null;
+  reason: string | null;
+  note: string | null;
+  correlationId: string | null;
+  metadata: Record<string, unknown>;
+};
+
+export type AuditLogFilters = {
+  workspaceId?: string;
+  organizationId?: string;
+  actorUserId?: string;
+  action?: string;
+  targetType?: string;
+  targetId?: string;
+  from?: string;
+  to?: string;
+  page?: number;
+  limit?: number;
+};
+
+export type AuditLogListResponse = {
+  logs: AuditLogRecord[];
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    hasMore: boolean;
+  };
+};
+
 export type AnalyticsAlertSignal = {
   key: string;
   severity: "warn" | "critical";
@@ -550,6 +594,28 @@ export async function listLogs(input?: {
     },
   });
   return response.data.logs || [];
+}
+
+export async function listAuditLogs(
+  input: AuditLogFilters = {},
+): Promise<AuditLogListResponse> {
+  const response = await apiClient().get("/audit-logs", {
+    params: input,
+  });
+  return {
+    logs: response.data.logs || [],
+    pagination: response.data.pagination || {
+      page: input.page || 1,
+      limit: input.limit || 25,
+      total: 0,
+      hasMore: false,
+    },
+  };
+}
+
+export async function getAuditLog(auditLogId: string): Promise<AuditLogRecord> {
+  const response = await apiClient().get(`/audit-logs/${auditLogId}`);
+  return response.data.log;
 }
 
 export async function getAnalyticsOverview(input: AnalyticsFilters = {}): Promise<{

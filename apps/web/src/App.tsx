@@ -7,6 +7,7 @@ import { IntegrationsPage } from "./pages/IntegrationsPage";
 import { OnboardingPage } from "./pages/OnboardingPage";
 import { WorkflowsPage } from "./pages/WorkflowsPage";
 import { RunsPage } from "./pages/RunsPage";
+import { AuditLogsPage } from "./pages/AuditLogsPage";
 
 function ProtectedRoute({ children }: { children: JSX.Element }) {
   const session = getAuthSession();
@@ -19,6 +20,11 @@ function ProtectedRoute({ children }: { children: JSX.Element }) {
 export default function App() {
   const [, setSessionVersion] = useState(0);
   const session = getAuthSession();
+  const isOperator =
+    session?.scope.orgRole === "owner" ||
+    session?.scope.orgRole === "admin" ||
+    session?.scope.workspaceRole === "owner" ||
+    session?.scope.workspaceRole === "admin";
 
   async function onLogout() {
     await logout();
@@ -35,6 +41,7 @@ export default function App() {
         <Link to="/integrations">Integrations</Link>
         <Link to="/workflows">Workflows</Link>
         <Link to="/runs">Runs</Link>
+        {isOperator ? <Link to="/audit-logs">Audit</Link> : null}
         {session ? (
           <button type="button" onClick={() => void onLogout()}>
             Logout
@@ -93,6 +100,14 @@ export default function App() {
           element={
             <ProtectedRoute>
               <RunsPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/audit-logs"
+          element={
+            <ProtectedRoute>
+              <AuditLogsPage />
             </ProtectedRoute>
           }
         />

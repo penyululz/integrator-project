@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import {
+  type AuditLogRecord,
   cancelRun,
   cancelWait,
   getAuthSession,
   getRun,
+  listAuditLogs,
   listLogs,
   listRetryJobs,
   listRuns,
@@ -28,8 +30,10 @@ import {
   RUN_EVENT_FILTER_OPTIONS,
   toRunLogHighlights,
 } from "./runs-helpers";
+import { shortId, toAuditActionLabel } from "./audit-helpers";
 
 export function RunsPage() {
+  const [searchParams] = useSearchParams();
   const session = getAuthSession();
   const isOperator =
     session?.scope.orgRole === "owner" ||
@@ -43,12 +47,15 @@ export function RunsPage() {
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [selectedRun, setSelectedRun] = useState<RunRecord | null>(null);
   const [logs, setLogs] = useState<EventLogRecord[]>([]);
+  const [relatedAuditLogs, setRelatedAuditLogs] = useState<AuditLogRecord[]>([]);
   const [eventTypeFilter, setEventTypeFilter] = useState<string>("");
   const [loadingRuns, setLoadingRuns] = useState(false);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const requestedRunId = searchParams.get("runId");
+  const requestedWaitId = searchParams.get("waitId");
 
   const selectedRunRetries = useMemo(() => {
     if (!selectedRunId) {
@@ -135,13 +142,23 @@ export function RunsPage() {
         setSelectedRunId(null);
         setSelectedRun(null);
         setLogs([]);
+        setRelatedAuditLogs([]);
         return;
       }
 
-      const preferredRunId =
-        currentSelectedRunId && nextRuns.some((run) => run.id === currentSelectedRunId)
-          ? currentSelectedRunId
-          : nextRuns[0].id;
+      const runIdFromWait = requestedWaitId
+        ? nextScheduledWaits.find((wait) => wait.id === requestedWaitId)?.workflow_run_id
+        : null;
+      const preferredRunIdCandidate =
+        currentSelectedRunId ||
+        requestedRunId ||
+        runIdFromWait ||
+        nextRuns[0].id;
+      const preferredRunId = nextRuns.some(
+        (run) => run.id === preferredRunIdCandidate,
+      )
+        ? preferredRunIdCandidate
+        : nextRuns[0].id;
       setSelectedRunId(preferredRunId);
     } catch (loadError) {
       setError((loadError as Error).message || "Failed to load runs.");
@@ -155,15 +172,32 @@ export function RunsPage() {
     setError(null);
 
     try {
-      const [run, runLogs] = await Promise.all([
+      const [run, runLogs, auditLogResult] = await Promise.all([
         getRun(runId),
         listLogs({
           runId,
           eventType: selectedEventType || undefined,
         }),
+        isOperator
+          ? listAuditLogs({
+              targetType: "workflow_run",
+              targetId: runId,
+              limit: 25,
+              page: 1,
+            })
+          : Promise.resolve({
+              logs: [] as AuditLogRecord[],
+              pagination: {
+                page: 1,
+                limit: 25,
+                total: 0,
+                hasMore: false,
+              },
+            }),
       ]);
       setSelectedRun(run);
       setLogs(runLogs);
+      setRelatedAuditLogs(auditLogResult.logs);
     } catch (detailError) {
       setError((detailError as Error).message || "Failed to load run detail.");
     } finally {
@@ -321,7 +355,7 @@ export function RunsPage() {
 
   useEffect(() => {
     void loadRuns(selectedRunId);
-  }, []);
+  }, [requestedRunId, requestedWaitId]);
 
   useEffect(() => {
     if (!selectedRunId) {
@@ -511,6 +545,34 @@ export function RunsPage() {
                     Running cancellations are best-effort and applied at safe execution
                     boundaries.
                   </p>
+                </div>
+              ) : null}
+
+              {isOperator ? (
+                <div style={{ border: "1px solid #ececec", borderRadius: 8, padding: 10 }}>
+                  <strong>Operator Audit Trail</strong>
+                  <div style={{ marginTop: 8 }}>
+                    <Link
+                      to={`/audit-logs?targetType=workflow_run&targetId=${encodeURIComponent(selectedRun.id)}`}
+                    >
+                      Open full audit history for this run
+                    </Link>
+                  </div>
+                  {relatedAuditLogs.length === 0 ? (
+                    <p style={{ marginBottom: 0 }}>No operator audit events for this run.</p>
+                  ) : null}
+                  <ul style={{ marginTop: 8 }}>
+                    {relatedAuditLogs.map((entry) => (
+                      <li key={entry.id}>
+                        {entry.timestamp} - {toAuditActionLabel(entry.actionType)} -{" "}
+                        {entry.reason || entry.note || "no note"} (
+                        <Link to={`/audit-logs?targetType=workflow_run&targetId=${selectedRun.id}`}>
+                          audit {shortId(entry.id)}
+                        </Link>
+                        )
+                      </li>
+                    ))}
+                  </ul>
                 </div>
               ) : null}
 
