@@ -1,70 +1,147 @@
-# Integration Platform OSS (v1)
+# Integrator Platform OSS
 
-Self-hostable, plugin-based workflow automation for teams that need reliable integrations with operational visibility.
+Self-hostable, enterprise-oriented AI automation platform for teams that want visual workflow orchestration, governed agent execution, and operational reliability.
 
-## What This Project Is
+## What Integrator Is
 
-This repository contains an open-source integration platform (conceptually similar to Zapier/n8n/Make) built for developers and operators who want:
+Integrator is a TypeScript monorepo product similar in category to Zapier, n8n, and Make, focused on:
 
-- workflow automation across multiple providers
-- multi-tenant boundaries and role-based access
-- retry/dead-letter durability
-- run/audit/alert observability
-- local extensibility through adapter plugins
+- visual automation design with a free-form builder canvas
+- adapter/plugin extensibility
+- AI + agent workflows with human approval controls
+- tenant-safe, RBAC-controlled operation
+- production observability (runs, audit logs, alerts, metrics)
 
-## Who It Is For
+## Current System Snapshot
 
-- engineering teams automating internal or product workflows
-- platform/operations teams needing replay/cancel/recovery controls
-- OSS contributors building and sharing adapters
-- self-hosted users who prefer infrastructure ownership
+### Visual Builder
 
-## Key Features
+- free canvas with draggable nodes
+- rendered edges with branch path visualization
+- zoom, pan, minimap, and edge rewiring foundation
+- inspector-based editing for trigger/action/branch/delay/AI nodes
 
-- JWT auth + tenant/workspace isolation + RBAC
-- workflow DSL with mapping, conditions, branches, and delay steps
-- retry engine with backoff + dead-letter states
-- durable waits (DB-backed delay scheduling)
-- manifest-driven plugin loading for adapters
-- metrics, analytics, alerts, audit logs, and retention cleanup
-- onboarding + templates for fast first-success demos
+### Integrations
 
-## Architecture At A Glance
+- support model split: `native`, `generic`, `community`
+- readiness tiers: `ready`, `advanced`, `coming_soon`, `developer`
+- app catalog with guided setup and connection trust states
 
-- `apps/api`: Express API and webhook ingress
-- `apps/api` worker process: queue consumer for execution/retry/scheduler/alerts/cleanup
-- `apps/web`: React operations UI
-- `packages/core`: engine, auth, repositories, runtime services
-- `packages/shared`: shared types/contracts/utilities
-- `packages/adapters/*`: manifest-driven adapter packages
-- PostgreSQL: durable system of record
-- Redis: queue/backlog coordination
+### Messaging
+
+- Telegram connector (message trigger + send action)
+- WhatsApp Cloud API connector (message trigger + send action)
+
+### Creator Automation
+
+- YouTube connector for creator workflows
+- Reddit connector for community monitoring and summaries
+
+### AI Layer
+
+- generate, rewrite, summarize, transform, classify, and key-point extraction
+- AI nodes in builder for content and agent-style flows
+
+### Agent System
+
+- typed tool registry and permission allow-listing
+- bounded execution loop (`runAgent`)
+- reasoning timeline blocks in Runs UX
+- memory support: run-level + workflow-level
+- human approval workflow (pending/approve/deny)
+- continuation/resume semantics after approval
+
+### Observability
+
+- run history, run detail timeline, and retry/dead-letter visibility
+- operator audit logs with filters and drill-down
+- alert settings and delivery channels
+- metrics and analytics endpoints
+
+### Templates + Onboarding
+
+- built-in template library
+- first-success onboarding and goal-first flow
+- in-app simulator and guided test path for webhook-led starts
+
+## Architecture
+
+See detailed architecture and runtime flow in [`docs/architecture.md`](./docs/architecture.md).
+
+At a glance:
+
+- `apps/api`: Express control plane + webhook ingress + worker entrypoint
+- `apps/web`: React product UI (catalog, builder, runs, approvals, alerts, audit)
+- `packages/core`: workflow engine, auth, queue/retry/scheduler, approvals, memory, observability
+- `packages/shared`: typed contracts, shared utilities, AI utility layer
+- `packages/adapters/*`: manifest-driven adapters (native/generic/community)
+- PostgreSQL: source of truth for entities, runs, approvals, audit, memory
+- Redis: queue transport and worker scheduling coordination
 
 ```mermaid
 graph LR
-  Web["React Web (apps/web)"] --> API["API (apps/api)"]
-  API --> Core["Core Runtime (packages/core)"]
+  Web["apps/web"] --> API["apps/api"]
+  API --> Core["packages/core"]
   Core --> PG["PostgreSQL"]
   Core --> Redis["Redis"]
-  Core --> Adapters["Adapter Plugins"]
+  Core --> Adapters["packages/adapters/*"]
 ```
+
+## Enterprise Capabilities
+
+- JWT auth with organization/workspace scoping
+- RBAC roles (`owner`, `admin`, `member`) with protected operator actions
+- tenant isolation across integrations, workflows, runs, logs, credentials, approvals, memory
+- approval lifecycle for high-safety tool execution
+- structured audit logging for operator and security-relevant actions
+- controlled tool execution with explicit permissions and approval gates
+- execution traceability through run timeline + agent reasoning timeline
+
+## Roadmap (Phased)
+
+Phased roadmap is documented in [`ROADMAP.md`](./ROADMAP.md):
+
+1. Phase 1 (Complete): current implemented platform systems
+2. Phase 2 (Enterprise Hardening): approval expiry/policies, stronger sandbox controls
+3. Phase 3 (AI Expansion): vector memory, richer streaming, deeper orchestration
+4. Phase 4 (Ecosystem): broader integrations and template distribution
+5. Phase 5 (MCP): external MCP server and ecosystem exposure
+
+## UI/UX System Docs
+
+Read [`docs/UI_SYSTEM.md`](./docs/UI_SYSTEM.md) for:
+
+- design principles (`flow-first`, `agent-first`, progressive complexity)
+- builder/canvas interaction model
+- agent reasoning UX patterns
+- runs, catalog, and onboarding UX conventions
+
+## Setup Guide System (Critical)
+
+Read [`docs/SETUP_GUIDE_SYSTEM.md`](./docs/SETUP_GUIDE_SYSTEM.md) for:
+
+- setup guide data model (`overview -> requirements -> input -> test -> success`)
+- `/api/v1/apps` setup metadata flow
+- `platformSetupMissingFields` trust and readiness signaling
+- wizard-first setup UX standards and post-connect routing
 
 ## Quick Start
 
-1. Install dependencies:
+1. Install:
 
 ```bash
 npm install
 ```
 
-2. Run one-time local setup (creates `.env` if missing, starts Postgres/Redis, verifies infra, migrates, seeds):
+2. Run one-time local setup:
 
 ```bash
 npm run setup:local
 ```
 
-3. Start app services:
+3. Start API + worker + web:
 
+```bash
 npm run dev:local
 ```
 
@@ -74,106 +151,39 @@ npm run dev:local
 - API health: `http://localhost:4000/api/v1/health`
 - Metrics: `http://localhost:4000/metrics`
 
-### Manual Setup (Advanced)
+## First Success Path
 
-If you prefer explicit steps:
+1. Sign in with seeded dev credentials (`admin@example.com` / `dev-password`).
+2. Open onboarding.
+3. Connect an app from the catalog.
+4. Choose a starter template.
+5. Run simulator/test event.
+6. Inspect Runs, Audit, and Alerts.
 
-```bash
-npm run env:init
-npm run infra:up
-npm run migrate -w @integration/core
-npm run seed -w @integration/core
-npm run dev:local
-```
+## Reference Alignment (Inspiration, Not Copying)
 
-## Local Development Flow
+Integrator design patterns are inspired by ecosystem leaders while being natively implemented:
 
-- API and worker details: [`apps/api/README.md`](./apps/api/README.md)
-- Web details: [`apps/web/README.md`](./apps/web/README.md)
-- Core scripts/tools: [`packages/core/README.md`](./packages/core/README.md)
-- Adapter authoring: [`packages/adapters/README.md`](./packages/adapters/README.md)
+- n8n: visual builder and node workflow mental model
+- Plane: clear operational states and information hierarchy
+- AppFlowy: workspace/product cohesion
+- Coolify and Dokku: self-host simplicity and operator-first setup
+- ERPNext: integrated platform breadth and completeness
 
-## First Success Path (End-to-End)
+No external project code is imported into runtime from these references.
 
-1. Login with seeded defaults:
-  - `admin@example.com` / `dev-password`
-  - org: `demo-org`
-  - workspace: `default`
-2. Open `/onboarding`.
-3. Connect an integration in `/integrations`.
-4. Pick a template in `/workflows`, validate, and create.
-5. Trigger a test run.
-6. Inspect:
-  - `/runs` for execution timeline and retries
-  - `/audit-logs` for operator/audit events (owner/admin)
-  - `/alerts` to test outbound alerts (owner/admin)
-  - `/dashboard` for operational metrics and retention snapshots
+## Deeper App/Package Docs
 
-## Demo Path and Assets
+- [`apps/api/README.md`](./apps/api/README.md)
+- [`apps/web/README.md`](./apps/web/README.md)
+- [`packages/core/README.md`](./packages/core/README.md)
+- [`packages/adapters/README.md`](./packages/adapters/README.md)
 
-Demo assets are organized under:
+## Demo Assets and Launch Checklists
 
-- [`apps/web/demo-assets/README.md`](./apps/web/demo-assets/README.md)
-
-Expected screenshot slots:
-
-- login
-- onboarding
-- integrations
-- workflow template selection
-- workflow builder
-- runs detail
-- dashboard
-- alert settings
-- audit logs
-
-When screenshots are captured, place them in `apps/web/demo-assets/screenshots/` and link from release notes/README updates.
-
-## Smoke Test Checklist
-
-Use the full launch checklist before release tags:
-
-- [`LAUNCH_CHECKLIST.md`](./LAUNCH_CHECKLIST.md)
-
-Minimal smoke path:
-
-1. install
-2. `npm run setup:local`
-3. `npm run dev:local`
-4. onboarding
-5. template workflow creation
-6. test run
-7. inspect runs/logs/audit/alerts
-
-## Known Limitations (v1)
-
-- no drag-and-drop workflow canvas (form/JSON-assisted builder only)
-- no remote plugin marketplace/install flow
-- no SSO/SAML/SCIM enterprise identity yet
-- no hosted SaaS control plane or billing
-- Docker Compose is the primary documented deployment path
-
-## Roadmap Summary
-
-See concise roadmap themes in:
-
-- [`ROADMAP.md`](./ROADMAP.md)
-
-Themes:
-
-- GitOps and deployment maturity
-- enterprise identity and governance
-- plugin ecosystem expansion
-- hosted SaaS readiness
-- richer operator workflows
-
-## Deeper Package/App Docs
-
-- API: [`apps/api/README.md`](./apps/api/README.md)
-- Web: [`apps/web/README.md`](./apps/web/README.md)
-- Core: [`packages/core/README.md`](./packages/core/README.md)
-- Adapters: [`packages/adapters/README.md`](./packages/adapters/README.md)
+- Demo assets guide: [`apps/web/demo-assets/README.md`](./apps/web/demo-assets/README.md)
+- Launch smoke checklist: [`LAUNCH_CHECKLIST.md`](./LAUNCH_CHECKLIST.md)
 
 ## License
 
-MIT (see package metadata).
+MIT.

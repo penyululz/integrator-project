@@ -1,20 +1,57 @@
-# Roadmap (Post-v1 Themes)
+# Integrator Enterprise Roadmap
 
-This roadmap complements the root README and focuses on direction, not release promises.
+This roadmap complements [`README.md`](./README.md) and represents direction, not hard delivery commitments.
 
-## Current v1 Scope Boundary
+## Phase 1: Platform Foundation (Complete)
 
-- self-hosted deployment focus
-- plugin-based local adapter model
-- JWT auth + workspace isolation
-- operational tooling (runs/audit/alerts/dashboard)
+Implemented baseline:
 
-## Next Themes
+- visual builder canvas foundation (nodes, edges, zoom/pan/minimap, rewiring model)
+- integrations catalog with readiness + setup guides
+- messaging + creator connectors (Telegram, WhatsApp, YouTube, Reddit)
+- AI automation layer + AI agent foundation
+- agent tool registry, traces, approvals, and continuation
+- observability surfaces (runs, alerts, audit, analytics)
+- onboarding and templates
 
-1. GitOps and deployment maturity (Kubernetes/Helm guidance, release hardening)
-2. Enterprise identity and governance (SSO/SAML/SCIM, stronger policy controls)
-3. Ecosystem expansion (adapter publishing/discovery workflows)
-4. Hosted SaaS readiness (metering, tenancy operations, control plane foundations)
-5. Operator UX depth (bulk recovery and incident-oriented workflows)
+## Phase 2: Enterprise Hardening
 
-For launch context and current limitations, start from [`README.md`](./README.md).
+Focus:
+
+- approval expiration and SLA-aware escalation
+- policy-driven approval rules (role/tool/scope conditions)
+- centralized tool dispatcher and stronger execution governance
+- deeper credential lifecycle controls and rotation ergonomics
+- stronger execution sandboxing for advanced tools
+
+## Phase 3: AI Expansion
+
+Focus:
+
+- vector-backed memory and semantic retrieval
+- true streaming execution and richer live trace updates
+- multi-agent orchestration patterns and delegation controls
+- improved tool-selection reasoning quality and explainability
+
+## Phase 4: Ecosystem Growth
+
+Focus:
+
+- expanded native integrations and higher-quality setup paths
+- community template exchange / marketplace model
+- creator workflow expansion (distribution, monitoring, content ops)
+
+## Phase 5: MCP Ecosystem
+
+Focus:
+
+- external MCP server support
+- standards-based tool/context exposure
+- plugin ecosystem growth for agent-compatible tools
+
+## Guiding Principles
+
+- keep OSS self-host flow simple
+- preserve tenant isolation and auditability
+- maintain progressive complexity: beginner-first, power-user depth
+- prefer safe defaults over hidden automation

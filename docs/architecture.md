@@ -1,102 +1,119 @@
-# Architecture
+# Integrator Architecture
 
-## High-Level Components
+This document explains the tracked TypeScript monorepo architecture and runtime behavior of Integrator Platform.
+
+## Monorepo Structure
+
+### Applications (`apps/*`)
+
+- `apps/api`
+  - Express API (auth, apps/integrations, workflows, runs, approvals, alerts, audit)
+  - webhook ingress
+  - worker process entrypoint for queue consumers
+- `apps/web`
+  - React UI for onboarding, app connections, visual builder, runs, approvals, alerts, audit
+
+### Shared Packages (`packages/*`)
+
+- `packages/core`
+  - workflow engine
+  - auth + tenant/RBAC enforcement services
+  - repositories/migrations
+  - retry/dead-letter scheduler, durable waits
+  - agent runtime, approval workflow, memory services
+  - observability and alert delivery services
+- `packages/shared`
+  - shared types/interfaces
+  - AI utility functions
+  - cross-package helper utilities
+- `packages/adapters/*`
+  - manifest-driven adapter packages (native/generic/community)
+  - action/trigger implementations exposed to engine runtime
+
+## Runtime Topology
 
 ```mermaid
 graph LR
-  API["API (Express)"] --> Core["Workflow Service"]
-  Core --> Queue["Queue (Redis/Memory)"]
-  Core --> IdStore["Idempotency (Postgres/Memory)"]
-  Core --> Audit["Audit Log"]
-  Core --> Plugins["Plugin Manager"]
-  Plugins --> A1["Shopify Adapter"]
-  Plugins --> A2["Google Sheets Adapter"]
-  Plugins --> A3["Slack Adapter"]
-  Plugins --> A4["Webhook Adapter"]
-  API --> OAuth["OAuth Service"]
-  OAuth --> Tokens["Token Store (Vault/Memory)"]
+  UI["Web UI (apps/web)"] --> API["API (apps/api)"]
+  API --> Core["Core Services (packages/core)"]
+  Core --> Queue["Redis Queue"]
+  Core --> DB["PostgreSQL"]
+  Core --> Plugins["Adapter Plugins"]
+  Worker["Worker Loop (apps/api)"] --> Core
 ```
 
-- `core/`
-  - plugin interface and plugin manager
-- `adapters/`
-  - runtime-loadable integration adapters
-- `src/`
-  - API bootstrapping and HTTP routes
-  - middleware for request context and rate limiting
-  - optional dashboard UI
-- `modules/auth/`
-  - OAuth2 orchestration
-  - Vault token storage
-- `modules/integrations/`
-  - legacy adapter pattern implementation
-  - shared HTTP client with retry and pacing
-- `modules/sync/`
-  - workflow orchestration
-  - Postgres idempotency and retry helpers
-- `modules/queue/`
-  - Redis-backed durable job queue
-- `modules/core/`
-  - RBAC and audit logging
+## Workflow Engine Flow
 
-## Workflow Execution Model
+1. User creates workflow (builder/template/API).
+2. Trigger event enters system (webhook/schedule/manual test).
+3. Engine creates run + logs and enqueues execution work.
+4. Worker claims queued work and executes step path.
+5. On transient failure:
+  - retries are scheduled with backoff.
+6. On retry exhaustion:
+  - run enters dead-letter state.
+7. On delay step:
+  - wait state is persisted and resumed later by scheduler.
 
-1. Client calls `POST /api/v1/sync/:workflowId`.
-2. RBAC validates permission `sync:run`.
-3. Workflow payload is queued.
-4. Worker executes the selected workflow:
-   - fetch source records from adapter A
-   - transform records
-   - load records into adapter B
-5. Result is written to job state and audit log.
-
-For inbound events, external systems call `POST /api/v1/webhooks/:source`.
-The webhook adapter normalizes and verifies payloads before optional workflow dispatch.
+## Agent Runtime Flow
 
 ```mermaid
-graph TD
-  Shopify["Shopify"] -->|"Order Created"| API["Webhook/API"]
-  API --> Workflow["shopify-orders-to-sheets-and-slack"]
-  Workflow --> Sheets["Google Sheets"]
-  Workflow --> Slack["Slack Message"]
+sequenceDiagram
+  participant User
+  participant API
+  participant Engine
+  participant Tools as Tool Registry
+  participant Approvals as Approval Store
+  participant Memory as Memory Store
+
+  User->>API: Run workflow with AI Agent step
+  API->>Engine: enqueue run
+  Engine->>Memory: inject run/workflow memory
+  Engine->>Tools: resolve allowed tools
+  Engine->>Tools: execute tool calls (bounded loop)
+  alt approval required
+    Engine->>Approvals: persist pending approval
+    Engine-->>API: run waiting_for_approval
+  else approved or not required
+    Engine->>Memory: save memory writes
+    Engine-->>API: run continues/completes
+  end
 ```
 
-### Durable Infrastructure Mapping
+## Tool Execution Model
 
-- Queue state and processing lists are persisted in Redis.
-- Idempotency keys are reserved in Postgres with TTL-backed expiration.
-- OAuth tokens are stored in Vault KV paths (`integrator/tokens/<provider>/<tenant>` by default).
+- tools are formalized with metadata:
+  - id, title, category, input schema, safety level
+- permission boundaries:
+  - `allow_all` or explicit `allow_list`
+- high-safety tools can require human approval before execution
+- execution traces persist reasoning + tool-call summaries for UI timelines
 
-## Implemented Workflows
+## Approval + Retry Queue Interaction
 
-- `salesforce-contacts-to-snowflake`
-- `jira-issues-to-servicenow`
-- `shopify-orders-to-snowflake`
-- `shopify-orders-to-sheets-and-slack`
+- approval-required tool calls create persisted approval requests.
+- run state pauses in `waiting` with retry job state `awaiting_approval`.
+- approve path:
+  - marks approval records approved
+  - resumes execution from paused step path when eligible
+- deny path:
+  - blocked tool is not executed
+  - run transitions to failure with approval-denied classification
 
-## Tier-1 Adapters
+## Memory Injection Model
 
-- `webhook`
-- `http-api`
-- `scheduler`
-- `email`
-- `google-sheets`
-- `shopify`
-- `whatsapp-cloud`
-- `slack`
+- short-term memory scope: run-level
+- persistent memory scope: workflow-level
+- memory lifecycle:
+  1. load memory context before AI agent step execution
+  2. include memory in agent step input context
+  3. persist memory writes after step execution
+  4. expose memory through API/UI for visibility and control
 
-## Production Hardening Path
+## Enterprise Controls
 
-Current production mapping:
-
-- Token store -> Vault
-- Queue -> Redis
-- Idempotency store -> Postgres
-- Audit log -> in-memory (replace with durable event store as a next step)
-
-Enhancements:
-
-- OpenTelemetry traces and metrics
-- Contract tests against sandbox APIs
-- Secret rotation automation
-- Multi-region data residency controls
+- JWT-authenticated API surface
+- tenant and workspace isolation across all protected resources
+- RBAC-protected operator actions (cancel/replay/reschedule/approve/deny)
+- audit logging for operator and approval actions
+- observability stack with runs, alerts, audit logs, and metrics

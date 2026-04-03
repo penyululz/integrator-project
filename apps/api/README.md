@@ -9,6 +9,12 @@ For product overview, quick start, first-success flow, and launch docs, start at
 - API server (`src/index.ts`): authenticated control-plane + webhook ingress
 - worker process (`src/worker.ts`): execution queue, retries, durable waits, alerts, retention
 
+## Architecture and Setup Docs
+
+- architecture: [`docs/architecture.md`](../../docs/architecture.md)
+- setup guide system: [`docs/SETUP_GUIDE_SYSTEM.md`](../../docs/SETUP_GUIDE_SYSTEM.md)
+- UI system context: [`docs/UI_SYSTEM.md`](../../docs/UI_SYSTEM.md)
+
 ## Local Commands
 
 From repo root:

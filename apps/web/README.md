@@ -14,6 +14,12 @@ React operational UI for:
 - runs/logs
 - dashboard, alerts, and audit views
 
+## Product UX Docs
+
+- UI/UX system: [`docs/UI_SYSTEM.md`](../../docs/UI_SYSTEM.md)
+- setup guide model: [`docs/SETUP_GUIDE_SYSTEM.md`](../../docs/SETUP_GUIDE_SYSTEM.md)
+- architecture flow: [`docs/architecture.md`](../../docs/architecture.md)
+
 ## Local Commands
 
 From repo root:
