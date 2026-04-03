@@ -11,7 +11,11 @@
   ],
   "scripts": {
     "build": "npm run --workspaces build",
+    "env:init": "npm run env:init -w @integration/core",
+    "setup:local": "npm run setup:local -w @integration/core",
+    "infra:up": "docker compose up -d postgres redis",
     "dev": "concurrently \"npm run dev -w @integration/api\" \"npm run dev -w @integration/web\"",
+    "dev:local": "concurrently \"npm run dev -w @integration/api\" \"npm run worker -w @integration/api\" \"npm run dev -w @integration/web\"",
     "lint": "npm run --workspaces lint",
     "test": "npm run --workspaces test",
     "migrate": "npm run migrate -w @integration/core",

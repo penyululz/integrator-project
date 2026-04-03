@@ -5,17 +5,11 @@ Use this before tagging a public release.
 ## Setup and Runtime
 
 - [ ] `npm install`
-- [ ] `docker compose up -d postgres redis`
-- [ ] `.env` populated from `apps/api/.env.example`
-- [ ] `npm run migrate -w @integration/core`
-- [ ] `npm run seed -w @integration/core`
-- [ ] `npm run verify:setup -w @integration/core`
+- [ ] `npm run setup:local` completes
 
 ## Service Health
 
-- [ ] API running (`npm run dev -w @integration/api`)
-- [ ] worker running (`npm run worker -w @integration/api`)
-- [ ] web running (`npm run dev -w @integration/web`)
+- [ ] services running (`npm run dev:local`)
 - [ ] `GET /api/v1/health` works
 - [ ] `GET /metrics` works
 

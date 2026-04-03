@@ -64,7 +64,7 @@ const ENV_SPECS: EnvSpec[] = [
   },
   {
     name: "APP_ENV",
-    importance: "dev_only",
+    importance: "optional",
     description: "Set to production/staging/development.",
   },
   {

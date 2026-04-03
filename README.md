@@ -57,41 +57,34 @@ graph LR
 npm install
 ```
 
-2. Start dependencies:
+2. Run one-time local setup (creates `.env` if missing, starts Postgres/Redis, verifies infra, migrates, seeds):
 
 ```bash
-docker compose up -d postgres redis
+npm run setup:local
 ```
 
-3. Create repo-root `.env` from:
+3. Start app services:
 
-- [`apps/api/.env.example`](./apps/api/.env.example)
-
-4. Prepare database:
-
-```bash
-npm run migrate -w @integration/core
-npm run seed -w @integration/core
+npm run dev:local
 ```
 
-5. Verify setup:
-
-```bash
-npm run verify:setup -w @integration/core
-```
-
-6. Start services (separate terminals):
-
-```bash
-npm run dev -w @integration/api
-npm run worker -w @integration/api
-npm run dev -w @integration/web
-```
-
-7. Open:
+4. Open:
 
 - Web: `http://localhost:3000`
 - API health: `http://localhost:4000/api/v1/health`
+- Metrics: `http://localhost:4000/metrics`
+
+### Manual Setup (Advanced)
+
+If you prefer explicit steps:
+
+```bash
+npm run env:init
+npm run infra:up
+npm run migrate -w @integration/core
+npm run seed -w @integration/core
+npm run dev:local
+```
 
 ## Local Development Flow
 
@@ -145,13 +138,12 @@ Use the full launch checklist before release tags:
 Minimal smoke path:
 
 1. install
-2. env file
-3. migrate + seed
-4. start api + worker + web
-5. onboarding
-6. template workflow creation
-7. test run
-8. inspect runs/logs/audit/alerts
+2. `npm run setup:local`
+3. `npm run dev:local`
+4. onboarding
+5. template workflow creation
+6. test run
+7. inspect runs/logs/audit/alerts
 
 ## Known Limitations (v1)
 
