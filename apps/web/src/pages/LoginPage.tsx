@@ -16,6 +16,13 @@ export function LoginPage({ onLoggedIn }: { onLoggedIn: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const navigate = useNavigate();
 
+  function applySeededDefaults() {
+    setEmail("admin@example.com");
+    setPassword("dev-password");
+    setOrganizationSlug("demo-org");
+    setWorkspaceSlug("default");
+  }
+
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
     setLoading(true);
@@ -29,7 +36,7 @@ export function LoginPage({ onLoggedIn }: { onLoggedIn: () => void }) {
         workspaceSlug: workspaceSlug || undefined,
       });
       onLoggedIn();
-      navigate("/integrations");
+      navigate("/onboarding");
     } catch (loginError) {
       setError((loginError as Error).message);
     } finally {
@@ -48,7 +55,7 @@ export function LoginPage({ onLoggedIn }: { onLoggedIn: () => void }) {
         workspaceSlug: workspaceSlug || undefined,
       });
       onLoggedIn();
-      navigate("/integrations");
+      navigate("/onboarding");
     } catch (loginError) {
       setError((loginError as Error).message);
     } finally {
@@ -59,6 +66,24 @@ export function LoginPage({ onLoggedIn }: { onLoggedIn: () => void }) {
   return (
     <div>
       <h2>Login</h2>
+      <p>
+        Use your workspace credentials. For local demos, seeded defaults are available.
+      </p>
+      <div style={{ border: "1px solid #d0d0d0", borderRadius: 10, padding: 12, marginBottom: 12 }}>
+        <strong>Local Demo Defaults</strong>
+        <div style={{ marginTop: 6, fontSize: 13 }}>
+          email: <code>admin@example.com</code> | password: <code>dev-password</code> |
+          org: <code>demo-org</code> | workspace: <code>default</code>
+        </div>
+        <button
+          type="button"
+          onClick={applySeededDefaults}
+          style={{ marginTop: 8 }}
+          disabled={loading}
+        >
+          Fill Demo Defaults
+        </button>
+      </div>
       <form onSubmit={onSubmit}>
         <p>
           <label>Email</label>
@@ -99,7 +124,7 @@ export function LoginPage({ onLoggedIn }: { onLoggedIn: () => void }) {
           onClick={() => void onDevLogin()}
           style={{ marginLeft: 8 }}
         >
-          {loading ? "Please wait..." : "Use Dev Login"}
+          {loading ? "Please wait..." : "Use Dev Login (local only)"}
         </button>
       </form>
       {error ? <p style={{ color: "red" }}>{error}</p> : null}

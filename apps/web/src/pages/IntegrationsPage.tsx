@@ -80,7 +80,7 @@ export function IntegrationsPage() {
         name,
       });
       setName("");
-      setMessage("Integration created.");
+      setMessage("Integration added. Next: connect credentials if needed, then open Workflows.");
       await load();
     } catch (createError) {
       setError((createError as Error).message);
@@ -99,7 +99,7 @@ export function IntegrationsPage() {
       if (response.authUrl) {
         window.open(response.authUrl, "_blank", "noopener,noreferrer");
         setMessage(
-          `Opened auth URL for ${adapter}. Complete provider auth, then submit callback code below.`,
+          `Opened provider login for ${adapter}. Complete consent, then paste callback code below.`,
         );
       } else {
         setMessage(`Auth started for ${adapter}.`);
@@ -125,7 +125,7 @@ export function IntegrationsPage() {
         redirectUri,
       });
       setAuthCode("");
-      setMessage("Adapter authorization callback completed.");
+      setMessage("Connection completed. You can now use this adapter in workflows.");
       await load();
     } catch (authError) {
       setError((authError as Error).message);
@@ -147,13 +147,32 @@ export function IntegrationsPage() {
 
   return (
     <div style={{ display: "grid", gap: 16 }}>
-      <h2>Integrations</h2>
+      <h2>Integrations and Connections</h2>
+      <p>
+        Step 1 of first success: connect at least one provider, then use a template to
+        create and run your first workflow.
+      </p>
 
       <section style={{ border: "1px solid #d0d0d0", borderRadius: 10, padding: 12 }}>
-        <h3 style={{ marginTop: 0 }}>Create Integration</h3>
+        <h3 style={{ marginTop: 0 }}>First Success Guide</h3>
+        <ol style={{ margin: "0 0 8px", paddingLeft: 20 }}>
+          <li>Create an integration record for the adapter you want to test.</li>
+          <li>Connect provider credentials (OAuth/API key) if required.</li>
+          <li>Go to Workflows and start from a template.</li>
+          <li>Trigger a run and verify logs in the Runs page.</li>
+        </ol>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <Link to="/workflows">Open Templates</Link>
+          <Link to="/runs">Open Runs</Link>
+          <Link to="/onboarding">Onboarding Checklist</Link>
+        </div>
+      </section>
+
+      <section style={{ border: "1px solid #d0d0d0", borderRadius: 10, padding: 12 }}>
+        <h3 style={{ marginTop: 0 }}>Add Integration</h3>
         <form onSubmit={onCreate} style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <input
-            placeholder="Integration name"
+            placeholder="Integration name (for example: Shopify Prod)"
             value={name}
             onChange={(event) => setName(event.target.value)}
           />
@@ -164,13 +183,16 @@ export function IntegrationsPage() {
               </option>
             ))}
           </select>
-          <button type="submit">Create</button>
+          <button type="submit">Add Integration</button>
         </form>
       </section>
 
       <section style={{ border: "1px solid #d0d0d0", borderRadius: 10, padding: 12 }}>
-        <h3 style={{ marginTop: 0 }}>Adapter Authentication</h3>
-        <p style={{ marginTop: 0 }}>Redirect URI: {redirectUri}</p>
+        <h3 style={{ marginTop: 0 }}>Connect Provider Account</h3>
+        <p style={{ marginTop: 0 }}>
+          For OAuth adapters, open provider login, finish consent, then paste callback code.
+        </p>
+        <p style={{ marginTop: 0, fontSize: 13, color: "#555" }}>Redirect URI: {redirectUri}</p>
 
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
           <select value={authAdapterKey} onChange={(event) => setAuthAdapterKey(event.target.value)}>
@@ -181,7 +203,7 @@ export function IntegrationsPage() {
             ))}
           </select>
           <button type="button" onClick={() => void onStartOAuth(authAdapterKey)}>
-            Start OAuth
+            Open Provider Login
           </button>
         </div>
 
@@ -203,7 +225,7 @@ export function IntegrationsPage() {
               style={{ marginLeft: 8, minWidth: 240 }}
             />
           </label>
-          <button type="submit">Complete Callback</button>
+          <button type="submit">Finish Connection</button>
         </form>
       </section>
 
@@ -284,8 +306,8 @@ export function IntegrationsPage() {
         <h3 style={{ marginTop: 0 }}>Configured Integrations</h3>
         {integrations.length === 0 ? (
           <p style={{ marginTop: 0 }}>
-            No integrations configured yet. Connect an adapter, then create your first workflow from
-            a template.
+            No integrations yet. Add one above, connect credentials, then create your first
+            workflow from a template.
           </p>
         ) : null}
         <ul>
@@ -307,8 +329,8 @@ export function IntegrationsPage() {
         <h3 style={{ marginTop: 0 }}>Credential Health</h3>
         {credentials.length === 0 ? (
           <p style={{ marginBottom: 0 }}>
-            No provider credentials connected yet. Use adapter auth controls above to connect and
-            validate credentials.
+            No connected credentials yet. Use "Connect" in Installed Adapters and complete
+            provider auth to continue.
           </p>
         ) : (
           <ul style={{ marginBottom: 0 }}>

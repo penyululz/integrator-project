@@ -163,6 +163,16 @@ export function AuditLogsPage() {
   return (
     <div style={{ display: "grid", gap: 16 }}>
       <h2>Operator Audit Logs</h2>
+      <p>
+        Review who changed workflow run state, when it happened, and why.
+      </p>
+      <div style={{ border: "1px solid #d0d0d0", borderRadius: 10, padding: 12 }}>
+        <strong>Demo Tip</strong>
+        <div style={{ marginTop: 6, fontSize: 14 }}>
+          Perform a run action in <Link to="/runs">Runs</Link> (cancel/replay/reschedule),
+          then use filters here to inspect the audit event.
+        </div>
+      </div>
 
       <form
         onSubmit={onApplyFilters}
@@ -304,7 +314,8 @@ export function AuditLogsPage() {
           {loadingList ? <p>Loading audit logs...</p> : null}
           {logs.length === 0 ? (
             <p style={{ marginBottom: 0 }}>
-              No audit events found for the current filters.
+              No audit events found for the current filters. Try clearing filters or run an
+              operator action from the Runs page first.
             </p>
           ) : null}
           <div style={{ overflowX: "auto" }}>
@@ -365,7 +376,7 @@ export function AuditLogsPage() {
               Next
             </button>
             <span style={{ fontSize: 13, color: "#555" }}>
-              Page {pagination.page} · {pagination.total} total
+              Page {pagination.page} | {pagination.total} total
             </span>
           </div>
         </section>

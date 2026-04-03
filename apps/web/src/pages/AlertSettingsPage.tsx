@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import {
   getAlertConfig,
   sendTestAlert,
@@ -220,6 +221,17 @@ export function AlertSettingsPage() {
   return (
     <div style={{ display: "grid", gap: 16 }}>
       <h2>Alert Settings</h2>
+      <p>
+        Configure where operational alerts are delivered. For demos, send a test alert after
+        your first run.
+      </p>
+      <div style={{ border: "1px solid #d0d0d0", borderRadius: 10, padding: 12 }}>
+        <strong>Demo Tip</strong>
+        <div style={{ marginTop: 6, fontSize: 14 }}>
+          Trigger a workflow, check status in <Link to="/runs">Runs</Link>, then send a test
+          alert here and verify delivery logs below.
+        </div>
+      </div>
       {loading ? <p>Loading...</p> : null}
       {error ? <p style={{ color: "#b42318" }}>{error}</p> : null}
       {message ? <p style={{ color: "#116329" }}>{message}</p> : null}
@@ -515,7 +527,12 @@ export function AlertSettingsPage() {
 
           <section style={{ border: "1px solid #d0d0d0", borderRadius: 10, padding: 12 }}>
             <h3 style={{ marginTop: 0 }}>Recent Alert Delivery Logs</h3>
-            {logs.length === 0 ? <p>No alert delivery logs yet.</p> : null}
+            {logs.length === 0 ? (
+              <p>
+                No alert delivery logs yet. Save config, click "Send Test Alert", then refresh
+                this page.
+              </p>
+            ) : null}
             {logs.length > 0 ? (
               <div style={{ overflowX: "auto" }}>
                 <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>

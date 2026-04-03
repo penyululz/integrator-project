@@ -6,6 +6,8 @@ import {
   getWorkflowTemplate,
   listAdapters,
   listCredentials,
+  listIntegrations,
+  listRuns,
   listWorkflowTemplates,
   listWorkflows,
   type AdapterMetadata,
@@ -25,6 +27,7 @@ import {
   getTemplateMissingAdapters,
   parseJsonObject,
 } from "./workflow-builder-helpers";
+import { buildOnboardingSteps, getNextPendingStep } from "./onboarding-helpers";
 import {
   collectStepIds,
   createEmptyActionStep,
@@ -37,10 +40,17 @@ import {
 
 export function WorkflowsPage() {
   const session = getAuthSession();
+  const isOperator =
+    session?.scope.orgRole === "owner" ||
+    session?.scope.orgRole === "admin" ||
+    session?.scope.workspaceRole === "owner" ||
+    session?.scope.workspaceRole === "admin";
   const [searchParams] = useSearchParams();
   const requestedTemplateId = searchParams.get("templateId");
   const [adapters, setAdapters] = useState<AdapterMetadata[]>([]);
   const [credentials, setCredentials] = useState<CredentialRecord[]>([]);
+  const [integrationsCount, setIntegrationsCount] = useState(0);
+  const [runsCount, setRunsCount] = useState(0);
   const [workflows, setWorkflows] = useState<WorkflowRecord[]>([]);
   const [templates, setTemplates] = useState<WorkflowTemplateSummary[]>([]);
   const [templateCache, setTemplateCache] = useState<Record<string, WorkflowTemplate>>({});
@@ -70,18 +80,28 @@ export function WorkflowsPage() {
   async function load() {
     setLoading(true);
     try {
-      const [{ adapters: adapterMetadata }, workflowRecords, templateRecords, credentialRecords] =
-        await Promise.all([
-          listAdapters(),
-          listWorkflows(),
-          listWorkflowTemplates(),
-          listCredentials(),
-        ]);
+      const [
+        { adapters: adapterMetadata },
+        workflowRecords,
+        templateRecords,
+        credentialRecords,
+        integrationRecords,
+        runRecords,
+      ] = await Promise.all([
+        listAdapters(),
+        listWorkflows(),
+        listWorkflowTemplates(),
+        listCredentials(),
+        listIntegrations(),
+        listRuns(),
+      ]);
 
       setAdapters(adapterMetadata);
       setWorkflows(workflowRecords);
       setTemplates(templateRecords);
       setCredentials(credentialRecords);
+      setIntegrationsCount(integrationRecords.length);
+      setRunsCount(runRecords.length);
 
       const defaultAdapterKey = adapterMetadata[0]?.key || "";
       if (!definition.trigger.adapter && defaultAdapterKey) {
@@ -159,6 +179,26 @@ export function WorkflowsPage() {
         .map((credential) => credential.provider_key),
     );
   }, [credentials]);
+
+  const onboardingSteps = useMemo(
+    () =>
+      buildOnboardingSteps({
+        integrationsCount,
+        connectedCredentialProviders: validCredentialProviders.size,
+        templatesCount: templates.length,
+        workflowsCount: workflows.length,
+        runsCount,
+      }),
+    [
+      integrationsCount,
+      validCredentialProviders,
+      templates.length,
+      workflows.length,
+      runsCount,
+    ],
+  );
+
+  const nextStep = useMemo(() => getNextPendingStep(onboardingSteps), [onboardingSteps]);
 
   function updateDefinition(nextDefinition: WorkflowDefinition) {
     setDefinition(nextDefinition);
@@ -273,7 +313,9 @@ export function WorkflowsPage() {
       setTriggerConfigDraft(JSON.stringify(nextDefault.trigger.config || {}, null, 2));
       setContextDraft(JSON.stringify(nextDefault.context || {}, null, 2));
       setValidationErrors([]);
-      setInfoMessage("Workflow created successfully.");
+      setInfoMessage(
+        "Workflow created successfully. Next: trigger it, then confirm the run in Runs.",
+      );
     } catch (error) {
       const maybeAxiosError = error as {
         response?: {
@@ -300,8 +342,33 @@ export function WorkflowsPage() {
     <div style={{ display: "grid", gap: 16 }}>
       <h2>Workflows</h2>
       <p>
-        Start from a template for fast onboarding, then refine in Form mode or JSON mode.
+        Start from a template for the fastest first success, then refine in Form mode or
+        JSON mode.
       </p>
+
+      <section style={{ border: "1px solid #d0d0d0", borderRadius: 10, padding: 12 }}>
+        <h3 style={{ marginTop: 0 }}>First Success Progress</h3>
+        <div style={{ display: "grid", gap: 6 }}>
+          <div>
+            Integrations: <strong>{integrationsCount}</strong> | Connected credentials:{" "}
+            <strong>{validCredentialProviders.size}</strong> | Workflows:{" "}
+            <strong>{workflows.length}</strong> | Runs: <strong>{runsCount}</strong>
+          </div>
+          <div style={{ fontSize: 14, color: nextStep ? "#1d4ed8" : "#15803d" }}>
+            {nextStep
+              ? `Next recommended step: ${nextStep.title}`
+              : "Great work. First-success flow is complete."}
+          </div>
+        </div>
+        <div style={{ marginTop: 8, display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <Link to="/integrations">Integrations</Link>
+          <Link to="/runs">Runs</Link>
+          <Link to="/dashboard">Dashboard</Link>
+          <Link to="/onboarding">Onboarding</Link>
+          {isOperator ? <Link to="/audit-logs">Audit Logs</Link> : null}
+          {isOperator ? <Link to="/alerts">Alert Settings</Link> : null}
+        </div>
+      </section>
 
       <section style={{ border: "1px solid #d0d0d0", borderRadius: 10, padding: 12 }}>
         <h3 style={{ marginTop: 0 }}>Template Library</h3>
@@ -689,7 +756,7 @@ export function WorkflowsPage() {
               }
             }}
           >
-            Validate DSL
+            Validate Workflow
           </button>
 
           <button type="submit">Create Workflow</button>

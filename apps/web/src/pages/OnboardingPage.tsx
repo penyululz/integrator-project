@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
+  getAuthSession,
   listCredentials,
   listIntegrations,
   listRuns,
@@ -8,9 +9,20 @@ import {
   listWorkflows,
   type WorkflowTemplateSummary,
 } from "../api";
-import { buildOnboardingSteps, getOnboardingCompletion } from "./onboarding-helpers";
+import {
+  buildFirstSuccessLinks,
+  buildOnboardingSteps,
+  getNextPendingStep,
+  getOnboardingCompletion,
+} from "./onboarding-helpers";
 
 export function OnboardingPage() {
+  const session = getAuthSession();
+  const isOperator =
+    session?.scope.orgRole === "owner" ||
+    session?.scope.orgRole === "admin" ||
+    session?.scope.workspaceRole === "owner" ||
+    session?.scope.workspaceRole === "admin";
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [integrationsCount, setIntegrationsCount] = useState(0);
@@ -67,6 +79,15 @@ export function OnboardingPage() {
     () => getOnboardingCompletion(onboardingSteps),
     [onboardingSteps],
   );
+  const nextStep = useMemo(() => getNextPendingStep(onboardingSteps), [onboardingSteps]);
+  const firstSuccessLinks = useMemo(
+    () =>
+      buildFirstSuccessLinks({
+        steps: onboardingSteps,
+        isOperator,
+      }),
+    [onboardingSteps, isOperator],
+  );
 
   const recommendedTemplates = useMemo(() => templates.slice(0, 3), [templates]);
 
@@ -74,11 +95,38 @@ export function OnboardingPage() {
     <div style={{ display: "grid", gap: 16 }}>
       <h2>Onboarding</h2>
       <p>
-        Follow this lightweight flow to reach your first successful workflow run quickly.
+        Follow this quick path to first success: connect an integration, start from a
+        template, create a workflow, then verify a run.
       </p>
 
       <section style={{ border: "1px solid #d0d0d0", borderRadius: 10, padding: 12 }}>
+        <h3 style={{ marginTop: 0 }}>First Success Path (about 10 minutes)</h3>
+        <ol style={{ margin: "0 0 10px", paddingLeft: 20 }}>
+          <li>Connect at least one integration on the Integrations page.</li>
+          <li>Choose a starter template in Workflows.</li>
+          <li>Validate and create the workflow.</li>
+          <li>Trigger a test event and confirm it in Runs.</li>
+          <li>Review Dashboard metrics and, for admins, Audit + Alerts.</li>
+        </ol>
+        {nextStep ? (
+          <div style={{ color: "#1d4ed8", fontSize: 14 }}>
+            Next recommended action: <strong>{nextStep.title}</strong>.{" "}
+            <Link to={nextStep.ctaPath}>{nextStep.ctaLabel}</Link>
+          </div>
+        ) : (
+          <div style={{ color: "#15803d", fontSize: 14 }}>
+            Onboarding complete. Your workspace is ready for demos and operational review.
+          </div>
+        )}
+      </section>
+
+      <section style={{ border: "1px solid #d0d0d0", borderRadius: 10, padding: 12 }}>
         <h3 style={{ marginTop: 0 }}>Progress</h3>
+        <div style={{ marginBottom: 8 }}>
+          <button type="button" onClick={() => void load()} disabled={loading}>
+            {loading ? "Refreshing..." : "Refresh Status"}
+          </button>
+        </div>
         <div style={{ marginBottom: 8 }}>
           <strong>{completion}% complete</strong>
         </div>
@@ -123,6 +171,21 @@ export function OnboardingPage() {
                 <Link to={step.ctaPath}>{step.ctaLabel}</Link>
               </div>
               <p style={{ marginBottom: 0 }}>{step.description}</p>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section style={{ border: "1px solid #d0d0d0", borderRadius: 10, padding: 12 }}>
+        <h3 style={{ marginTop: 0 }}>Quick Links</h3>
+        <div style={{ display: "grid", gap: 8 }}>
+          {firstSuccessLinks.map((link) => (
+            <div key={link.id} style={{ border: "1px solid #ececec", borderRadius: 8, padding: 10 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+                <strong>{link.label}</strong>
+                <Link to={link.path}>Open</Link>
+              </div>
+              <div style={{ fontSize: 13, color: "#555" }}>{link.description}</div>
             </div>
           ))}
         </div>

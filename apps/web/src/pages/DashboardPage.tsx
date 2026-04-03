@@ -123,6 +123,21 @@ export function DashboardPage() {
   return (
     <div style={{ display: "grid", gap: 16 }}>
       <h2>Operations Dashboard</h2>
+      <p>
+        Track workspace health, retention status, and first-run progress from one place.
+      </p>
+
+      <section style={{ border: "1px solid #d0d0d0", borderRadius: 10, padding: 12 }}>
+        <h3 style={{ marginTop: 0 }}>First Success Shortcuts</h3>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <Link to="/onboarding">Onboarding</Link>
+          <Link to="/integrations">Integrations</Link>
+          <Link to="/workflows">Workflows</Link>
+          <Link to="/runs">Runs</Link>
+          {isOperator ? <Link to="/audit-logs">Audit Logs</Link> : null}
+          {isOperator ? <Link to="/alerts">Alert Settings</Link> : null}
+        </div>
+      </section>
 
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
         <label>
@@ -309,12 +324,14 @@ export function DashboardPage() {
               <h3 style={{ marginTop: 0 }}>No Runs Yet</h3>
               <p style={{ marginBottom: 8 }}>
                 Start with onboarding, connect an integration, and create a workflow from a
-                template to generate your first operational metrics.
+                template. After you trigger a test run, this dashboard will populate with
+                metrics, retry data, and queue health.
               </p>
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
                 <Link to="/onboarding">Open Onboarding</Link>
                 <Link to="/integrations">Connect Integrations</Link>
                 <Link to="/workflows">Create Workflow</Link>
+                <Link to="/runs">View Runs</Link>
               </div>
             </section>
           ) : null}

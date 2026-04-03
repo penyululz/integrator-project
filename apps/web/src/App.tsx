@@ -35,15 +35,20 @@ export default function App() {
   return (
     <div style={{ fontFamily: "sans-serif", margin: "0 auto", maxWidth: 960 }}>
       <h1>Integration Platform v1</h1>
+      {session ? (
+        <p style={{ marginTop: 0, color: "#555" }}>
+          Workspace: {session.scope.organizationSlug}/{session.scope.workspaceSlug}
+        </p>
+      ) : null}
       <nav style={{ display: "flex", gap: 12, marginBottom: 20 }}>
         <Link to="/login">Login</Link>
         <Link to="/dashboard">Dashboard</Link>
-        <Link to="/onboarding">Onboarding</Link>
+        <Link to="/onboarding">Get Started</Link>
         <Link to="/integrations">Integrations</Link>
         <Link to="/workflows">Workflows</Link>
         <Link to="/runs">Runs</Link>
-        {isOperator ? <Link to="/audit-logs">Audit</Link> : null}
-        {isOperator ? <Link to="/alerts">Alerts</Link> : null}
+        {isOperator ? <Link to="/audit-logs">Audit Logs</Link> : null}
+        {isOperator ? <Link to="/alerts">Alert Settings</Link> : null}
         {session ? (
           <button type="button" onClick={() => void onLogout()}>
             Logout

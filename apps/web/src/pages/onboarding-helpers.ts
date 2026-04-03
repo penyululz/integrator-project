@@ -15,6 +15,13 @@ export type OnboardingStep = {
   ctaPath: string;
 };
 
+export type FirstSuccessLink = {
+  id: string;
+  label: string;
+  path: string;
+  description: string;
+};
+
 export function buildOnboardingSteps(snapshot: OnboardingSnapshot): OnboardingStep[] {
   const hasConnectedIntegration =
     snapshot.integrationsCount > 0 || snapshot.connectedCredentialProviders > 0;
@@ -68,4 +75,70 @@ export function getOnboardingCompletion(steps: OnboardingStep[]): number {
   }
   const completed = steps.filter((step) => step.done).length;
   return Math.round((completed / steps.length) * 100);
+}
+
+export function getNextPendingStep(steps: OnboardingStep[]): OnboardingStep | null {
+  return steps.find((step) => !step.done) || null;
+}
+
+export function buildFirstSuccessLinks(input: {
+  steps: OnboardingStep[];
+  isOperator: boolean;
+}): FirstSuccessLink[] {
+  const links: FirstSuccessLink[] = [];
+  const nextStep = getNextPendingStep(input.steps);
+  const allDone = input.steps.every((step) => step.done);
+  const hasRun = input.steps.find((step) => step.id === "run")?.done || false;
+
+  if (nextStep) {
+    links.push({
+      id: `next-${nextStep.id}`,
+      label: nextStep.ctaLabel,
+      path: nextStep.ctaPath,
+      description: `Next recommended step: ${nextStep.title}`,
+    });
+  }
+
+  if (!hasRun) {
+    links.push({
+      id: "runs",
+      label: "View Runs",
+      path: "/runs",
+      description: "After triggering your workflow, confirm run status and logs.",
+    });
+  }
+
+  if (allDone) {
+    links.push({
+      id: "dashboard",
+      label: "Open Dashboard",
+      path: "/dashboard",
+      description: "Review metrics, queue health, and retention cleanup status.",
+    });
+  }
+
+  if (input.isOperator) {
+    links.push({
+      id: "audit",
+      label: "Audit Logs",
+      path: "/audit-logs",
+      description: "Review operator actions and workflow run audit entries.",
+    });
+    links.push({
+      id: "alerts",
+      label: "Alert Settings",
+      path: "/alerts",
+      description: "Send a test alert and verify delivery logs.",
+    });
+  }
+
+  const seen = new Set<string>();
+  return links.filter((link) => {
+    const dedupeKey = `${link.label}:${link.path}`;
+    if (seen.has(dedupeKey)) {
+      return false;
+    }
+    seen.add(dedupeKey);
+    return true;
+  });
 }

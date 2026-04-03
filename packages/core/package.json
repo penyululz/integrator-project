@@ -10,6 +10,7 @@
     "lint": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --passWithNoTests",
     "create:adapter": "tsx src/tools/create-adapter.ts",
+    "verify:setup": "tsx src/tools/verify-setup.ts",
     "migrate": "tsx src/migrations/run-migrations.ts",
     "seed": "tsx src/migrations/seed.ts",
     "reencrypt:credentials": "tsx src/security/reencrypt-credentials.ts"

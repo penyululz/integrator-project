@@ -1,222 +1,71 @@
-# Web App Operational UX (v1)
+# Web App Quick Start (OSS v1)
 
-The web app now provides a practical operator-focused UI for integration setup, workflow authoring, validation, and execution observability.
+`@integration/web` is the operator UI for:
 
-## Authentication and Session
+- login/session
+- onboarding + templates
+- integrations + credentials
+- workflow builder (form + JSON-assisted validation)
+- runs/logs/operator controls
+- dashboard/analytics
+- audit logs and alert settings
 
-- Uses bearer token auth from API endpoints:
-  - `POST /api/v1/auth/login`
-  - `POST /api/v1/auth/dev-login` (development only)
-  - `POST /api/v1/auth/logout`
-- Stores session in `localStorage` key `integration.auth.session`.
-- Protected routes:
-  - `/integrations`
-  - `/workflows`
-  - `/runs`
+## Who This UI Is For
 
-## Integrations UX
+- teams validating first workflow success quickly
+- operators managing run health, replay/recovery, and alerts
+- contributors demonstrating OSS capabilities in local/dev environments
 
-The Integrations page now shows:
+## Local Run
 
-- installed adapters with manifest/runtime metadata
-- enabled or disabled state
-- auth type
-- supported triggers and actions
-- credential health status (`connected` / `expired` / `invalid` / `not connected`)
+1. Ensure API + worker are running (see [`apps/api/README.md`](../api/README.md)).
+2. Configure frontend env:
 
-Operator actions:
+- copy [`apps/web/.env.example`](./.env.example) to `apps/web/.env.local`
+- default API base URL is already `http://localhost:4000/api/v1`
 
-- create integration
-- start OAuth auth flow (`Start OAuth` / `Connect`)
-- complete callback code manually
-- reconnect invalid/expired credentials
-- disconnect credentials per provider
+3. Start frontend:
 
-Credential values are never rendered in the UI. The frontend consumes only masked status metadata.
+```bash
+npm run dev -w @integration/web
+```
 
-## Workflow Builder UX
+4. Open `http://localhost:3000`
 
-The Workflows page is now a structured form-driven builder with a JSON-assisted mode.
+## First Success Flow
 
-### Template Library + Create from Template
+1. Login with seeded demo account:
+- `admin@example.com` / `dev-password`
+- org: `demo-org`
+- workspace: `default`
 
-The Workflows page includes a built-in template browser:
+2. Open `/onboarding` and complete checklist.
+3. Open `Workflows`, pick a template, click `Use template`.
+4. Validate DSL and create workflow.
+5. Trigger it and inspect `/runs`.
+6. Optional ops checks:
+- `/dashboard` for operational overview
+- `/audit` for operator/audit entries
+- `/alerts` to send a test alert
 
-- search templates by title/tags/adapters
-- filter by category
-- inspect template details and setup notes
-- view trigger/action summaries and required adapters
-- detect missing enabled adapters
-- detect adapters that still need credentials
+## Key UX Notes
 
-Operator flow:
+- Session is stored in browser local storage (`integration.auth.session`).
+- Credential values are never rendered in UI.
+- Empty states guide users toward onboarding/template-based first run.
 
-1. choose template
-2. click `Use Template`
-3. review/edit generated workflow in form or JSON mode
-4. run `Validate DSL`
-5. create workflow
+## Troubleshooting
 
-Template-derived workflows are assigned a fresh workflow ID and carry template metadata.
+- If login fails, confirm seed executed:
+  - `npm run seed -w @integration/core`
+- If API requests fail, verify:
+  - `VITE_API_BASE_URL` in `apps/web/.env.local`
+  - API health endpoint `http://localhost:4000/api/v1/health`
 
-### Supported v1 authoring features
+## Demo Assets Support
 
-- trigger adapter and trigger selection
-- trigger config JSON editor
-- workflow context JSON editor
-- step creation and editing:
-  - action step
-  - branch step
-  - delay step
-- condition editing
-- variable/reference mapping
-- retry behavior controls (`onError`, optional retry policy fields in JSON)
+Use the structured folder for launch screenshots and walkthrough clips:
 
-### JSON-assisted mode
+- [`apps/web/demo-assets/README.md`](./demo-assets/README.md)
 
-- Form mode and JSON mode stay synchronized.
-- Switching from JSON back to Form requires valid JSON.
-- `Validate DSL` calls backend schema/DSL validation before create.
-
-### Reference mapping syntax
-
-Form editor supports literal and reference mappings.
-
-Reference roots:
-
-- `trigger.*`
-- `context.*`
-- `steps.<stepId>.output.*`
-
-Example references:
-
-- `trigger.payload.order.id`
-- `steps.fetch_order.output.total`
-- `context.workspaceId`
-
-### Validation feedback shown in UI
-
-- invalid references
-- duplicate step IDs
-- invalid condition blocks/operators
-- branch/schema shape issues
-- prior-step output reference errors
-
-## Runs and Logs UX
-
-The Runs page now includes an operational detail view:
-
-- run list with status badges
-- run detail summary (`attempt_count`, `max_attempts`, `last_error`, `dead_lettered_at`)
-- step timeline from persisted run results
-- retry queue state for selected run
-- branch decision visibility
-- delay scheduling/completion visibility
-- retry lifecycle visibility (`scheduled`, `started`, `succeeded`, `exhausted`)
-- durable delay lifecycle visibility (`persisted`, `claimed`, `resumed`, `completed`, `failed`)
-- log filtering by event type
-- compact payload preview with token redaction
-
-### Durable Wait Visibility
-
-Run detail now includes a **Durable Wait State** panel sourced from `GET /api/v1/delays`:
-
-- wait status (`pending`, `processing`, `completed`, `failed`)
-- scheduled-for timestamp
-- claim/completion timestamps
-- per-step wait path metadata
-
-## Test Coverage Added (web)
-
-- `src/pages/workflow-builder-helpers.test.ts`
-  - default workflow generation
-  - JSON object parsing
-  - reference hint generation from nested steps
-- `src/pages/runs-helpers.test.ts`
-  - step timeline extraction/sorting
-  - log highlight extraction
-  - payload redaction behavior
-- `src/components/ValidationErrorPanel.test.tsx`
-  - empty state rendering
-  - validation error rendering
-
-## Local Dev Defaults
-
-- email: `admin@example.com`
-- password: `dev-password`
-- org slug: `demo-org`
-- workspace slug: `default`
-
-## Onboarding Flow (v1)
-
-A dedicated authenticated onboarding route is available:
-
-- `/onboarding`
-
-The onboarding view provides:
-
-- progress bar for first-success milestones
-- checklist for:
-  - connect integration
-  - pick template
-  - validate/create workflow
-  - trigger first run
-- quick links into integrations/workflows/runs
-- recommended starter templates with deep-links into workflow creation
-
-## Empty-state Guidance
-
-Key pages now include guided empty states:
-
-- dashboard: first-run guidance with links to onboarding/integrations/workflows
-- integrations: guidance when no integrations/credentials exist
-- workflows: guidance when no workflows exist
-- runs: guidance to create and test first workflow
-
-## Known v1 UX limits
-
-- No drag-and-drop graph canvas (intentional v1 non-goal)
-- Builder still includes JSON areas for trigger/context and advanced edits
-- No screenshot assets are stored in this repository yet; use the running UI for current views
-
-## Operations Dashboard (v1)
-
-A new authenticated dashboard route is available:
-
-- `/dashboard`
-
-The dashboard consumes:
-
-- `GET /api/v1/analytics/overview`
-- `GET /api/v1/analytics/workflows`
-- `GET /api/v1/analytics/adapters`
-
-### Dashboard Views
-
-- workflow execution summary (success/failure/dead-letter counts)
-- failure rate and average run duration
-- retry/dead-letter indicators
-- queue health snapshot (pending, due, lag)
-- alerting-ready signals from backend thresholds
-- recent failing workflows
-- top retrying workflows
-- recent failing adapters
-
-### Time Window Filters
-
-The dashboard supports prebuilt windows:
-
-- last 24h
-- last 7 days
-- last 30 days
-
-Each window applies `from` / `to` filters to analytics APIs.
-
-## Runs Detail Observability Enhancements
-
-Runs detail now includes additional operational context:
-
-- run duration (`started_at` / `finished_at`)
-- retry count
-- failure classification (from persisted run result)
-- adapter action timing summary (average/max from event logs)
+This includes naming conventions, capture order, and markdown embedding snippets.

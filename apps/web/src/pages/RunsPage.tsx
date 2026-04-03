@@ -366,7 +366,11 @@ export function RunsPage() {
 
   return (
     <div style={{ display: "grid", gap: 16 }}>
-      <h2>Runs and Logs</h2>
+      <h2>Runs and Execution Logs</h2>
+      <p>
+        Use this page to confirm first workflow success, inspect retries/delays, and review
+        recovery actions.
+      </p>
 
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
         <button type="button" onClick={() => void loadRuns(selectedRunId)}>
@@ -396,17 +400,22 @@ export function RunsPage() {
 
       <div style={{ display: "grid", gridTemplateColumns: "minmax(300px, 1fr) 2fr", gap: 16 }}>
         <section style={{ border: "1px solid #d0d0d0", borderRadius: 10, padding: 12 }}>
-          <h3 style={{ marginTop: 0 }}>Run List</h3>
+          <h3 style={{ marginTop: 0 }}>Recent Runs</h3>
           {loadingRuns ? <p>Loading runs...</p> : null}
           {runs.length === 0 ? (
             <div>
               <p>No runs yet.</p>
               <p style={{ marginTop: 0 }}>
-                Create a workflow from a template, trigger a test event, then inspect results here.
+                To generate your first run: connect an integration, create a workflow from a
+                template, then trigger a test event.
               </p>
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                <Link to="/integrations">Connect Integrations</Link>
                 <Link to="/workflows">Create Workflow</Link>
                 <Link to="/onboarding">Open Onboarding</Link>
+                <Link to="/dashboard">Open Dashboard</Link>
+                {isOperator ? <Link to="/alerts">Alert Settings</Link> : null}
+                {isOperator ? <Link to="/audit-logs">Audit Logs</Link> : null}
               </div>
             </div>
           ) : null}
@@ -515,7 +524,7 @@ export function RunsPage() {
 
               {isOperator ? (
                 <div style={{ border: "1px solid #ececec", borderRadius: 8, padding: 10 }}>
-                  <strong>Operator Controls</strong>
+                  <strong>Admin Recovery Actions</strong>
                   <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
                     <button
                       type="button"
@@ -577,7 +586,7 @@ export function RunsPage() {
               ) : null}
 
               <div style={{ border: "1px solid #ececec", borderRadius: 8, padding: 10 }}>
-                <strong>Retry Queue State</strong>
+                <strong>Retry Attempts</strong>
                 {selectedRunRetries.length === 0 ? <p style={{ marginBottom: 0 }}>No retry records.</p> : null}
                 <ul style={{ marginTop: 8 }}>
                   {selectedRunRetries.map((retry) => (
@@ -593,7 +602,7 @@ export function RunsPage() {
               </div>
 
               <div style={{ border: "1px solid #ececec", borderRadius: 8, padding: 10 }}>
-                <strong>Durable Wait State</strong>
+                <strong>Scheduled Waits</strong>
                 {selectedRunScheduledWaits.length === 0 ? (
                   <p style={{ marginBottom: 0 }}>No durable wait records.</p>
                 ) : null}
@@ -677,7 +686,7 @@ export function RunsPage() {
               </div>
 
               <div style={{ border: "1px solid #ececec", borderRadius: 8, padding: 10 }}>
-                <strong>Branch and Delay Visibility</strong>
+                <strong>Branch and Delay Decisions</strong>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 8 }}>
                   <div>
                     <h4 style={{ margin: "0 0 6px" }}>Branch Selections</h4>
@@ -727,7 +736,7 @@ export function RunsPage() {
               </div>
 
               <div style={{ border: "1px solid #ececec", borderRadius: 8, padding: 10 }}>
-                <strong>Deferred and Throttled Visibility</strong>
+                <strong>Deferred and Throttled Reasons</strong>
                 {blockedExecutionEvents.length === 0 ? (
                   <p style={{ marginBottom: 0 }}>
                     No quota, fairness, or throttling blockers logged.
