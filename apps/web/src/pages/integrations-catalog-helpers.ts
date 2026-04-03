@@ -1,19 +1,30 @@
-import type { AppConnectionRecord, WorkflowTemplateSummary } from "../api";
+﻿import type { AppConnectionRecord, WorkflowTemplateSummary } from "../api";
 
-export function getAppVisual(appKey: string): { icon: string; accent: string } {
+export type AppIconKey =
+  | "slack"
+  | "shopify"
+  | "sheets"
+  | "email"
+  | "webhook"
+  | "default";
+
+export function getAppVisual(appKey: string): {
+  iconKey: AppIconKey;
+  accent: string;
+} {
   switch (appKey) {
     case "slack":
-      return { icon: "??", accent: "#4a154b" };
+      return { iconKey: "slack", accent: "#4a154b" };
     case "shopify":
-      return { icon: "???", accent: "#2f855a" };
+      return { iconKey: "shopify", accent: "#2f855a" };
     case "sheets":
-      return { icon: "??", accent: "#0f9d58" };
+      return { iconKey: "sheets", accent: "#0f9d58" };
     case "email":
-      return { icon: "??", accent: "#2c5282" };
+      return { iconKey: "email", accent: "#2c5282" };
     case "webhook":
-      return { icon: "??", accent: "#b45309" };
+      return { iconKey: "webhook", accent: "#b45309" };
     default:
-      return { icon: "??", accent: "#1f4b99" };
+      return { iconKey: "default", accent: "#1f4b99" };
   }
 }
 
@@ -67,3 +78,4 @@ export function describeSetupMethod(method: AppConnectionRecord["setupMethod"]):
   }
   return "No credentials needed";
 }
+

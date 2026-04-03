@@ -7,7 +7,7 @@ import {
   type AuditLogFilters,
   type AuditLogRecord,
 } from "../api";
-import { Callout, PageHeader, SurfaceCard } from "../components/ui-kit";
+import { Callout, DemoHint, LoadingInline, PageHeader, SurfaceCard } from "../components/ui-kit";
 import {
   buildAuditTargetLink,
   shortId,
@@ -220,6 +220,10 @@ export function AuditLogsPage() {
         </p>
       </Callout>
 
+      <DemoHint>
+        Tip: use filters to focus one run ID and action type so investigation stays fast.
+      </DemoHint>
+
       {error ? (
         <Callout tone="danger" title="Unable to load audit data">
           <p>{error}</p>
@@ -330,7 +334,7 @@ export function AuditLogsPage() {
 
       <div className="template-grid">
         <SurfaceCard title="Audit entries" subtitle="Operator actions recorded for this workspace.">
-          {loadingList ? <p>Loading audit logs...</p> : null}
+          {loadingList ? <LoadingInline label="Loading audit logs..." /> : null}
 
           {logs.length === 0 ? (
             <div className="empty-state">
@@ -408,7 +412,7 @@ export function AuditLogsPage() {
         </SurfaceCard>
 
         <SurfaceCard title="Audit detail" subtitle="Expanded context for the selected event." highlight>
-          {loadingDetail ? <p>Loading detail...</p> : null}
+          {loadingDetail ? <LoadingInline label="Loading detail..." /> : null}
           {!selectedLog ? <p>Select an entry for details.</p> : null}
 
           {selectedLog ? (

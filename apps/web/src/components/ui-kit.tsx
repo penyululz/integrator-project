@@ -78,6 +78,18 @@ export function StatusPill(props: {
   return <span className={`status-pill ${props.tone}`}>{props.children}</span>;
 }
 
+export function DemoHint(props: {
+  children: ReactNode;
+}) {
+  return <div className="app-demo-hint">{props.children}</div>;
+}
+
+export function LoadingInline(props: {
+  label: string;
+}) {
+  return <span className="loading-inline">{props.label}</span>;
+}
+
 export function ProgressSteps(props: {
   steps: Array<{
     id: string;

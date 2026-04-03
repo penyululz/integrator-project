@@ -25,7 +25,7 @@ import {
   type WorkflowTestRunResponse,
 } from "../api";
 import { RunStatusBadge } from "../components/RunStatusBadge";
-import { Callout, MetricTile, PageHeader, StatusPill, SurfaceCard } from "../components/ui-kit";
+import { Callout, DemoHint, LoadingInline, MetricTile, PageHeader, StatusPill, SurfaceCard } from "../components/ui-kit";
 import {
   buildRunSimulatorPayload,
   compactPayload,
@@ -513,6 +513,11 @@ export function RunsPage() {
         }
       />
 
+      <DemoHint>
+        First-success path: send a simulator test, inspect the run timeline, then confirm related
+        {isOperator ? " audit and alert signals." : " results."}
+      </DemoHint>
+
       {error ? (
         <Callout tone="danger" title="Unable to complete the request">
           <p>{error}</p>
@@ -667,7 +672,7 @@ export function RunsPage() {
 
       <div className="template-grid">
         <SurfaceCard title="Run list" subtitle="Select a run to inspect execution details and lifecycle events.">
-          {loadingRuns ? <p>Loading runs...</p> : null}
+          {loadingRuns ? <LoadingInline label="Loading runs..." /> : null}
 
           {runs.length === 0 ? (
             <div className="empty-state">
@@ -728,7 +733,7 @@ export function RunsPage() {
           subtitle="Timeline, delays, retries, and event stream for the selected run."
           highlight
         >
-          {loadingDetail ? <p>Loading run detail...</p> : null}
+          {loadingDetail ? <LoadingInline label="Loading run detail..." /> : null}
           {!selectedRun ? <p>Select a run to inspect execution details.</p> : null}
 
           {selectedRun ? (

@@ -18,7 +18,7 @@ import {
   type WorkspaceUsageResponse,
   type WorkflowAnalyticsRow,
 } from "../api";
-import { Callout, MetricTile, PageHeader, StatusPill, SurfaceCard } from "../components/ui-kit";
+import { Callout, DemoHint, LoadingInline, MetricTile, PageHeader, StatusPill, SurfaceCard } from "../components/ui-kit";
 import {
   buildWindowFilter,
   formatDurationSeconds,
@@ -125,8 +125,8 @@ export function DashboardPage() {
     <div className="stack">
       <PageHeader
         eyebrow="Dashboard"
-        title="Workspace Operations Overview"
-        subtitle="Beginners can follow first-success guidance. Operators can monitor runs, retries, alerts, and retention from one place."
+        title="Automation Health Dashboard"
+        subtitle="Track setup progress, run reliability, and app performance in one place."
         actions={
           <>
             <label>
@@ -149,8 +149,13 @@ export function DashboardPage() {
         }
       />
 
-      {loading ? <p>Loading analytics...</p> : null}
+      {loading ? <LoadingInline label="Loading analytics..." /> : null}
       {error ? <Callout tone="danger" title="Unable to load dashboard"><p>{error}</p></Callout> : null}
+
+      <DemoHint>
+        New here? Start with <Link to="/first-automation">First Automation</Link>, then come back to
+        watch your first run metrics here.
+      </DemoHint>
 
       {overview ? (
         <>

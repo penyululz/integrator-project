@@ -48,10 +48,21 @@ export default function App() {
     <div className="app-shell">
       <header className="app-header">
         <div className="app-brand">
-          <div>
-            <div className="app-brand-title">Integrator Platform</div>
-            <div className="app-brand-subtitle">
-              Build reliable automations with app connections, templates, retries, and visibility.
+          <div className="brand-lockup">
+            <span className="brand-mark" aria-hidden="true">
+              <svg viewBox="0 0 24 24" role="img">
+                <g fill="none" stroke="currentColor" strokeLinecap="round" strokeWidth="2">
+                  <path d="M5 8.5h8.5a3 3 0 0 1 0 6H10" />
+                  <path d="M9 5.5H5.5A3.5 3.5 0 0 0 2 9v6.5A3.5 3.5 0 0 0 5.5 19H11" />
+                  <path d="M15 5l7 7-7 7" />
+                </g>
+              </svg>
+            </span>
+            <div>
+              <div className="app-brand-title">Integrator Platform</div>
+              <div className="app-brand-subtitle">
+                Self-hosted automations with app connections, guided setup, and reliable run visibility.
+              </div>
             </div>
           </div>
           {session ? (

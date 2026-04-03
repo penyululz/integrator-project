@@ -18,6 +18,8 @@
   --danger: #b42318;
   --danger-soft: #ffeceb;
   --shadow: 0 14px 36px rgba(16, 34, 51, 0.08);
+  --shadow-soft: 0 8px 22px rgba(16, 34, 51, 0.06);
+  --shadow-lift: 0 18px 40px rgba(16, 34, 51, 0.14);
   --radius-lg: 16px;
   --radius-md: 12px;
   --radius-sm: 10px;
@@ -95,15 +97,20 @@ button {
   padding: 8px 12px;
   font-weight: 600;
   cursor: pointer;
+  transition: background 0.18s ease, transform 0.18s ease, box-shadow 0.2s ease;
 }
 
 button:hover {
   background: #f4f7fb;
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-soft);
 }
 
 button:disabled {
   opacity: 0.55;
   cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
 }
 
 .button-primary {
@@ -138,12 +145,40 @@ button:disabled {
   gap: 12px;
 }
 
+.page > .stack {
+  animation: surface-in 0.22s ease-out;
+}
+
 .app-brand {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
   flex-wrap: wrap;
+}
+
+.brand-lockup {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.brand-mark {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  border: 1px solid #9dbbed;
+  color: #2056b7;
+  background: linear-gradient(180deg, #f4f9ff 0%, #e9f2ff 100%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: inset 0 1px 0 #ffffff, 0 4px 12px rgba(32, 86, 183, 0.18);
+}
+
+.brand-mark svg {
+  width: 20px;
+  height: 20px;
 }
 
 .app-brand-title {
@@ -233,6 +268,8 @@ button:disabled {
   padding: 14px;
   display: grid;
   gap: 10px;
+  box-shadow: var(--shadow-soft);
+  transition: box-shadow 0.2s ease, transform 0.2s ease, border-color 0.2s ease;
 }
 
 .card-muted {
@@ -393,6 +430,15 @@ button:disabled {
   padding: 12px;
   display: grid;
   gap: 8px;
+  box-shadow: var(--shadow-soft);
+  transition: transform 0.18s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.app-card:hover,
+.template-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-lift);
+  border-color: #a8c3ec;
 }
 
 .app-card.highlight,
@@ -408,9 +454,23 @@ button:disabled {
   gap: 8px;
 }
 
-.app-icon {
-  font-size: 22px;
+.app-icon-badge {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  border: 1px solid #b7cdee;
+  background: linear-gradient(180deg, #f8fbff 0%, #edf4ff 100%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   margin-right: 8px;
+  color: #1f4b99;
+  box-shadow: inset 0 1px 0 #ffffff, 0 3px 10px rgba(31, 75, 153, 0.12);
+}
+
+.app-icon-badge svg {
+  width: 21px;
+  height: 21px;
 }
 
 .app-title,
@@ -508,6 +568,12 @@ button:disabled {
   padding: 14px;
   display: grid;
   gap: 8px;
+  transition: border-color 0.2s ease, background 0.2s ease;
+}
+
+.empty-state:hover {
+  border-color: #9eb7da;
+  background: #f4f9ff;
 }
 
 .table {
@@ -521,6 +587,61 @@ button:disabled {
   border-top: 1px solid #e8eef5;
   text-align: left;
   vertical-align: top;
+}
+
+.table tbody tr {
+  transition: background 0.16s ease;
+}
+
+.table tbody tr:hover {
+  background: #f6f9ff;
+}
+
+.app-demo-hint {
+  border-radius: 10px;
+  border: 1px dashed #a8c3ec;
+  background: #f4f9ff;
+  padding: 9px 10px;
+  font-size: 13px;
+  color: #35516a;
+}
+
+.loading-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #35516a;
+}
+
+.loading-inline::before {
+  content: "";
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: #4d7dd8;
+  box-shadow: 14px 0 0 #9fbaf0, 28px 0 0 #d0def7;
+  animation: loading-pulse 1s ease-in-out infinite;
+}
+
+@keyframes loading-pulse {
+  0%,
+  100% {
+    opacity: 0.5;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@keyframes surface-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 @media (max-width: 960px) {

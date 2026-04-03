@@ -9,7 +9,7 @@ import {
   type AlertDeliveryLogRecord,
   type AlertSeverity,
 } from "../api";
-import { Callout, PageHeader, StatusPill, SurfaceCard } from "../components/ui-kit";
+import { Callout, DemoHint, LoadingInline, PageHeader, StatusPill, SurfaceCard } from "../components/ui-kit";
 import {
   ALERT_EVENT_GROUPS,
   ALERT_SEVERITY_OPTIONS,
@@ -264,7 +264,11 @@ export function AlertSettingsPage() {
         </p>
       </Callout>
 
-      {loading ? <p>Loading...</p> : null}
+      <DemoHint>
+        Keep alert scope small at first: enable workflow failures + dead-letter events, then expand.
+      </DemoHint>
+
+      {loading ? <LoadingInline label="Loading alert settings..." /> : null}
       {error ? (
         <Callout tone="danger" title="Unable to update alert settings">
           <p>{error}</p>
@@ -562,7 +566,13 @@ export function AlertSettingsPage() {
               {logs.length === 0 ? (
                 <div className="empty-state">
                   <p>No alert delivery logs yet.</p>
-                  <p>Save settings, click "Send test alert", and check this table again.</p>
+                  <p>Save settings, send a test alert, then return here to confirm delivery.</p>
+                  <div className="inline-actions">
+                    <button type="button" onClick={() => void onSendTestAlert()} disabled={testing}>
+                      {testing ? "Sending..." : "Send test alert"}
+                    </button>
+                    <Link to="/runs">Open runs</Link>
+                  </div>
                 </div>
               ) : null}
               {logs.length > 0 ? (

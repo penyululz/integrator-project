@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+﻿import { describe, expect, it } from "vitest";
 import type { WorkflowTemplateSummary } from "../api";
 import {
   describeSetupMethod,
@@ -51,7 +51,7 @@ const templates: WorkflowTemplateSummary[] = [
 
 describe("integrations-catalog-helpers", () => {
   it("maps app visuals and setup labels", () => {
-    expect(getAppVisual("slack").icon).toBe("??");
+    expect(getAppVisual("slack").iconKey).toBe("slack");
     expect(describeSetupMethod("oauth2")).toBe("Secure sign-in");
     expect(describeSetupMethod("form")).toBe("Quick form setup");
   });
@@ -77,3 +77,4 @@ describe("integrations-catalog-helpers", () => {
     expect(sheetsSuggestions[0].id).toBe("t3");
   });
 });
+

@@ -18,7 +18,7 @@ import {
   validateWorkflow,
 } from "../api";
 import { StepCardEditor } from "../components/StepCardEditor";
-import { Callout, PageHeader, StatusPill, SurfaceCard } from "../components/ui-kit";
+import { Callout, DemoHint, LoadingInline, PageHeader, StatusPill, SurfaceCard } from "../components/ui-kit";
 import { ValidationErrorPanel } from "../components/ValidationErrorPanel";
 import {
   buildDefaultWorkflow,
@@ -340,8 +340,8 @@ export function WorkflowsPage() {
     <div className="stack">
       <PageHeader
         eyebrow="Automations"
-        title="Template-first Automation Builder"
-        subtitle="Pick a template, review guided step cards, and create a production-ready automation. Advanced JSON remains available when needed."
+        title="Automation Builder"
+        subtitle="Choose a template, adjust guided steps, and create your automation in minutes."
         actions={
           <>
             {nextStep ? <StatusPill tone="warning">Next: {nextStep.title}</StatusPill> : <StatusPill tone="success">Onboarding complete</StatusPill>}
@@ -351,6 +351,11 @@ export function WorkflowsPage() {
           </>
         }
       />
+
+      <DemoHint>
+        Fastest path: pick a template, click <strong>Use template</strong>, then create the automation and
+        run a simulator test from <Link to="/runs">Runs</Link>.
+      </DemoHint>
 
       <SurfaceCard title="Template gallery" subtitle="Choose by outcome, not by technical internals.">
         <div className="inline-actions">
@@ -382,6 +387,19 @@ export function WorkflowsPage() {
         {filteredTemplates.length === 0 ? (
           <div className="empty-state">
             <p>No templates matched your filters.</p>
+            <p>Clear filters or open onboarding for starter recommendations.</p>
+            <div className="inline-actions">
+              <button
+                type="button"
+                onClick={() => {
+                  setTemplateSearch("");
+                  setTemplateCategory("all");
+                }}
+              >
+                Clear filters
+              </button>
+              <Link to="/onboarding">Open onboarding</Link>
+            </div>
           </div>
         ) : null}
 
@@ -751,11 +769,11 @@ export function WorkflowsPage() {
       <ValidationErrorPanel errors={validationErrors} />
 
       <SurfaceCard title="Existing automations" subtitle="Recent saved automations in this workspace.">
-        {loading ? <p>Loading...</p> : null}
+        {loading ? <LoadingInline label="Loading automations..." /> : null}
         {!loading && workflows.length === 0 ? (
           <div className="empty-state">
             <p>
-              No automations yet. Start from a template above or use the first automation wizard.
+              No automations yet. Start with a template and create your first test-ready flow.
             </p>
             <div className="inline-actions">
               <Link to="/first-automation">Start wizard</Link>

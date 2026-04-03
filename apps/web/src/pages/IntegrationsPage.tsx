@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+﻿import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useSearchParams } from "react-router-dom";
 import {
   completeAdapterAuth,
@@ -11,7 +11,8 @@ import {
   type AppConnectionRecord,
   type WorkflowTemplateSummary,
 } from "../api";
-import { Callout, PageHeader, StatusPill, SurfaceCard } from "../components/ui-kit";
+import { Callout, DemoHint, LoadingInline, PageHeader, StatusPill, SurfaceCard } from "../components/ui-kit";
+import { AppIcon } from "../components/AppIcon";
 import {
   buildConnectionPayload,
   buildInitialFormState,
@@ -390,11 +391,16 @@ export function IntegrationsPage() {
         </Callout>
       ) : null}
 
+      <DemoHint>
+        Demo flow: connect one app here, open <Link to="/workflows">Automations</Link> to create a
+        template, then run a test from <Link to="/runs">Runs</Link>.
+      </DemoHint>
+
       <SurfaceCard
         title="App Catalog"
         subtitle="Choose an app, connect it, and test it before using templates."
       >
-        {loading ? <p>Loading apps...</p> : null}
+        {loading ? <LoadingInline label="Loading apps..." /> : null}
         <div className="app-catalog-grid">
           {apps.map((app) => {
             const formState = forms[app.key] || buildInitialFormState(app);
@@ -413,9 +419,7 @@ export function IntegrationsPage() {
                 <div className="app-header-row">
                   <div>
                     <div className="app-title">
-                      <span className="app-icon" aria-hidden="true">
-                        {visual.icon}
-                      </span>
+                      <AppIcon iconKey={visual.iconKey} accent={visual.accent} />
                       {app.name}
                     </div>
                     <p>{app.description}</p>
@@ -437,9 +441,16 @@ export function IntegrationsPage() {
 
                 <div className="stack-sm">
                   {app.setupNotes.map((note) => (
-                    <p key={note}>� {note}</p>
+                    <p key={note}>• {note}</p>
                   ))}
                 </div>
+
+                {!app.connected ? (
+                  <div className="callout info">
+                    <strong>Quick start</strong>
+                    <p>Connect this app, run a simulator test, then check Runs for results.</p>
+                  </div>
+                ) : null}
 
                 {app.platformManagedFields.length > 0 ? (
                   <div className="callout warning">
@@ -572,3 +583,4 @@ export function IntegrationsPage() {
     </div>
   );
 }
+
