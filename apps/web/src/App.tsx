@@ -5,6 +5,7 @@ import { LoginPage } from "./pages/LoginPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { IntegrationsPage } from "./pages/IntegrationsPage";
 import { OnboardingPage } from "./pages/OnboardingPage";
+import { FirstAutomationPage } from "./pages/FirstAutomationPage";
 import { WorkflowsPage } from "./pages/WorkflowsPage";
 import { RunsPage } from "./pages/RunsPage";
 import { AuditLogsPage } from "./pages/AuditLogsPage";
@@ -44,6 +45,7 @@ export default function App() {
         <Link to="/login">Login</Link>
         <Link to="/dashboard">Dashboard</Link>
         <Link to="/onboarding">Get Started</Link>
+        <Link to="/first-automation">First Automation</Link>
         <Link to="/integrations">Apps</Link>
         <Link to="/workflows">Workflows</Link>
         <Link to="/runs">Runs</Link>
@@ -91,6 +93,14 @@ export default function App() {
           element={
             <ProtectedRoute>
               <OnboardingPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/first-automation"
+          element={
+            <ProtectedRoute>
+              <FirstAutomationPage />
             </ProtectedRoute>
           }
         />

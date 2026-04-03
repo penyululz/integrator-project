@@ -410,6 +410,7 @@ export function RunsPage() {
                 template, then trigger a test event.
               </p>
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                <Link to="/first-automation">First Automation</Link>
                 <Link to="/integrations">Connect Integrations</Link>
                 <Link to="/workflows">Create Workflow</Link>
                 <Link to="/onboarding">Open Onboarding</Link>

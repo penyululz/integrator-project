@@ -36,8 +36,8 @@ export function buildOnboardingSteps(snapshot: OnboardingSnapshot): OnboardingSt
       description:
         "Add at least one app connection so workflows can call external systems.",
       done: hasConnectedIntegration,
-      ctaLabel: hasConnectedIntegration ? "Manage Apps" : "Connect App",
-      ctaPath: "/integrations",
+      ctaLabel: hasConnectedIntegration ? "Open First Automation" : "Connect App",
+      ctaPath: "/first-automation",
     },
     {
       id: "template",
@@ -45,8 +45,8 @@ export function buildOnboardingSteps(snapshot: OnboardingSnapshot): OnboardingSt
       description:
         "Browse built-in templates and choose one that matches your first automation goal.",
       done: hasTemplateLibrary && hasWorkflow,
-      ctaLabel: "Browse Templates",
-      ctaPath: "/workflows",
+      ctaLabel: "Choose Template",
+      ctaPath: "/first-automation",
     },
     {
       id: "workflow",
@@ -54,8 +54,8 @@ export function buildOnboardingSteps(snapshot: OnboardingSnapshot): OnboardingSt
       description:
         "Review mappings/conditions, run DSL validation, and create your workflow.",
       done: hasWorkflow,
-      ctaLabel: hasWorkflow ? "Edit Workflows" : "Create Workflow",
-      ctaPath: "/workflows",
+      ctaLabel: hasWorkflow ? "Edit Automation" : "Create Automation",
+      ctaPath: "/first-automation",
     },
     {
       id: "run",
@@ -63,8 +63,8 @@ export function buildOnboardingSteps(snapshot: OnboardingSnapshot): OnboardingSt
       description:
         "Send a test event and inspect retries, logs, and outcomes in the runs page.",
       done: hasRun,
-      ctaLabel: hasRun ? "View Runs" : "Run Test Event",
-      ctaPath: "/runs",
+      ctaLabel: hasRun ? "View Runs" : "Run First Test",
+      ctaPath: hasRun ? "/runs" : "/first-automation",
     },
   ];
 }

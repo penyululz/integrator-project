@@ -36,7 +36,7 @@ export function LoginPage({ onLoggedIn }: { onLoggedIn: () => void }) {
         workspaceSlug: workspaceSlug || undefined,
       });
       onLoggedIn();
-      navigate("/onboarding");
+      navigate("/first-automation");
     } catch (loginError) {
       setError((loginError as Error).message);
     } finally {
@@ -55,7 +55,7 @@ export function LoginPage({ onLoggedIn }: { onLoggedIn: () => void }) {
         workspaceSlug: workspaceSlug || undefined,
       });
       onLoggedIn();
-      navigate("/onboarding");
+      navigate("/first-automation");
     } catch (loginError) {
       setError((loginError as Error).message);
     } finally {
@@ -67,7 +67,8 @@ export function LoginPage({ onLoggedIn }: { onLoggedIn: () => void }) {
     <div>
       <h2>Login</h2>
       <p>
-        Use your workspace credentials. For local demos, seeded defaults are available.
+        Use your workspace credentials. After sign-in, you will land in the first automation wizard.
+        For local demos, seeded defaults are available.
       </p>
       <div style={{ border: "1px solid #d0d0d0", borderRadius: 10, padding: 12, marginBottom: 12 }}>
         <strong>Local Demo Defaults</strong>

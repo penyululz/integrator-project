@@ -523,4 +523,75 @@ describe("Auth + tenant isolation hardening", () => {
       await runtime.close();
     }
   });
+
+  it("queues a workflow test run from authenticated first-success flow", async () => {
+    const { app, runtime } = await createAuthRuntime();
+    try {
+      const ownerLogin = await runtime.authService.login({
+        email: "owner@org-a.com",
+        password: "owner-a-pass",
+        organizationSlug: "org-a",
+        workspaceSlug: "default",
+      });
+
+      const createWorkflowResponse = await request(app)
+        .post("/api/v1/workflows")
+        .set("authorization", `Bearer ${ownerLogin.accessToken}`)
+        .send({
+          name: "Webhook To Webhook Test",
+          definition: {
+            id: "wf_first_success_test",
+            name: "Webhook To Webhook Test",
+            trigger: {
+              adapter: "webhook",
+              trigger: "http_post",
+              config: {},
+            },
+            context: {},
+            steps: [
+              {
+                id: "forward_payload",
+                type: "action",
+                adapter: "webhook",
+                action: "forward_payload",
+                config: {},
+                input: {
+                  payload: {
+                    $ref: "trigger.payload",
+                  },
+                },
+              },
+            ],
+            enabled: true,
+          },
+        });
+
+      expect(createWorkflowResponse.status).toBe(201);
+      const workflowId = createWorkflowResponse.body.workflow.id as string;
+      expect(workflowId).toBeTruthy();
+
+      const triggerResponse = await request(app)
+        .post(`/api/v1/workflows/${workflowId}/test-run`)
+        .set("authorization", `Bearer ${ownerLogin.accessToken}`)
+        .send({
+          payload: {
+            message: "hello from integration test",
+          },
+        });
+
+      expect(triggerResponse.status).toBe(202);
+      expect(triggerResponse.body).toEqual(
+        expect.objectContaining({
+          queued: true,
+          workflowId,
+          workflowKey: "wf_first_success_test",
+          samplePayload: {
+            message: "hello from integration test",
+          },
+        }),
+      );
+    } finally {
+      await runtime.close();
+    }
+  });
 });

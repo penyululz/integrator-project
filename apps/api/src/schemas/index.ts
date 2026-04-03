@@ -308,6 +308,13 @@ export const createWorkflowSchema = z.object({
   definition: workflowDefinitionSchema,
 });
 
+export const workflowTestRunSchema = z
+  .object({
+    payload: z.record(z.unknown()).optional(),
+    correlationId: z.string().min(1).max(120).optional(),
+  })
+  .strict();
+
 export const validateWorkflowSchema = z.object({
   definition: workflowDefinitionSchema,
 });

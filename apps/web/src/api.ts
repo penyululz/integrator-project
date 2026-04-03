@@ -144,6 +144,26 @@ export type WorkflowRecord = {
   updated_at: string;
 };
 
+export type WorkflowTestRunResponse = {
+  queued: boolean;
+  workflowId: string;
+  workflowKey: string;
+  trigger: {
+    adapter: string;
+    trigger: string;
+    config: Record<string, unknown>;
+  };
+  correlationId: string;
+  samplePayload: Record<string, unknown>;
+  next: {
+    runsPath: string;
+    suggestedFilters: {
+      workflowId: string;
+      correlationId: string;
+    };
+  };
+};
+
 export type RunRecord = {
   id: string;
   workflow_id: string;
@@ -718,6 +738,18 @@ export async function createWorkflow(input: {
 }): Promise<WorkflowRecord> {
   const response = await apiClient().post("/workflows", input);
   return response.data.workflow;
+}
+
+export async function triggerWorkflowTestRun(input: {
+  workflowId: string;
+  payload?: Record<string, unknown>;
+  correlationId?: string;
+}): Promise<WorkflowTestRunResponse> {
+  const response = await apiClient().post(`/workflows/${input.workflowId}/test-run`, {
+    payload: input.payload,
+    correlationId: input.correlationId,
+  });
+  return response.data as WorkflowTestRunResponse;
 }
 
 export async function listWorkflowTemplates(): Promise<WorkflowTemplateSummary[]> {

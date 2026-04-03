@@ -96,18 +96,21 @@ export function OnboardingPage() {
       <h2>Onboarding</h2>
       <p>
         Follow this quick path to first success: connect an app, start from a
-        template, create a workflow, then verify a run.
+        template, create an automation, then verify a test run.
       </p>
 
       <section style={{ border: "1px solid #d0d0d0", borderRadius: 10, padding: 12 }}>
         <h3 style={{ marginTop: 0 }}>First Success Path (about 10 minutes)</h3>
         <ol style={{ margin: "0 0 10px", paddingLeft: 20 }}>
-          <li>Connect at least one app on the Apps and Connections page.</li>
-          <li>Choose a starter template in Workflows.</li>
-          <li>Validate and create the workflow.</li>
-          <li>Trigger a test event and confirm it in Runs.</li>
+          <li>Open the First Automation wizard and connect Slack.</li>
+          <li>Choose the webhook-to-Slack starter template.</li>
+          <li>Create the automation and send a test event.</li>
+          <li>Confirm run status and logs in Runs.</li>
           <li>Review Dashboard metrics and, for admins, Audit + Alerts.</li>
         </ol>
+        <div style={{ marginBottom: 8 }}>
+          <Link to="/first-automation">Open First Automation Wizard</Link>
+        </div>
         {nextStep ? (
           <div style={{ color: "#1d4ed8", fontSize: 14 }}>
             Next recommended action: <strong>{nextStep.title}</strong>.{" "}

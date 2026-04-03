@@ -361,6 +361,7 @@ export function WorkflowsPage() {
           </div>
         </div>
         <div style={{ marginTop: 8, display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <Link to="/first-automation">First Automation</Link>
           <Link to="/integrations">Integrations</Link>
           <Link to="/runs">Runs</Link>
           <Link to="/dashboard">Dashboard</Link>

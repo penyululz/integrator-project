@@ -30,6 +30,7 @@ import {
   runReplaySchema,
   upsertCredentialSchema,
   validateWorkflowSchema,
+  workflowTestRunSchema,
   waitRescheduleSchema,
   webhookSchema,
 } from "../schemas";
@@ -1169,6 +1170,66 @@ export function createApiRouter(runtime: CoreRuntime): Router {
       }
     },
   );
+
+  router.post("/workflows/:workflowId/test-run", requireAuth, async (req, res, next) => {
+    try {
+      const workflowId = resolveRouteParam(req.params.workflowId);
+      const body = workflowTestRunSchema.parse(req.body || {});
+      const scope = req.auth!.scope;
+      const workflow = await runtime.repositories.workflowRepository.findByIdScoped({
+        workflowId,
+        tenantId: scope.tenantId,
+        organizationId: scope.organizationId,
+        workspaceId: scope.workspaceId,
+      });
+
+      if (!workflow) {
+        res.status(404).json({ error: "Not found." });
+        return;
+      }
+
+      const samplePayload = body.payload || {
+        message: `Test event from ${req.auth!.user.email}`,
+        source: "ui_test",
+        sentAt: new Date().toISOString(),
+      };
+      const correlationId =
+        body.correlationId ||
+        req.header("x-correlation-id") ||
+        req.header("x-request-id") ||
+        `test-${Date.now()}`;
+
+      await runtime.workflowEngine.queueIncomingEvent({
+        tenantId: scope.tenantId,
+        organizationId: scope.organizationId,
+        workspaceId: scope.workspaceId,
+        adapterKey: workflow.definition_json.trigger.adapter,
+        triggerKey: workflow.definition_json.trigger.trigger,
+        payload: samplePayload,
+        receivedAt: new Date().toISOString(),
+        correlationId,
+        targetWorkflowId: workflow.id,
+      });
+
+      res.status(202).json({
+        queued: true,
+        workflowId: workflow.id,
+        workflowKey: workflow.definition_json.id,
+        trigger: workflow.definition_json.trigger,
+        correlationId,
+        samplePayload,
+        next: {
+          runsPath: `/runs`,
+          suggestedFilters: {
+            workflowId: workflow.id,
+            correlationId,
+          },
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
 
   router.get("/runs", requireAuth, async (req, res, next) => {
     try {

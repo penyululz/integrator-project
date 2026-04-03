@@ -1,5 +1,5 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Link, useLocation, useSearchParams } from "react-router-dom";
 import {
   completeAdapterAuth,
   disconnectAppConnection,
@@ -17,23 +17,54 @@ import {
   type ConnectionFormState,
   validateRequiredFields,
 } from "./integration-connection-helpers";
+import {
+  buildOAuthRedirectUri,
+  getOAuthPendingStorageKey,
+  parseOAuthCallbackInfo,
+  stripOAuthParamsFromSearch,
+} from "./integration-oauth-helpers";
+
+type PendingOAuthPayload = {
+  integrationId?: string;
+  connection?: Record<string, unknown>;
+};
+
+function readPendingOAuth(appKey: string): PendingOAuthPayload | null {
+  try {
+    const raw = window.localStorage.getItem(getOAuthPendingStorageKey(appKey));
+    if (!raw) {
+      return null;
+    }
+    return JSON.parse(raw) as PendingOAuthPayload;
+  } catch {
+    return null;
+  }
+}
+
+function clearPendingOAuth(appKey: string) {
+  window.localStorage.removeItem(getOAuthPendingStorageKey(appKey));
+}
 
 export function IntegrationsPage() {
   const [searchParams] = useSearchParams();
+  const location = useLocation();
   const [apps, setApps] = useState<AppConnectionRecord[]>([]);
   const [forms, setForms] = useState<Record<string, ConnectionFormState>>({});
-  const [oauthCodes, setOauthCodes] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [testingByApp, setTestingByApp] = useState<Record<string, boolean>>({});
   const [savingByApp, setSavingByApp] = useState<Record<string, boolean>>({});
+  const oauthCompletionKeyRef = useRef<string | null>(null);
 
   const highlightAppKey = searchParams.get("appKey") || "";
   const returnTo = searchParams.get("returnTo") || "";
   const templateId = searchParams.get("templateId") || "";
 
-  const redirectUri = `${window.location.origin}/integrations`;
+  const oauthCallbackInfo = useMemo(
+    () => parseOAuthCallbackInfo(location.search),
+    [location.search],
+  );
 
   async function load() {
     setLoading(true);
@@ -54,9 +85,89 @@ export function IntegrationsPage() {
     }
   }
 
+  function cleanupOAuthParamsFromUrl() {
+    const cleanedSearch = stripOAuthParamsFromSearch(location.search);
+    window.history.replaceState(
+      {},
+      "",
+      `${location.pathname}${cleanedSearch}${location.hash}`,
+    );
+  }
+
   useEffect(() => {
     void load();
   }, []);
+
+  useEffect(() => {
+    if (!oauthCallbackInfo.hasCallback) {
+      return;
+    }
+
+    const callbackAppKey =
+      oauthCallbackInfo.appKey || oauthCallbackInfo.state || highlightAppKey;
+    if (!callbackAppKey) {
+      setError("OAuth callback is missing app context. Please reconnect from Apps.");
+      cleanupOAuthParamsFromUrl();
+      return;
+    }
+
+    const completionKey = `${callbackAppKey}:${oauthCallbackInfo.code || oauthCallbackInfo.error || "none"}`;
+    if (oauthCompletionKeyRef.current === completionKey) {
+      return;
+    }
+    oauthCompletionKeyRef.current = completionKey;
+
+    if (oauthCallbackInfo.error) {
+      setError(
+        `Connection was not completed: ${oauthCallbackInfo.errorDescription || oauthCallbackInfo.error}.`,
+      );
+      clearPendingOAuth(callbackAppKey);
+      cleanupOAuthParamsFromUrl();
+      return;
+    }
+
+    if (!oauthCallbackInfo.code) {
+      setError("OAuth callback is missing code. Please reconnect and try again.");
+      cleanupOAuthParamsFromUrl();
+      return;
+    }
+
+    const redirectUri = buildOAuthRedirectUri({
+      origin: window.location.origin,
+      appKey: callbackAppKey,
+      returnTo: returnTo || undefined,
+      templateId: templateId || undefined,
+    });
+
+    const pending = readPendingOAuth(callbackAppKey);
+
+    void (async () => {
+      setError(null);
+      setMessage(`Completing ${callbackAppKey} connection...`);
+      try {
+        await completeAdapterAuth({
+          adapterKey: callbackAppKey,
+          code: oauthCallbackInfo.code!,
+          redirectUri,
+          integrationId: pending?.integrationId,
+          connection: pending?.connection,
+        });
+
+        clearPendingOAuth(callbackAppKey);
+        cleanupOAuthParamsFromUrl();
+        await load();
+
+        setMessage(
+          `${callbackAppKey} is now connected. ${returnTo ? "Use the return link below to continue setup." : "You can now create your automation."}`,
+        );
+      } catch (authError) {
+        setError(
+          (authError as Error).message ||
+            `Failed to complete ${callbackAppKey} connection.`,
+        );
+      }
+    })();
+  }, [oauthCallbackInfo, highlightAppKey, returnTo, templateId]);
 
   const appCounts = useMemo(() => {
     const connected = apps.filter((app) => app.status === "connected").length;
@@ -140,48 +251,37 @@ export function IntegrationsPage() {
     setMessage(null);
 
     try {
+      const redirectUri = buildOAuthRedirectUri({
+        origin: window.location.origin,
+        appKey: app.key,
+        returnTo: returnTo || undefined,
+        templateId: templateId || undefined,
+      });
+      const pendingPayload: PendingOAuthPayload = {
+        integrationId: app.connection.integrationId || undefined,
+        connection: buildOauthConnectionParams(app),
+      };
+      window.localStorage.setItem(
+        getOAuthPendingStorageKey(app.key),
+        JSON.stringify(pendingPayload),
+      );
+
       const auth = await startAdapterAuth({
         adapterKey: app.key,
         redirectUri,
+        state: app.key,
         scopes: app.oauthScopes,
-        connection: buildOauthConnectionParams(app),
+        connection: pendingPayload.connection,
       });
-      if (auth.authUrl) {
-        window.open(auth.authUrl, "_blank", "noopener,noreferrer");
+
+      if (!auth.authUrl) {
+        throw new Error("Provider did not return an OAuth URL.");
       }
-      setMessage(
-        `Opened ${app.name} login. Complete consent, then paste callback code below to finish connection.`,
-      );
+
+      setMessage(`Redirecting to ${app.name} for secure sign-in...`);
+      window.location.assign(auth.authUrl);
     } catch (authError) {
       setError((authError as Error).message || `Failed to start ${app.name} connection.`);
-    }
-  }
-
-  async function onCompleteOAuth(event: FormEvent, app: AppConnectionRecord) {
-    event.preventDefault();
-    const code = (oauthCodes[app.key] || "").trim();
-    if (!code) {
-      setError(`Callback code is required to complete ${app.name} connection.`);
-      setMessage(null);
-      return;
-    }
-
-    setError(null);
-    setMessage(null);
-
-    try {
-      await completeAdapterAuth({
-        adapterKey: app.key,
-        code,
-        redirectUri,
-        integrationId: app.connection.integrationId || undefined,
-        connection: buildOauthConnectionParams(app),
-      });
-      setOauthCodes((current) => ({ ...current, [app.key]: "" }));
-      setMessage(`${app.name} is now connected.`);
-      await load();
-    } catch (authError) {
-      setError((authError as Error).message || `Failed to complete ${app.name} connection.`);
     }
   }
 
@@ -190,6 +290,7 @@ export function IntegrationsPage() {
     setMessage(null);
     try {
       await disconnectAppConnection(app.key);
+      clearPendingOAuth(app.key);
       setMessage(`${app.name} disconnected.`);
       await load();
     } catch (disconnectError) {
@@ -205,12 +306,16 @@ export function IntegrationsPage() {
     try {
       const result = await testAppConnection({
         appKey: app.key,
-        integrationConfig: forms[app.key] ? buildConnectionPayload(app, forms[app.key]).integrationConfig : undefined,
+        integrationConfig: forms[app.key]
+          ? buildConnectionPayload(app, forms[app.key]).integrationConfig
+          : undefined,
       });
       if (result.status === "valid") {
         setMessage(`${app.name} test passed.`);
       } else {
-        setMessage(`${app.name} test returned ${result.status}: ${result.reason || "check settings"}.`);
+        setMessage(
+          `${app.name} test returned ${result.status}: ${result.reason || "check settings"}.`,
+        );
       }
       await load();
     } catch (testError) {
@@ -231,13 +336,20 @@ export function IntegrationsPage() {
       <section style={{ border: "1px solid #d0d0d0", borderRadius: 10, padding: 12 }}>
         <h3 style={{ marginTop: 0 }}>Connection Summary</h3>
         <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
-          <div>Total Apps: <strong>{appCounts.total}</strong></div>
-          <div>Connected: <strong>{appCounts.connected}</strong></div>
-          <div>Needs Attention: <strong>{appCounts.needsAttention}</strong></div>
+          <div>
+            Total Apps: <strong>{appCounts.total}</strong>
+          </div>
+          <div>
+            Connected: <strong>{appCounts.connected}</strong>
+          </div>
+          <div>
+            Needs Attention: <strong>{appCounts.needsAttention}</strong>
+          </div>
         </div>
         <div style={{ marginTop: 8, display: "flex", gap: 10, flexWrap: "wrap" }}>
-          <Link to="/workflows">Build Workflow</Link>
-          <Link to="/runs">View Runs</Link>
+          <Link to="/first-automation">First Automation Wizard</Link>
+          <Link to="/workflows">Build Automation</Link>
+          <Link to="/runs">View Test Runs</Link>
           <Link to="/onboarding">Onboarding</Link>
           {returnTo ? <Link to={returnTo}>Return to previous step</Link> : null}
         </div>
@@ -251,6 +363,7 @@ export function IntegrationsPage() {
           </p>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
             <Link to={`/workflows?templateId=${encodeURIComponent(templateId)}`}>Back to Template</Link>
+            <Link to="/first-automation">Open First Automation Wizard</Link>
             <Link to="/workflows">Browse Templates</Link>
           </div>
         </section>
@@ -277,17 +390,30 @@ export function IntegrationsPage() {
                 background: isHighlighted ? "#f8fbff" : "white",
               }}
             >
-              <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  gap: 10,
+                  flexWrap: "wrap",
+                }}
+              >
                 <div>
                   <h3 style={{ margin: 0 }}>{app.name}</h3>
                   <div style={{ fontSize: 13, color: "#555" }}>{app.description}</div>
                   <div style={{ marginTop: 6, fontSize: 13 }}>
-                    Setup: <strong>{app.setupLabel}</strong> ({app.setupMethod})
+                    Setup: <strong>{app.setupLabel}</strong>
+                    {" "}
+                    ({app.setupMethod})
                   </div>
                 </div>
                 <div style={{ textAlign: "right" }}>
                   <div style={{ color: getStatusColor(app.status), fontWeight: 600 }}>
-                    {app.status === "connected" ? "Connected" : app.status === "not_connected" ? "Not Connected" : app.status}
+                    {app.status === "connected"
+                      ? "Connected"
+                      : app.status === "not_connected"
+                        ? "Not Connected"
+                        : app.status}
                   </div>
                   <div style={{ fontSize: 12, color: "#555" }}>
                     Triggers: {app.supportedTriggers.length ? app.supportedTriggers.join(", ") : "none"}
@@ -315,7 +441,9 @@ export function IntegrationsPage() {
                   Connection Name
                   <input
                     value={normalizeTextValue(formState.integrationName)}
-                    onChange={(event) => updateFormValue(app.key, "integrationName", event.target.value)}
+                    onChange={(event) =>
+                      updateFormValue(app.key, "integrationName", event.target.value)
+                    }
                     style={{ marginLeft: 8, minWidth: 260 }}
                   />
                 </label>
@@ -335,10 +463,18 @@ export function IntegrationsPage() {
                       />
                     ) : (
                       <input
-                        type={field.inputType === "password" ? "password" : field.inputType === "number" ? "number" : "text"}
+                        type={
+                          field.inputType === "password"
+                            ? "password"
+                            : field.inputType === "number"
+                              ? "number"
+                              : "text"
+                        }
                         value={normalizeTextValue(formState[field.key])}
                         placeholder={field.placeholder}
-                        onChange={(event) => updateFormValue(app.key, field.key, event.target.value)}
+                        onChange={(event) =>
+                          updateFormValue(app.key, field.key, event.target.value)
+                        }
                         style={{ marginLeft: 8, minWidth: 280 }}
                       />
                     )}
@@ -380,25 +516,15 @@ export function IntegrationsPage() {
                     ) : null}
                   </div>
 
-                  <form onSubmit={(event) => void onCompleteOAuth(event, app)}>
-                    <label>
-                      Callback Code
-                      <input
-                        value={oauthCodes[app.key] || ""}
-                        onChange={(event) =>
-                          setOauthCodes((current) => ({
-                            ...current,
-                            [app.key]: event.target.value,
-                          }))
-                        }
-                        style={{ marginLeft: 8, minWidth: 280 }}
-                        placeholder="Paste code from provider callback"
-                      />
-                    </label>
-                    <button type="submit" style={{ marginLeft: 8 }}>
-                      Finish Connection
-                    </button>
-                  </form>
+                  <p style={{ margin: 0, fontSize: 12, color: "#555" }}>
+                    OAuth connection completes automatically when you return from the provider.
+                  </p>
+
+                  {app.connected ? (
+                    <p style={{ margin: 0, fontSize: 13, color: "#0f5132" }}>
+                      Connected. Next step: trigger a test run in your first automation.
+                    </p>
+                  ) : null}
                 </div>
               ) : (
                 <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -407,7 +533,11 @@ export function IntegrationsPage() {
                     disabled={saveDisabled}
                     onClick={() => void onSaveConnection(app)}
                   >
-                    {savingByApp[app.key] ? "Saving..." : app.connected ? "Update Connection" : "Connect"}
+                    {savingByApp[app.key]
+                      ? "Saving..."
+                      : app.connected
+                        ? "Update Connection"
+                        : "Connect"}
                   </button>
                   <button
                     type="button"

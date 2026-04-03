@@ -57,7 +57,7 @@ describe("onboarding-helpers", () => {
       isOperator: true,
     });
 
-    expect(links.some((link) => link.path === "/workflows")).toBe(true);
+    expect(links.some((link) => link.path === "/first-automation")).toBe(true);
     expect(links.some((link) => link.path === "/runs")).toBe(true);
     expect(links.some((link) => link.path === "/audit-logs")).toBe(true);
     expect(links.some((link) => link.path === "/alerts")).toBe(true);

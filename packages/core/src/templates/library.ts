@@ -84,6 +84,57 @@ function summarizeTemplate(template: WorkflowTemplate): WorkflowTemplateSummary 
 
 const BUILT_IN_TEMPLATES: WorkflowTemplate[] = [
   {
+    id: "webhook-to-slack-message",
+    title: "Webhook -> Slack Message",
+    description:
+      "Receive a webhook payload and post a message to Slack with minimal setup.",
+    category: "alerts",
+    difficulty: "starter",
+    requiredAdapters: ["webhook", "slack"],
+    tags: ["webhook", "slack", "notifications", "starter"],
+    setupNotes: [
+      "Connect Slack first on the Apps page.",
+      "Set `context.slackChannel` to your destination channel (for example #general).",
+      "Trigger the workflow by posting JSON to the webhook endpoint.",
+    ],
+    workflow: withTemplateScope({
+      id: "wf_webhook_to_slack_message",
+      name: "Webhook To Slack Message",
+      trigger: {
+        adapter: "webhook",
+        trigger: "http_post",
+        config: {},
+      },
+      context: {
+        slackChannel: "#general",
+      },
+      steps: [
+        {
+          id: "send_slack_message",
+          type: "action",
+          adapter: "slack",
+          action: "sendMessage",
+          config: {},
+          input: {
+            channel: {
+              $ref: "context.slackChannel",
+              default: "#general",
+            },
+            text: {
+              $ref: "trigger.payload.message",
+              default: "Hello from your first automation.",
+            },
+          },
+          onError: "retry",
+        },
+      ],
+      enabled: true,
+      metadata: {
+        templateId: "webhook-to-slack-message",
+      },
+    }),
+  },
+  {
     id: "shopify-order-to-slack",
     title: "Shopify Order -> Slack Notification",
     description:
