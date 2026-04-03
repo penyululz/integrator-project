@@ -18,6 +18,7 @@ import {
   validateWorkflow,
 } from "../api";
 import { StepCardEditor } from "../components/StepCardEditor";
+import { Callout, PageHeader, StatusPill, SurfaceCard } from "../components/ui-kit";
 import { ValidationErrorPanel } from "../components/ValidationErrorPanel";
 import {
   buildDefaultWorkflow,
@@ -60,7 +61,7 @@ export function WorkflowsPage() {
     requestedTemplateId,
   );
   const [autoLoadedTemplateId, setAutoLoadedTemplateId] = useState<string | null>(null);
-  const [name, setName] = useState("New Workflow");
+  const [name, setName] = useState("New Automation");
   const [definition, setDefinition] = useState<WorkflowDefinition>(() =>
     buildDefaultWorkflow([], {
       workspaceId: session?.scope.workspaceId || "",
@@ -189,13 +190,7 @@ export function WorkflowsPage() {
         workflowsCount: workflows.length,
         runsCount,
       }),
-    [
-      integrationsCount,
-      validCredentialProviders,
-      templates.length,
-      workflows.length,
-      runsCount,
-    ],
+    [integrationsCount, validCredentialProviders, templates.length, workflows.length, runsCount],
   );
 
   const nextStep = useMemo(() => getNextPendingStep(onboardingSteps), [onboardingSteps]);
@@ -208,7 +203,10 @@ export function WorkflowsPage() {
   }
 
   function createStep(type: "action" | "branch" | "delay"): WorkflowStep {
-    const nextId = generateStepId(type === "action" ? "step_action" : type, collectStepIds(definition.steps));
+    const nextId = generateStepId(
+      type === "action" ? "step_action" : type,
+      collectStepIds(definition.steps),
+    );
     if (type === "branch") {
       return createEmptyBranchStep(nextId);
     }
@@ -265,13 +263,13 @@ export function WorkflowsPage() {
       organizationId: session?.scope.organizationId || "",
     });
     updateDefinition(nextDefinition);
-    setName(`${template.title} Workflow`);
+    setName(`${template.title} Automation`);
     setSelectedTemplateId(template.id);
     setTriggerConfigDraft(JSON.stringify(nextDefinition.trigger.config || {}, null, 2));
     setContextDraft(JSON.stringify(nextDefinition.context || {}, null, 2));
     setEditorMode("form");
     setInfoMessage(
-      `Loaded template "${template.title}". You can review and edit before creating.`,
+      `Loaded template "${template.title}". Review mappings, then create your automation.`,
     );
   }
 
@@ -288,7 +286,7 @@ export function WorkflowsPage() {
         setDefinition(candidate);
         setJsonError(null);
       } catch {
-        setJsonError("JSON is invalid. Fix JSON before creating the workflow.");
+        setJsonError("JSON is invalid. Fix JSON before creating the automation.");
         return;
       }
     }
@@ -304,7 +302,7 @@ export function WorkflowsPage() {
         definition: candidate,
       });
       await load();
-      setName("New Workflow");
+      setName("New Automation");
       const nextDefault = buildDefaultWorkflow(adapters, {
         workspaceId: session?.scope.workspaceId || "",
         organizationId: session?.scope.organizationId || "",
@@ -314,7 +312,7 @@ export function WorkflowsPage() {
       setContextDraft(JSON.stringify(nextDefault.context || {}, null, 2));
       setValidationErrors([]);
       setInfoMessage(
-        "Workflow created successfully. Next: trigger it, then confirm the run in Runs.",
+        "Automation created successfully. Next: send a test run from the first automation wizard or Runs page.",
       );
     } catch (error) {
       const maybeAxiosError = error as {
@@ -333,54 +331,36 @@ export function WorkflowsPage() {
       setServerError(
         maybeAxiosError.response?.data?.error ||
           maybeAxiosError.message ||
-          "Failed to create workflow.",
+          "Failed to create automation.",
       );
     }
   }
 
   return (
-    <div style={{ display: "grid", gap: 16 }}>
-      <h2>Workflows</h2>
-      <p>
-        Start from a template for the fastest first success, then refine in Form mode or
-        JSON mode.
-      </p>
+    <div className="stack">
+      <PageHeader
+        eyebrow="Automations"
+        title="Template-first Automation Builder"
+        subtitle="Pick a template, review guided step cards, and create a production-ready automation. Advanced JSON remains available when needed."
+        actions={
+          <>
+            {nextStep ? <StatusPill tone="warning">Next: {nextStep.title}</StatusPill> : <StatusPill tone="success">Onboarding complete</StatusPill>}
+            <Link to="/first-automation">First automation wizard</Link>
+            <Link to="/runs">Runs</Link>
+            {isOperator ? <Link to="/audit-logs">Audit</Link> : null}
+          </>
+        }
+      />
 
-      <section style={{ border: "1px solid #d0d0d0", borderRadius: 10, padding: 12 }}>
-        <h3 style={{ marginTop: 0 }}>First Success Progress</h3>
-        <div style={{ display: "grid", gap: 6 }}>
-          <div>
-            Integrations: <strong>{integrationsCount}</strong> | Connected credentials:{" "}
-            <strong>{validCredentialProviders.size}</strong> | Workflows:{" "}
-            <strong>{workflows.length}</strong> | Runs: <strong>{runsCount}</strong>
-          </div>
-          <div style={{ fontSize: 14, color: nextStep ? "#1d4ed8" : "#15803d" }}>
-            {nextStep
-              ? `Next recommended step: ${nextStep.title}`
-              : "Great work. First-success flow is complete."}
-          </div>
-        </div>
-        <div style={{ marginTop: 8, display: "flex", gap: 10, flexWrap: "wrap" }}>
-          <Link to="/first-automation">First Automation</Link>
-          <Link to="/integrations">Integrations</Link>
-          <Link to="/runs">Runs</Link>
-          <Link to="/dashboard">Dashboard</Link>
-          <Link to="/onboarding">Onboarding</Link>
-          {isOperator ? <Link to="/audit-logs">Audit Logs</Link> : null}
-          {isOperator ? <Link to="/alerts">Alert Settings</Link> : null}
-        </div>
-      </section>
-
-      <section style={{ border: "1px solid #d0d0d0", borderRadius: 10, padding: 12 }}>
-        <h3 style={{ marginTop: 0 }}>Template Library</h3>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+      <SurfaceCard title="Template gallery" subtitle="Choose by outcome, not by technical internals.">
+        <div className="inline-actions">
           <label>
             Search
             <input
               value={templateSearch}
               onChange={(event) => setTemplateSearch(event.target.value)}
-              placeholder="Search templates, tags, adapters..."
-              style={{ marginLeft: 8, minWidth: 250 }}
+              placeholder="Find by use case, app, or outcome"
+              style={{ marginLeft: 8, minWidth: 240 }}
             />
           </label>
           <label>
@@ -400,10 +380,12 @@ export function WorkflowsPage() {
         </div>
 
         {filteredTemplates.length === 0 ? (
-          <p style={{ marginTop: 12 }}>No templates matched your filters.</p>
+          <div className="empty-state">
+            <p>No templates matched your filters.</p>
+          </div>
         ) : null}
 
-        <div style={{ display: "grid", gap: 10, marginTop: 12 }}>
+        <div className="template-grid">
           {filteredTemplates.map((template) => {
             const missingAdapters = getTemplateMissingAdapters(template, enabledAdapterKeys);
             const adaptersNeedingConnection = template.requiredAdapters.filter((adapterKey) => {
@@ -417,328 +399,315 @@ export function WorkflowsPage() {
               return !validCredentialProviders.has(adapterKey);
             });
 
+            const isBlocked = missingAdapters.length > 0 || adaptersNeedingConnection.length > 0;
+
             return (
               <article
                 key={template.id}
-                style={{
-                  border: "1px solid #ececec",
-                  borderRadius: 8,
-                  padding: 10,
-                  background: selectedTemplateId === template.id ? "#f7f9fc" : "white",
-                }}
+                className={`template-card ${selectedTemplateId === template.id ? "highlight" : ""}`}
               >
-                <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+                <div className="template-header-row">
                   <div>
-                    <strong>{template.title}</strong>
-                    <div style={{ fontSize: 12, color: "#555" }}>
-                      {template.category} | {template.difficulty} | {template.stepCount} top-level
-                      step(s)
-                    </div>
+                    <div className="template-title">{template.title}</div>
+                    <p>{template.description}</p>
                   </div>
-                  <div style={{ display: "flex", gap: 6 }}>
-                    <button
-                      type="button"
-                      onClick={() => setSelectedTemplateId(template.id)}
-                    >
-                      Inspect
-                    </button>
-                    <button type="button" onClick={() => void onUseTemplate(template.id)}>
-                      Use Template
-                    </button>
+                  <div className="stack-sm" style={{ alignItems: "flex-end" }}>
+                    <span className="tag">{template.category}</span>
+                    <span className="tag">{template.difficulty}</span>
                   </div>
                 </div>
 
-                <p style={{ margin: "8px 0 4px" }}>{template.description}</p>
-                <div style={{ fontSize: 12 }}>
-                  <div>
-                    <strong>Trigger:</strong> {template.triggerSummary}
-                  </div>
-                  <div>
-                    <strong>Actions:</strong> {template.actionSummary}
-                  </div>
-                  <div>
-                    <strong>Required adapters:</strong> {template.requiredAdapters.join(", ")}
-                  </div>
+                <div className="tag-row">
+                  <span className="tag">Required apps: {template.requiredAdapters.join(", ")}</span>
+                  <span className="tag">Trigger: {template.triggerSummary}</span>
+                  <span className="tag">Actions: {template.actionSummary}</span>
                 </div>
 
                 {missingAdapters.length > 0 ? (
-                  <div style={{ marginTop: 8, color: "#b42318", fontSize: 13 }}>
-                    Missing enabled adapters: {missingAdapters.join(", ")}
-                  </div>
+                  <Callout tone="danger" title="Blocked: missing enabled apps">
+                    <p>{missingAdapters.join(", ")}</p>
+                  </Callout>
                 ) : null}
 
                 {adaptersNeedingConnection.length > 0 ? (
-                  <div style={{ marginTop: 4, color: "#8a5100", fontSize: 13 }}>
-                    Adapter credentials needed: {adaptersNeedingConnection.join(", ")}.{" "}
-                    <Link
-                      to={`/integrations?appKey=${encodeURIComponent(
-                        adaptersNeedingConnection[0],
-                      )}&templateId=${encodeURIComponent(
-                        template.id,
-                      )}&returnTo=${encodeURIComponent(
-                        `/workflows?templateId=${encodeURIComponent(template.id)}`,
-                      )}`}
-                    >
-                      Connect now
-                    </Link>{" "}
-                    and return to this template.
-                  </div>
+                  <Callout tone="warning" title="Connection required before use">
+                    <p>{adaptersNeedingConnection.join(", ")}</p>
+                    <div className="inline-actions">
+                      <Link
+                        to={`/integrations?appKey=${encodeURIComponent(
+                          adaptersNeedingConnection[0],
+                        )}&templateId=${encodeURIComponent(
+                          template.id,
+                        )}&returnTo=${encodeURIComponent(
+                          `/workflows?templateId=${encodeURIComponent(template.id)}`,
+                        )}`}
+                      >
+                        Connect app
+                      </Link>
+                    </div>
+                  </Callout>
                 ) : null}
+
+                <div className="inline-actions">
+                  <button type="button" onClick={() => setSelectedTemplateId(template.id)}>
+                    Inspect
+                  </button>
+                  <button
+                    type="button"
+                    className="button-primary"
+                    onClick={() => void onUseTemplate(template.id)}
+                    disabled={isBlocked}
+                  >
+                    Use template
+                  </button>
+                </div>
               </article>
             );
           })}
         </div>
-      </section>
+      </SurfaceCard>
 
       {selectedTemplate ? (
-        <section style={{ border: "1px solid #d0d0d0", borderRadius: 10, padding: 12 }}>
-          <h3 style={{ marginTop: 0 }}>Template Details: {selectedTemplate.title}</h3>
+        <SurfaceCard title={`Template details: ${selectedTemplate.title}`} muted>
           <p>{selectedTemplate.description}</p>
-          <div style={{ fontSize: 13 }}>
-            <div>
-              <strong>Tags:</strong>{" "}
-              {"tags" in selectedTemplate ? selectedTemplate.tags.join(", ") : "none"}
-            </div>
-            <div>
-              <strong>Setup notes:</strong>
-            </div>
-            <ul style={{ marginTop: 4 }}>
+          <div>
+            <strong>Setup notes</strong>
+            <ul>
               {"setupNotes" in selectedTemplate
                 ? selectedTemplate.setupNotes.map((note) => <li key={note}>{note}</li>)
                 : null}
             </ul>
           </div>
-        </section>
+        </SurfaceCard>
       ) : null}
 
-      <form onSubmit={onCreate} style={{ display: "grid", gap: 12 }}>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-          <label>
-            Workflow Name
-            <input
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              style={{ marginLeft: 8 }}
-            />
-          </label>
+      <form onSubmit={onCreate} className="stack">
+        <SurfaceCard
+          title="Builder mode"
+          subtitle="Guided mode is best for most users. JSON mode is available for advanced edits."
+          highlight
+        >
+          <div className="inline-actions">
+            <label>
+              Automation name
+              <input value={name} onChange={(event) => setName(event.target.value)} style={{ marginLeft: 8 }} />
+            </label>
 
-          <label>
-            Definition ID
-            <input
-              value={definition.id}
-              onChange={(event) =>
-                updateDefinition({
-                  ...definition,
-                  id: event.target.value,
-                })
-              }
-              style={{ marginLeft: 8 }}
-            />
-          </label>
-
-          <label>
-            Mode
-            <select
-              value={editorMode}
-              onChange={(event) => {
-                const nextMode = event.target.value as "form" | "json";
-                if (nextMode === "json") {
-                  setJsonDraft(JSON.stringify(definition, null, 2));
-                  setEditorMode("json");
-                  setJsonError(null);
-                  return;
-                }
-
-                try {
-                  const parsed = JSON.parse(jsonDraft) as WorkflowDefinition;
-                  updateDefinition(parsed);
-                  setEditorMode("form");
-                  setJsonError(null);
-                } catch {
-                  setJsonError("Cannot switch to form mode until JSON is valid.");
-                }
-              }}
-              style={{ marginLeft: 8 }}
-            >
-              <option value="form">Form</option>
-              <option value="json">JSON</option>
-            </select>
-          </label>
-        </div>
-
-        {editorMode === "form" ? (
-          <div style={{ display: "grid", gap: 12 }}>
-            <div style={{ border: "1px solid #d0d0d0", borderRadius: 10, padding: 12 }}>
-              <h3 style={{ marginTop: 0 }}>Trigger</h3>
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-                <label>
-                  Adapter
-                  <select
-                    value={definition.trigger.adapter}
-                    onChange={(event) => {
-                      const adapterKey = event.target.value;
-                      const adapter = adapters.find((item) => item.key === adapterKey);
-                      updateDefinition({
-                        ...definition,
-                        trigger: {
-                          ...definition.trigger,
-                          adapter: adapterKey,
-                          trigger: adapter?.supportedTriggers[0] || definition.trigger.trigger,
-                        },
-                      });
-                    }}
-                    style={{ marginLeft: 8 }}
-                  >
-                    {adapters.map((adapter) => (
-                      <option key={adapter.key} value={adapter.key}>
-                        {adapter.displayName}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-
-                <label>
-                  Trigger
-                  <select
-                    value={definition.trigger.trigger}
-                    onChange={(event) => {
-                      updateDefinition({
-                        ...definition,
-                        trigger: {
-                          ...definition.trigger,
-                          trigger: event.target.value,
-                        },
-                      });
-                    }}
-                    style={{ marginLeft: 8 }}
-                  >
-                    {(adapters.find((item) => item.key === definition.trigger.adapter)
-                      ?.supportedTriggers || [definition.trigger.trigger]
-                    ).map((triggerKey) => (
-                      <option key={triggerKey} value={triggerKey}>
-                        {triggerKey}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              </div>
-
-              <div style={{ marginTop: 8 }}>
-                <div style={{ fontWeight: 600 }}>Trigger Config (JSON object)</div>
-                <textarea
-                  rows={4}
-                  cols={90}
-                  value={triggerConfigDraft}
-                  onChange={(event) => setTriggerConfigDraft(event.target.value)}
-                  onBlur={() => {
-                    const parsed = parseJsonObject(triggerConfigDraft);
-                    if (!parsed) {
-                      setServerError("Trigger config must be valid JSON object.");
-                      return;
-                    }
-                    updateDefinition({
-                      ...definition,
-                      trigger: {
-                        ...definition.trigger,
-                        config: parsed,
-                      },
-                    });
-                  }}
-                />
-              </div>
-            </div>
-
-            <div style={{ border: "1px solid #d0d0d0", borderRadius: 10, padding: 12 }}>
-              <h3 style={{ marginTop: 0 }}>Workflow Context (JSON object)</h3>
-              <textarea
-                rows={4}
-                cols={90}
-                value={contextDraft}
-                onChange={(event) => setContextDraft(event.target.value)}
-                onBlur={() => {
-                  const parsed = parseJsonObject(contextDraft);
-                  if (!parsed) {
-                    setServerError("Context must be valid JSON object.");
-                    return;
-                  }
+            <label>
+              Definition id
+              <input
+                value={definition.id}
+                onChange={(event) =>
                   updateDefinition({
                     ...definition,
-                    context: parsed,
-                  });
-                }}
+                    id: event.target.value,
+                  })
+                }
+                style={{ marginLeft: 8 }}
               />
-            </div>
+            </label>
 
-            <div style={{ display: "grid", gap: 10 }}>
-              <h3 style={{ marginBottom: 0 }}>Steps</h3>
-              {definition.steps.map((step, index) => (
-                <StepCardEditor
-                  key={`${step.id}-${index}`}
-                  step={step}
-                  depth={0}
-                  adapters={adapters}
-                  referenceHints={referenceHints}
-                  createStep={createStep}
-                  onDelete={() => {
-                    updateDefinition({
-                      ...definition,
-                      steps: definition.steps.filter((_, i) => i !== index),
-                    });
-                  }}
-                  onChange={(updatedStep) => {
-                    const nextSteps = [...definition.steps];
-                    nextSteps[index] = updatedStep;
-                    updateDefinition({
-                      ...definition,
-                      steps: nextSteps,
-                    });
-                  }}
-                />
-              ))}
+            <button
+              type="button"
+              className={editorMode === "form" ? "button-primary" : ""}
+              onClick={() => {
+                setEditorMode("form");
+                setJsonError(null);
+              }}
+            >
+              Guided mode
+            </button>
+            <button
+              type="button"
+              className={editorMode === "json" ? "button-primary" : ""}
+              onClick={() => {
+                setJsonDraft(JSON.stringify(definition, null, 2));
+                setEditorMode("json");
+                setJsonError(null);
+              }}
+            >
+              Advanced JSON
+            </button>
+          </div>
+        </SurfaceCard>
 
-              <div style={{ display: "flex", gap: 8 }}>
-                <button
-                  type="button"
-                  onClick={() => {
-                    updateDefinition({
-                      ...definition,
-                      steps: [...definition.steps, createStep("action")],
-                    });
-                  }}
-                >
-                  Add Action Step
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    updateDefinition({
-                      ...definition,
-                      steps: [...definition.steps, createStep("branch")],
-                    });
-                  }}
-                >
-                  Add Branch Step
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    updateDefinition({
-                      ...definition,
-                      steps: [...definition.steps, createStep("delay")],
-                    });
-                  }}
-                >
-                  Add Delay Step
-                </button>
+        {editorMode === "form" ? (
+          <SurfaceCard title="Guided builder" subtitle="Edit trigger, context, and step cards without touching raw JSON.">
+            <div className="editor-canvas">
+              <div className="card-muted" style={{ borderRadius: 12, padding: 10 }}>
+                <h4>Trigger</h4>
+                <div className="inline-actions">
+                  <label>
+                    App
+                    <select
+                      value={definition.trigger.adapter}
+                      onChange={(event) => {
+                        const adapterKey = event.target.value;
+                        const adapter = adapters.find((item) => item.key === adapterKey);
+                        updateDefinition({
+                          ...definition,
+                          trigger: {
+                            ...definition.trigger,
+                            adapter: adapterKey,
+                            trigger: adapter?.supportedTriggers[0] || definition.trigger.trigger,
+                          },
+                        });
+                      }}
+                      style={{ marginLeft: 8 }}
+                    >
+                      {adapters.map((adapter) => (
+                        <option key={adapter.key} value={adapter.key}>
+                          {adapter.displayName}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label>
+                    Trigger
+                    <select
+                      value={definition.trigger.trigger}
+                      onChange={(event) => {
+                        updateDefinition({
+                          ...definition,
+                          trigger: {
+                            ...definition.trigger,
+                            trigger: event.target.value,
+                          },
+                        });
+                      }}
+                      style={{ marginLeft: 8 }}
+                    >
+                      {(adapters.find((item) => item.key === definition.trigger.adapter)
+                        ?.supportedTriggers || [definition.trigger.trigger]
+                      ).map((triggerKey) => (
+                        <option key={triggerKey} value={triggerKey}>
+                          {triggerKey}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+
+                <div className="form-grid two" style={{ marginTop: 8 }}>
+                  <label>
+                    Trigger config (JSON object)
+                    <textarea
+                      rows={4}
+                      value={triggerConfigDraft}
+                      onChange={(event) => setTriggerConfigDraft(event.target.value)}
+                      onBlur={() => {
+                        const parsed = parseJsonObject(triggerConfigDraft);
+                        if (!parsed) {
+                          setServerError("Trigger config must be valid JSON object.");
+                          return;
+                        }
+                        updateDefinition({
+                          ...definition,
+                          trigger: {
+                            ...definition.trigger,
+                            config: parsed,
+                          },
+                        });
+                      }}
+                    />
+                  </label>
+
+                  <label>
+                    Workflow context (JSON object)
+                    <textarea
+                      rows={4}
+                      value={contextDraft}
+                      onChange={(event) => setContextDraft(event.target.value)}
+                      onBlur={() => {
+                        const parsed = parseJsonObject(contextDraft);
+                        if (!parsed) {
+                          setServerError("Context must be valid JSON object.");
+                          return;
+                        }
+                        updateDefinition({
+                          ...definition,
+                          context: parsed,
+                        });
+                      }}
+                    />
+                  </label>
+                </div>
+              </div>
+
+              <div className="stack">
+                <h4>Steps</h4>
+                <p>
+                  Each step card supports mapping, conditions, branching, and delay. Use add buttons
+                  to grow your automation flow.
+                </p>
+                {definition.steps.map((step, index) => (
+                  <StepCardEditor
+                    key={`${step.id}-${index}`}
+                    step={step}
+                    depth={0}
+                    adapters={adapters}
+                    referenceHints={referenceHints}
+                    createStep={createStep}
+                    onDelete={() => {
+                      updateDefinition({
+                        ...definition,
+                        steps: definition.steps.filter((_, i) => i !== index),
+                      });
+                    }}
+                    onChange={(updatedStep) => {
+                      const nextSteps = [...definition.steps];
+                      nextSteps[index] = updatedStep;
+                      updateDefinition({
+                        ...definition,
+                        steps: nextSteps,
+                      });
+                    }}
+                  />
+                ))}
+
+                <div className="inline-actions">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      updateDefinition({
+                        ...definition,
+                        steps: [...definition.steps, createStep("action")],
+                      });
+                    }}
+                  >
+                    Add action step
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      updateDefinition({
+                        ...definition,
+                        steps: [...definition.steps, createStep("branch")],
+                      });
+                    }}
+                  >
+                    Add branch step
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      updateDefinition({
+                        ...definition,
+                        steps: [...definition.steps, createStep("delay")],
+                      });
+                    }}
+                  >
+                    Add delay step
+                  </button>
+                </div>
               </div>
             </div>
-          </div>
+          </SurfaceCard>
         ) : (
-          <div>
-            <h3 style={{ marginBottom: 8 }}>JSON Editor</h3>
+          <SurfaceCard title="Advanced JSON mode" subtitle="Use raw DSL only when guided mode is not enough.">
             <textarea
               rows={30}
-              cols={110}
               value={jsonDraft}
               onChange={(event) => {
                 setJsonDraft(event.target.value);
@@ -746,11 +715,11 @@ export function WorkflowsPage() {
                 setServerError(null);
               }}
             />
-            {jsonError ? <div style={{ color: "#b42318" }}>{jsonError}</div> : null}
-          </div>
+            {jsonError ? <Callout tone="danger" title="Invalid JSON"><p>{jsonError}</p></Callout> : null}
+          </SurfaceCard>
         )}
 
-        <div style={{ display: "flex", gap: 8 }}>
+        <div className="inline-actions">
           <button
             type="button"
             onClick={async () => {
@@ -768,27 +737,31 @@ export function WorkflowsPage() {
               }
             }}
           >
-            Validate Workflow
+            Validate automation
           </button>
 
-          <button type="submit">Create Workflow</button>
+          <button type="submit" className="button-primary">
+            Create automation
+          </button>
         </div>
       </form>
 
-      {infoMessage ? <div style={{ color: "#0f5132" }}>{infoMessage}</div> : null}
-      {serverError ? (
-        <div style={{ color: "#b42318", marginTop: 10 }}>{serverError}</div>
-      ) : null}
+      {infoMessage ? <Callout tone="success" title="Saved"><p>{infoMessage}</p></Callout> : null}
+      {serverError ? <Callout tone="danger" title="Failed"><p>{serverError}</p></Callout> : null}
       <ValidationErrorPanel errors={validationErrors} />
 
-      <section style={{ border: "1px solid #d0d0d0", borderRadius: 10, padding: 12 }}>
-        <h3 style={{ marginTop: 0 }}>Existing Workflows</h3>
+      <SurfaceCard title="Existing automations" subtitle="Recent saved automations in this workspace.">
         {loading ? <p>Loading...</p> : null}
         {!loading && workflows.length === 0 ? (
-          <p style={{ marginBottom: 0 }}>
-            No workflows yet. Start from a template above or use the{" "}
-            <Link to="/onboarding">onboarding guide</Link> for your first workflow run.
-          </p>
+          <div className="empty-state">
+            <p>
+              No automations yet. Start from a template above or use the first automation wizard.
+            </p>
+            <div className="inline-actions">
+              <Link to="/first-automation">Start wizard</Link>
+              <Link to="/integrations">Connect apps</Link>
+            </div>
+          </div>
         ) : null}
         <ul>
           {workflows.map((workflow) => (
@@ -797,7 +770,7 @@ export function WorkflowsPage() {
             </li>
           ))}
         </ul>
-      </section>
+      </SurfaceCard>
     </div>
   );
 }

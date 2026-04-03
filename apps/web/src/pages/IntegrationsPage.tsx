@@ -4,19 +4,27 @@ import {
   completeAdapterAuth,
   disconnectAppConnection,
   listApps,
+  listWorkflowTemplates,
   startAdapterAuth,
   testAppConnection,
   upsertAppConnection,
   type AppConnectionRecord,
+  type WorkflowTemplateSummary,
 } from "../api";
+import { Callout, PageHeader, StatusPill, SurfaceCard } from "../components/ui-kit";
 import {
   buildConnectionPayload,
   buildInitialFormState,
-  getStatusColor,
   normalizeTextValue,
   type ConnectionFormState,
   validateRequiredFields,
 } from "./integration-connection-helpers";
+import {
+  describeSetupMethod,
+  getAppVisual,
+  getSuggestedTemplatesForApp,
+  toConnectionStatusLabel,
+} from "./integrations-catalog-helpers";
 import {
   buildOAuthRedirectUri,
   getOAuthPendingStorageKey,
@@ -49,6 +57,7 @@ export function IntegrationsPage() {
   const [searchParams] = useSearchParams();
   const location = useLocation();
   const [apps, setApps] = useState<AppConnectionRecord[]>([]);
+  const [templates, setTemplates] = useState<WorkflowTemplateSummary[]>([]);
   const [forms, setForms] = useState<Record<string, ConnectionFormState>>({});
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -69,8 +78,13 @@ export function IntegrationsPage() {
   async function load() {
     setLoading(true);
     try {
-      const appRecords = await listApps();
+      const [appRecords, templateRecords] = await Promise.all([
+        listApps(),
+        listWorkflowTemplates(),
+      ]);
+
       setApps(appRecords);
+      setTemplates(templateRecords);
       setForms((current) => {
         const next: Record<string, ConnectionFormState> = { ...current };
         for (const app of appRecords) {
@@ -106,7 +120,7 @@ export function IntegrationsPage() {
     const callbackAppKey =
       oauthCallbackInfo.appKey || oauthCallbackInfo.state || highlightAppKey;
     if (!callbackAppKey) {
-      setError("OAuth callback is missing app context. Please reconnect from Apps.");
+      setError("Connection callback is missing app context. Please reconnect from Apps.");
       cleanupOAuthParamsFromUrl();
       return;
     }
@@ -127,7 +141,7 @@ export function IntegrationsPage() {
     }
 
     if (!oauthCallbackInfo.code) {
-      setError("OAuth callback is missing code. Please reconnect and try again.");
+      setError("Connection callback is missing code. Please reconnect and try again.");
       cleanupOAuthParamsFromUrl();
       return;
     }
@@ -158,7 +172,7 @@ export function IntegrationsPage() {
         await load();
 
         setMessage(
-          `${callbackAppKey} is now connected. ${returnTo ? "Use the return link below to continue setup." : "You can now create your automation."}`,
+          `${callbackAppKey} is connected. You can continue creating your automation now.`,
         );
       } catch (authError) {
         setError(
@@ -326,208 +340,172 @@ export function IntegrationsPage() {
   }
 
   return (
-    <div style={{ display: "grid", gap: 16 }}>
-      <h2>Apps and Connections</h2>
-      <p>
-        Configure app connections in the web UI. Use <code>.env</code> only for platform runtime
-        settings like database, Redis, JWT, and encryption keys.
-      </p>
-
-      <section style={{ border: "1px solid #d0d0d0", borderRadius: 10, padding: 12 }}>
-        <h3 style={{ marginTop: 0 }}>Connection Summary</h3>
-        <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
-          <div>
-            Total Apps: <strong>{appCounts.total}</strong>
-          </div>
-          <div>
-            Connected: <strong>{appCounts.connected}</strong>
-          </div>
-          <div>
-            Needs Attention: <strong>{appCounts.needsAttention}</strong>
-          </div>
-        </div>
-        <div style={{ marginTop: 8, display: "flex", gap: 10, flexWrap: "wrap" }}>
-          <Link to="/first-automation">First Automation Wizard</Link>
-          <Link to="/workflows">Build Automation</Link>
-          <Link to="/runs">View Test Runs</Link>
-          <Link to="/onboarding">Onboarding</Link>
-          {returnTo ? <Link to={returnTo}>Return to previous step</Link> : null}
-        </div>
-      </section>
+    <div className="stack">
+      <PageHeader
+        eyebrow="Apps"
+        title="Connect Your Apps"
+        subtitle="Set up connections once, then reuse them across templates and automations. OAuth connections complete automatically when you return from the provider."
+        actions={
+          <>
+            <StatusPill tone="info">{appCounts.total} apps</StatusPill>
+            <StatusPill tone="success">{appCounts.connected} connected</StatusPill>
+            <StatusPill tone={appCounts.needsAttention > 0 ? "warning" : "info"}>
+              {appCounts.needsAttention} need attention
+            </StatusPill>
+            <Link to="/first-automation">Open First Automation</Link>
+            <Link to="/workflows">Browse Templates</Link>
+          </>
+        }
+      />
 
       {templateId ? (
-        <section style={{ border: "1px solid #d0d0d0", borderRadius: 10, padding: 12 }}>
-          <h3 style={{ marginTop: 0 }}>Template Setup</h3>
-          <p style={{ marginBottom: 6 }}>
-            This setup came from a template workflow. Connect missing apps here, then return to continue.
+        <Callout
+          tone="info"
+          title="Template setup in progress"
+          actions={
+            <>
+              <Link to={`/workflows?templateId=${encodeURIComponent(templateId)}`}>Return to template</Link>
+              <Link to="/first-automation">Open wizard</Link>
+            </>
+          }
+        >
+          <p>
+            Connect the required apps here, then return and continue your automation setup.
           </p>
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-            <Link to={`/workflows?templateId=${encodeURIComponent(templateId)}`}>Back to Template</Link>
-            <Link to="/first-automation">Open First Automation Wizard</Link>
-            <Link to="/workflows">Browse Templates</Link>
-          </div>
-        </section>
+        </Callout>
       ) : null}
 
-      {loading ? <p>Loading apps...</p> : null}
-      {message ? <p style={{ color: "#0f5132" }}>{message}</p> : null}
-      {error ? <p style={{ color: "#b42318" }}>{error}</p> : null}
+      {message ? (
+        <Callout tone="success" title="Connection updated">
+          <p>{message}</p>
+          <div className="inline-actions">
+            <Link to="/first-automation">Continue to first automation</Link>
+            <Link to="/runs">View test runs</Link>
+          </div>
+        </Callout>
+      ) : null}
+      {error ? (
+        <Callout tone="danger" title="Action failed">
+          <p>{error}</p>
+        </Callout>
+      ) : null}
 
-      <div style={{ display: "grid", gap: 12 }}>
-        {apps.map((app) => {
-          const formState = forms[app.key] || buildInitialFormState(app);
-          const isHighlighted = highlightAppKey === app.key;
-          const saveDisabled = savingByApp[app.key] || !app.actions.canEdit;
-          const testDisabled = testingByApp[app.key] || !app.actions.canTestConnection;
+      <SurfaceCard
+        title="App Catalog"
+        subtitle="Choose an app, connect it, and test it before using templates."
+      >
+        {loading ? <p>Loading apps...</p> : null}
+        <div className="app-catalog-grid">
+          {apps.map((app) => {
+            const formState = forms[app.key] || buildInitialFormState(app);
+            const isHighlighted = highlightAppKey === app.key;
+            const saveDisabled = savingByApp[app.key] || !app.actions.canEdit;
+            const testDisabled = testingByApp[app.key] || !app.actions.canTestConnection;
+            const status = toConnectionStatusLabel(app.status);
+            const visual = getAppVisual(app.key);
+            const suggestions = getSuggestedTemplatesForApp(app.key, templates, 2);
 
-          return (
-            <section
-              key={app.key}
-              style={{
-                border: isHighlighted ? "2px solid #2563eb" : "1px solid #d0d0d0",
-                borderRadius: 10,
-                padding: 12,
-                background: isHighlighted ? "#f8fbff" : "white",
-              }}
-            >
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  gap: 10,
-                  flexWrap: "wrap",
-                }}
+            return (
+              <article
+                key={app.key}
+                className={`app-card ${isHighlighted ? "highlight" : ""}`}
               >
-                <div>
-                  <h3 style={{ margin: 0 }}>{app.name}</h3>
-                  <div style={{ fontSize: 13, color: "#555" }}>{app.description}</div>
-                  <div style={{ marginTop: 6, fontSize: 13 }}>
-                    Setup: <strong>{app.setupLabel}</strong>
-                    {" "}
-                    ({app.setupMethod})
+                <div className="app-header-row">
+                  <div>
+                    <div className="app-title">
+                      <span className="app-icon" aria-hidden="true">
+                        {visual.icon}
+                      </span>
+                      {app.name}
+                    </div>
+                    <p>{app.description}</p>
+                  </div>
+                  <div className="stack-sm" style={{ alignItems: "flex-end" }}>
+                    <StatusPill tone={status.tone}>{status.label}</StatusPill>
+                    <span className="tag">{describeSetupMethod(app.setupMethod)}</span>
                   </div>
                 </div>
-                <div style={{ textAlign: "right" }}>
-                  <div style={{ color: getStatusColor(app.status), fontWeight: 600 }}>
-                    {app.status === "connected"
-                      ? "Connected"
-                      : app.status === "not_connected"
-                        ? "Not Connected"
-                        : app.status}
-                  </div>
-                  <div style={{ fontSize: 12, color: "#555" }}>
+
+                <div className="tag-row">
+                  <span className="tag">
                     Triggers: {app.supportedTriggers.length ? app.supportedTriggers.join(", ") : "none"}
-                  </div>
-                  <div style={{ fontSize: 12, color: "#555" }}>
+                  </span>
+                  <span className="tag">
                     Actions: {app.supportedActions.length ? app.supportedActions.join(", ") : "none"}
-                  </div>
+                  </span>
                 </div>
-              </div>
 
-              <ul style={{ marginTop: 8 }}>
-                {app.setupNotes.map((note) => (
-                  <li key={note}>{note}</li>
-                ))}
-              </ul>
+                <div className="stack-sm">
+                  {app.setupNotes.map((note) => (
+                    <p key={note}>• {note}</p>
+                  ))}
+                </div>
 
-              {app.platformManagedFields.length > 0 ? (
-                <p style={{ marginTop: 0, fontSize: 12, color: "#555" }}>
-                  Platform-level settings (keep in <code>.env</code>): {app.platformManagedFields.join(", ")}
-                </p>
-              ) : null}
+                {app.platformManagedFields.length > 0 ? (
+                  <div className="callout warning">
+                    <strong>Platform-level settings</strong>
+                    <p>Keep these in <code>.env</code>: {app.platformManagedFields.join(", ")}</p>
+                  </div>
+                ) : null}
 
-              <div style={{ display: "grid", gap: 8 }}>
-                <label>
-                  Connection Name
-                  <input
-                    value={normalizeTextValue(formState.integrationName)}
-                    onChange={(event) =>
-                      updateFormValue(app.key, "integrationName", event.target.value)
-                    }
-                    style={{ marginLeft: 8, minWidth: 260 }}
-                  />
-                </label>
-
-                {app.setupFields.map((field) => (
-                  <label key={`${app.key}-${field.key}`}>
-                    {field.label}
-                    {field.required ? " *" : ""}
-                    {field.inputType === "boolean" ? (
-                      <input
-                        type="checkbox"
-                        checked={Boolean(formState[field.key])}
-                        onChange={(event) =>
-                          updateFormValue(app.key, field.key, event.target.checked)
-                        }
-                        style={{ marginLeft: 8 }}
-                      />
-                    ) : (
-                      <input
-                        type={
-                          field.inputType === "password"
-                            ? "password"
-                            : field.inputType === "number"
-                              ? "number"
-                              : "text"
-                        }
-                        value={normalizeTextValue(formState[field.key])}
-                        placeholder={field.placeholder}
-                        onChange={(event) =>
-                          updateFormValue(app.key, field.key, event.target.value)
-                        }
-                        style={{ marginLeft: 8, minWidth: 280 }}
-                      />
-                    )}
-                    {field.helpText ? (
-                      <div style={{ fontSize: 12, color: "#555" }}>{field.helpText}</div>
-                    ) : null}
+                <div className="form-grid two section-divider">
+                  <label>
+                    Connection name
+                    <input
+                      value={normalizeTextValue(formState.integrationName)}
+                      onChange={(event) =>
+                        updateFormValue(app.key, "integrationName", event.target.value)
+                      }
+                    />
                   </label>
-                ))}
-              </div>
 
-              {app.setupMethod === "oauth2" ? (
-                <div style={{ marginTop: 10, display: "grid", gap: 8 }}>
-                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  {app.setupFields.map((field) => (
+                    <label key={`${app.key}-${field.key}`}>
+                      {field.label}
+                      {field.required ? " *" : ""}
+                      {field.inputType === "boolean" ? (
+                        <div>
+                          <input
+                            type="checkbox"
+                            checked={Boolean(formState[field.key])}
+                            onChange={(event) =>
+                              updateFormValue(app.key, field.key, event.target.checked)
+                            }
+                          />
+                        </div>
+                      ) : (
+                        <input
+                          type={
+                            field.inputType === "password"
+                              ? "password"
+                              : field.inputType === "number"
+                                ? "number"
+                                : "text"
+                          }
+                          value={normalizeTextValue(formState[field.key])}
+                          placeholder={field.placeholder}
+                          onChange={(event) =>
+                            updateFormValue(app.key, field.key, event.target.value)
+                          }
+                        />
+                      )}
+                      {field.helpText ? <small>{field.helpText}</small> : null}
+                    </label>
+                  ))}
+                </div>
+
+                <div className="inline-actions section-divider">
+                  {app.setupMethod === "oauth2" ? (
                     <button
                       type="button"
+                      className="button-primary"
                       disabled={!app.actions.canConnect}
                       onClick={() => void onStartOAuth(app)}
                     >
                       {app.connected ? "Reconnect" : "Connect"}
                     </button>
-                    <button
-                      type="button"
-                      disabled={saveDisabled}
-                      onClick={() => void onSaveConnection(app)}
-                    >
-                      Save Setup
-                    </button>
-                    <button
-                      type="button"
-                      disabled={testDisabled}
-                      onClick={() => void onTestConnection(app)}
-                    >
-                      {testingByApp[app.key] ? "Testing..." : "Test Connection"}
-                    </button>
-                    {app.actions.canDisconnect ? (
-                      <button type="button" onClick={() => void onDisconnect(app)}>
-                        Disconnect
-                      </button>
-                    ) : null}
-                  </div>
-
-                  <p style={{ margin: 0, fontSize: 12, color: "#555" }}>
-                    OAuth connection completes automatically when you return from the provider.
-                  </p>
-
-                  {app.connected ? (
-                    <p style={{ margin: 0, fontSize: 13, color: "#0f5132" }}>
-                      Connected. Next step: trigger a test run in your first automation.
-                    </p>
                   ) : null}
-                </div>
-              ) : (
-                <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
+
                   <button
                     type="button"
                     disabled={saveDisabled}
@@ -536,31 +514,61 @@ export function IntegrationsPage() {
                     {savingByApp[app.key]
                       ? "Saving..."
                       : app.connected
-                        ? "Update Connection"
-                        : "Connect"}
+                        ? "Save changes"
+                        : "Save connection"}
                   </button>
+
                   <button
                     type="button"
                     disabled={testDisabled}
                     onClick={() => void onTestConnection(app)}
                   >
-                    {testingByApp[app.key] ? "Testing..." : "Test Connection"}
+                    {testingByApp[app.key] ? "Testing..." : "Test connection"}
                   </button>
+
                   {app.actions.canDisconnect ? (
                     <button type="button" onClick={() => void onDisconnect(app)}>
                       Disconnect
                     </button>
                   ) : null}
                 </div>
-              )}
 
-              {app.connection.validationError ? (
-                <p style={{ marginTop: 8, color: "#b42318" }}>{app.connection.validationError}</p>
-              ) : null}
-            </section>
-          );
-        })}
-      </div>
+                {app.connection.validationError ? (
+                  <div className="callout danger">
+                    <strong>Connection validation failed</strong>
+                    <p>{app.connection.validationError}</p>
+                  </div>
+                ) : null}
+
+                {suggestions.length > 0 ? (
+                  <div className="section-divider stack-sm">
+                    <strong>Suggested templates</strong>
+                    <div className="inline-actions">
+                      {suggestions.map((template) => (
+                        <Link
+                          key={template.id}
+                          to={`/workflows?templateId=${encodeURIComponent(template.id)}`}
+                        >
+                          {template.title}
+                        </Link>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+              </article>
+            );
+          })}
+        </div>
+      </SurfaceCard>
+
+      {returnTo ? (
+        <SurfaceCard title="Continue where you left off" muted>
+          <div className="inline-actions">
+            <Link to={returnTo}>Return to previous step</Link>
+            <Link to="/first-automation">Open first automation wizard</Link>
+          </div>
+        </SurfaceCard>
+      ) : null}
     </div>
   );
 }

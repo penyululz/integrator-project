@@ -33,6 +33,19 @@ export type RunLogHighlight = {
   payload: Record<string, unknown>;
 };
 
+export type RunStatusCounts = {
+  total: number;
+  success: number;
+  failed: number;
+  deadLettered: number;
+  retrying: number;
+  waiting: number;
+  running: number;
+  queued: number;
+  cancelled: number;
+  other: number;
+};
+
 export const RUN_EVENT_FILTER_OPTIONS = [
   "",
   "workflow.execution.deferred",
@@ -256,4 +269,132 @@ export function compactPayload(payload: Record<string, unknown>): string {
   } catch {
     return "{}";
   }
+}
+
+export function countRunsByStatus(runs: RunRecord[]): RunStatusCounts {
+  const counts: RunStatusCounts = {
+    total: runs.length,
+    success: 0,
+    failed: 0,
+    deadLettered: 0,
+    retrying: 0,
+    waiting: 0,
+    running: 0,
+    queued: 0,
+    cancelled: 0,
+    other: 0,
+  };
+
+  for (const run of runs) {
+    switch (run.status) {
+      case "success":
+        counts.success += 1;
+        break;
+      case "failed":
+        counts.failed += 1;
+        break;
+      case "dead_lettered":
+        counts.deadLettered += 1;
+        break;
+      case "retrying":
+        counts.retrying += 1;
+        break;
+      case "waiting":
+        counts.waiting += 1;
+        break;
+      case "running":
+        counts.running += 1;
+        break;
+      case "queued":
+        counts.queued += 1;
+        break;
+      case "cancelled":
+        counts.cancelled += 1;
+        break;
+      default:
+        counts.other += 1;
+        break;
+    }
+  }
+
+  return counts;
+}
+
+export function buildRunSimulatorPayload(seed = Date.now()): Record<string, unknown> {
+  return {
+    message: `Test automation payload ${seed}`,
+    source: "runs_page_simulator",
+    sentAt: new Date(seed).toISOString(),
+    metadata: {
+      priority: "normal",
+      initiatedBy: "ui-simulator",
+    },
+  };
+}
+
+export function parseRunSimulatorPayloadInput(input: string): {
+  payload: Record<string, unknown> | null;
+  error: string | null;
+} {
+  const trimmed = input.trim();
+  if (!trimmed) {
+    return {
+      payload: {},
+      error: null,
+    };
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return {
+      payload: null,
+      error: "Payload must be valid JSON.",
+    };
+  }
+
+  if (!isRecord(parsed)) {
+    return {
+      payload: null,
+      error: "Payload must be a JSON object.",
+    };
+  }
+
+  return {
+    payload: parsed,
+    error: null,
+  };
+}
+
+export function summarizeRunOutcome(run: RunRecord | null): string {
+  if (!run) {
+    return "Select a run to view execution details.";
+  }
+
+  if (run.status === "success") {
+    return "Run completed successfully.";
+  }
+
+  if (run.status === "dead_lettered") {
+    return "Run moved to dead-letter after exhausting retries.";
+  }
+
+  if (run.status === "waiting") {
+    return "Run is paused on a scheduled wait step.";
+  }
+
+  if (run.status === "retrying") {
+    return "Run is retrying after a retryable failure.";
+  }
+
+  if (run.status === "cancelled") {
+    return "Run was cancelled by an operator.";
+  }
+
+  if (run.status === "failed") {
+    return "Run failed and may require configuration or data fixes.";
+  }
+
+  return `Run status: ${run.status.replace(/_/g, " ")}.`;
 }

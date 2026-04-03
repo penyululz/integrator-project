@@ -1,4 +1,4 @@
-﻿import type { WorkflowDelayStep } from "../types/workflow";
+import type { WorkflowDelayStep } from "../types/workflow";
 import { ConditionEditor } from "./ConditionEditor";
 
 export function DelayStepEditor({
@@ -14,10 +14,10 @@ export function DelayStepEditor({
   const delayValue = step.delayMs ?? step.delaySeconds ?? 0;
 
   return (
-    <div style={{ display: "grid", gap: 10 }}>
-      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+    <div className="stack">
+      <div className="inline-actions">
         <label>
-          Delay
+          Wait duration
           <input
             type="number"
             min={0}
@@ -38,7 +38,7 @@ export function DelayStepEditor({
                 });
               }
             }}
-            style={{ marginLeft: 8, width: 120 }}
+            style={{ marginLeft: 8, width: 140 }}
           />
         </label>
 

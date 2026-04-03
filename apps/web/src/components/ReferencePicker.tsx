@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { WorkflowMappedValue } from "../types/workflow";
 
 function isObject(input: unknown): input is Record<string, unknown> {
@@ -82,7 +82,7 @@ export function ReferencePicker({
   );
 
   return (
-    <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+    <div className="inline-actions">
       <select
         value={mode}
         disabled={disabled}

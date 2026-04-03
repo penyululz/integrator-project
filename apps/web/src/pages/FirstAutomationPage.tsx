@@ -16,6 +16,8 @@ import {
   type WorkflowRecord,
   type WorkflowTemplateSummary,
 } from "../api";
+import { RunStatusBadge } from "../components/RunStatusBadge";
+import { Callout, PageHeader, ProgressSteps, StatusPill, SurfaceCard } from "../components/ui-kit";
 import {
   FIRST_AUTOMATION_TEMPLATE_ID,
   buildFirstAutomationPayload,
@@ -26,7 +28,6 @@ import {
   getFirstAutomationStepStatus,
 } from "./first-automation-helpers";
 import { buildWorkflowFromTemplate } from "./workflow-builder-helpers";
-import { RunStatusBadge } from "../components/RunStatusBadge";
 
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL || "http://localhost:4000/api/v1";
@@ -165,7 +166,7 @@ export function FirstAutomationPage() {
       });
 
       setMessage(
-        `Automation created: ${created.name}. Next step: send a test event and confirm a successful run.`,
+        `Automation created: ${created.name}. Next step: send a test run to confirm end-to-end success.`,
       );
       await load();
     } catch (createError) {
@@ -193,7 +194,7 @@ export function FirstAutomationPage() {
       });
 
       setMessage(
-        `Test run queued for ${response.workflowKey}. Check Runs for status and logs in a few seconds.`,
+        `Test run queued for ${response.workflowKey}. Open Runs to watch status and logs.`,
       );
 
       await load();
@@ -209,132 +210,176 @@ export function FirstAutomationPage() {
   }
 
   return (
-    <div style={{ display: "grid", gap: 16 }}>
-      <h2>First Automation Wizard</h2>
-      <p>
-        This guided path gets you to your first successful automation quickly: connect Slack,
-        create a webhook-to-Slack automation, then run a test event.
-      </p>
+    <div className="stack">
+      <PageHeader
+        eyebrow="First-Time Success"
+        title="Build Your First Automation"
+        subtitle="Follow this guided flow to connect Slack, create a webhook-to-Slack automation, run a test, and verify success in minutes."
+        actions={
+          <>
+            <StatusPill tone={stepStatus.connectedSlack ? "success" : "info"}>
+              Slack {stepStatus.connectedSlack ? "connected" : "not connected"}
+            </StatusPill>
+            <StatusPill tone={stepStatus.hasWorkflow ? "success" : "info"}>
+              {stepStatus.hasWorkflow ? "automation ready" : "automation not created"}
+            </StatusPill>
+            <StatusPill tone={stepStatus.hasRun ? "success" : "warning"}>
+              {stepStatus.hasRun ? "test run found" : "test run pending"}
+            </StatusPill>
+          </>
+        }
+      />
 
       {loading ? <p>Loading wizard status...</p> : null}
-      {message ? <p style={{ color: "#0f5132" }}>{message}</p> : null}
-      {error ? <p style={{ color: "#b42318" }}>{error}</p> : null}
 
-      <section style={{ border: "1px solid #d0d0d0", borderRadius: 10, padding: 12 }}>
-        <h3 style={{ marginTop: 0 }}>Step 1: Connect Slack</h3>
-        <p style={{ marginTop: 0 }}>
-          Status: <strong>{stepStatus.connectedSlack ? "Connected" : "Not connected"}</strong>
-        </p>
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-          <Link to={connectSlackPath}>
-            {stepStatus.connectedSlack ? "Manage Slack Connection" : "Connect Slack"}
-          </Link>
-          <Link to="/integrations">Open Apps and Connections</Link>
-        </div>
-      </section>
-
-      <section style={{ border: "1px solid #d0d0d0", borderRadius: 10, padding: 12 }}>
-        <h3 style={{ marginTop: 0 }}>Step 2: Create Your Automation</h3>
-        <p style={{ marginTop: 0 }}>
-          Template: <strong>{selectedTemplate?.title || "Webhook -> Slack Message"}</strong>
-        </p>
-        {selectedTemplate ? (
-          <p style={{ marginTop: 0, color: "#555" }}>{selectedTemplate.description}</p>
-        ) : (
-          <p style={{ marginTop: 0, color: "#b42318" }}>
-            Required starter template is missing. Check template loading in the API.
-          </p>
-        )}
-
-        {selectedWorkflow ? (
-          <p style={{ marginTop: 0, color: "#0f5132" }}>
-            Automation ready: <strong>{selectedWorkflow.name}</strong>
-          </p>
-        ) : (
-          <p style={{ marginTop: 0 }}>
-            No webhook-to-Slack automation found yet. Create one from the starter template.
-          </p>
-        )}
-
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-          <button
-            type="button"
-            onClick={() => void onCreateFromTemplate()}
-            disabled={creating || !stepStatus.connectedSlack || !stepStatus.hasTemplate}
-          >
-            {creating ? "Creating..." : selectedWorkflow ? "Create Another from Template" : "Create from Template"}
-          </button>
-          <Link to={`/workflows?templateId=${encodeURIComponent(FIRST_AUTOMATION_TEMPLATE_ID)}`}>
-            Open Workflow Builder
-          </Link>
-        </div>
-      </section>
-
-      <section style={{ border: "1px solid #d0d0d0", borderRadius: 10, padding: 12 }}>
-        <h3 style={{ marginTop: 0 }}>Step 3: Trigger a Test Event</h3>
-        <p style={{ marginTop: 0 }}>
-          Use one-click test run, or send a webhook manually with the sample below.
-        </p>
-
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
-          <button
-            type="button"
-            onClick={() => void onSendTestRun()}
-            disabled={testing || !selectedWorkflow}
-          >
-            {testing ? "Sending test..." : "Send Test Run"}
-          </button>
-          <Link to="/runs">Open Runs</Link>
-        </div>
-
-        <div style={{ fontSize: 13 }}>
-          <div>
-            <strong>Webhook URL:</strong> <code>{webhookUrl}</code>
+      {message ? (
+        <Callout tone="success" title="Great progress">
+          <p>{message}</p>
+          <div className="inline-actions">
+            <Link to="/runs">Inspect run logs</Link>
+            <Link to="/workflows">Edit automation</Link>
           </div>
-          <div style={{ marginTop: 8 }}>
-            <strong>Sample Payload</strong>
-          </div>
-          <pre
-            style={{
-              background: "#f8f8f8",
-              border: "1px solid #ececec",
-              borderRadius: 8,
-              padding: 10,
-              overflowX: "auto",
-              marginTop: 6,
-            }}
-          >
+        </Callout>
+      ) : null}
+
+      {error ? (
+        <Callout tone="danger" title="Something needs attention">
+          <p>{error}</p>
+        </Callout>
+      ) : null}
+
+      <SurfaceCard title="Guided Steps" subtitle="Complete these in order for your first end-to-end success.">
+        <ProgressSteps
+          steps={[
+            {
+              id: "connect",
+              done: stepStatus.connectedSlack,
+              title: "Connect Slack",
+              description:
+                "Set up Slack once so automations can send messages to your chosen channel.",
+              actions: (
+                <>
+                  <Link to={connectSlackPath}>Connect Slack</Link>
+                  <Link to="/integrations">Open apps</Link>
+                </>
+              ),
+            },
+            {
+              id: "template",
+              done: stepStatus.hasWorkflow,
+              title: "Create from template",
+              description:
+                "Use the starter template so you don’t need to configure every workflow detail manually.",
+              actions: (
+                <>
+                  <button
+                    type="button"
+                    className="button-primary"
+                    onClick={() => void onCreateFromTemplate()}
+                    disabled={creating || !stepStatus.connectedSlack || !stepStatus.hasTemplate}
+                  >
+                    {creating ? "Creating..." : "Create automation"}
+                  </button>
+                  <Link to={`/workflows?templateId=${encodeURIComponent(FIRST_AUTOMATION_TEMPLATE_ID)}`}>
+                    Open template editor
+                  </Link>
+                </>
+              ),
+            },
+            {
+              id: "test",
+              done: stepStatus.hasRun,
+              title: "Send a test run",
+              description:
+                "Queue a test payload directly from the UI and verify the automation end-to-end.",
+              actions: (
+                <>
+                  <button
+                    type="button"
+                    className="button-primary"
+                    onClick={() => void onSendTestRun()}
+                    disabled={testing || !selectedWorkflow}
+                  >
+                    {testing ? "Sending test..." : "Send test run"}
+                  </button>
+                  <Link to="/runs">Open runs</Link>
+                </>
+              ),
+            },
+            {
+              id: "verify",
+              done: stepStatus.hasRun,
+              title: "Review result and next steps",
+              description:
+                "Check run logs, adjust message mapping, and expand your automation from this baseline.",
+              actions: (
+                <>
+                  <Link to="/runs">Run details</Link>
+                  <Link to="/dashboard">Dashboard</Link>
+                  {isOperator ? <Link to="/audit-logs">Audit</Link> : null}
+                  {isOperator ? <Link to="/alerts">Alerts</Link> : null}
+                </>
+              ),
+            },
+          ]}
+        />
+      </SurfaceCard>
+
+      <div className="template-grid">
+        <SurfaceCard
+          title="Built-in test options"
+          subtitle="Use one-click test first. If needed, trigger manually with webhook + cURL."
+        >
+          <div className="stack-sm">
+            <p>
+              <strong>Webhook URL:</strong> <code>{webhookUrl}</code>
+            </p>
+            <p>
+              <strong>Sample payload</strong>
+            </p>
+            <pre
+              style={{
+                background: "#f8fbff",
+                border: "1px solid #d2def1",
+                borderRadius: 10,
+                padding: 10,
+                overflowX: "auto",
+                margin: 0,
+              }}
+            >
 {JSON.stringify(lastTestPayload, null, 2)}
-          </pre>
-          <div style={{ marginTop: 8 }}>
-            <strong>Sample cURL</strong>
-          </div>
-          <pre
-            style={{
-              background: "#f8f8f8",
-              border: "1px solid #ececec",
-              borderRadius: 8,
-              padding: 10,
-              overflowX: "auto",
-              marginTop: 6,
-            }}
-          >
+            </pre>
+            <p>
+              <strong>Sample cURL</strong>
+            </p>
+            <pre
+              style={{
+                background: "#f8fbff",
+                border: "1px solid #d2def1",
+                borderRadius: 10,
+                padding: 10,
+                overflowX: "auto",
+                margin: 0,
+              }}
+            >
 {webhookCurl}
-          </pre>
-        </div>
-      </section>
+            </pre>
+          </div>
+        </SurfaceCard>
 
-      <section style={{ border: "1px solid #d0d0d0", borderRadius: 10, padding: 12 }}>
-        <h3 style={{ marginTop: 0 }}>Step 4: Confirm Success</h3>
-        {!latestRun ? (
-          <p style={{ marginTop: 0 }}>
-            No run found yet. Send a test run to verify your first automation.
-          </p>
-        ) : (
-          <>
-            <div style={{ display: "grid", gap: 4 }}>
+        <SurfaceCard
+          title="Latest run result"
+          subtitle="Use this to confirm your first automation worked."
+          highlight
+        >
+          {!latestRun ? (
+            <div className="empty-state">
+              <p>No run found yet. Send a test run after creating your automation.</p>
+            </div>
+          ) : (
+            <div className="stack-sm">
               <div>
-                <strong>Latest Run:</strong> <code>{latestRun.id}</code>
+                <strong>Run ID:</strong> <code>{latestRun.id}</code>
               </div>
               <div>
                 <strong>Status:</strong> <RunStatusBadge status={latestRun.status} />
@@ -342,40 +387,44 @@ export function FirstAutomationPage() {
               <div>
                 <strong>Created:</strong> {latestRun.created_at}
               </div>
-            </div>
 
-            <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap" }}>
-              <Link to={`/runs?runId=${encodeURIComponent(latestRun.id)}`}>Inspect Run Logs</Link>
-              <Link to="/dashboard">Open Dashboard</Link>
-              {isOperator ? <Link to="/audit-logs">Audit Events</Link> : null}
-              {isOperator ? <Link to="/alerts">Alert Settings</Link> : null}
-            </div>
-
-            {latestRunLogs.length > 0 ? (
-              <div style={{ marginTop: 10 }}>
-                <strong>Recent Run Events</strong>
-                <ul>
-                  {latestRunLogs.map((event) => (
-                    <li key={event.id}>
-                      {event.created_at} - {event.event_type}
-                    </li>
-                  ))}
-                </ul>
+              <div className="inline-actions">
+                <Link to={`/runs?runId=${encodeURIComponent(latestRun.id)}`}>Inspect run</Link>
+                <Link to="/workflows">Edit automation</Link>
               </div>
-            ) : null}
-          </>
-        )}
-      </section>
 
-      <section style={{ border: "1px solid #d0d0d0", borderRadius: 10, padding: 12 }}>
-        <h3 style={{ marginTop: 0 }}>Progress</h3>
-        <ul style={{ margin: 0, paddingLeft: 18 }}>
-          <li>{stepStatus.connectedSlack ? "Done" : "Pending"}: Slack connection</li>
-          <li>{stepStatus.hasTemplate ? "Done" : "Pending"}: Starter template available</li>
-          <li>{stepStatus.hasWorkflow ? "Done" : "Pending"}: Automation created</li>
-          <li>{stepStatus.hasRun ? "Done" : "Pending"}: Test run observed</li>
-        </ul>
-      </section>
+              {latestRunLogs.length > 0 ? (
+                <div className="section-divider">
+                  <strong>Recent run events</strong>
+                  <ul>
+                    {latestRunLogs.map((event) => (
+                      <li key={event.id}>
+                        {event.created_at} - {event.event_type}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+            </div>
+          )}
+        </SurfaceCard>
+      </div>
+
+      {selectedTemplate ? (
+        <SurfaceCard title="Starter template" subtitle={selectedTemplate.description} muted>
+          <div className="tag-row">
+            <span className="tag">Difficulty: {selectedTemplate.difficulty}</span>
+            <span className="tag">Category: {selectedTemplate.category}</span>
+            <span className="tag">Apps: {selectedTemplate.requiredAdapters.join(", ")}</span>
+          </div>
+          <div className="inline-actions">
+            <Link to={`/workflows?templateId=${encodeURIComponent(selectedTemplate.id)}`}>
+              Open template
+            </Link>
+            <Link to="/integrations">Manage app connections</Link>
+          </div>
+        </SurfaceCard>
+      ) : null}
     </div>
   );
 }

@@ -7,9 +7,11 @@ import {
   type AuditLogFilters,
   type AuditLogRecord,
 } from "../api";
+import { Callout, PageHeader, SurfaceCard } from "../components/ui-kit";
 import {
   buildAuditTargetLink,
   shortId,
+  summarizeAuditFilters,
   summarizeAuditTarget,
   toAuditActionLabel,
   toAuditEntryDescription,
@@ -42,6 +44,14 @@ function toFilterInput(form: AuditFilterForm): AuditLogFilters {
     from: form.from || undefined,
     to: form.to || undefined,
   };
+}
+
+function formatDateTime(value: string): string {
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed)) {
+    return value;
+  }
+  return new Date(parsed).toLocaleString();
 }
 
 export function AuditLogsPage() {
@@ -135,6 +145,20 @@ export function AuditLogsPage() {
     setPage(1);
   }
 
+  function onResetFilters() {
+    const reset = {
+      action: "",
+      actorUserId: "",
+      targetType: "",
+      targetId: "",
+      from: "",
+      to: "",
+    };
+    setFormFilters(reset);
+    setAppliedFilters(reset);
+    setPage(1);
+  }
+
   useEffect(() => {
     if (!isOperator) {
       return;
@@ -151,216 +175,218 @@ export function AuditLogsPage() {
 
   if (!isOperator) {
     return (
-      <div style={{ display: "grid", gap: 12 }}>
-        <h2>Audit Logs</h2>
-        <p style={{ color: "#8a1c1c" }}>
-          Audit logs are restricted to owner/admin roles.
-        </p>
+      <div className="stack">
+        <PageHeader
+          eyebrow="Audit"
+          title="Operator Audit Trail"
+          subtitle="Audit visibility is limited to owner/admin roles in the current workspace."
+        />
+        <Callout tone="danger" title="Access restricted">
+          <p>Ask an owner or admin to grant operator-level access for audit visibility.</p>
+        </Callout>
       </div>
     );
   }
 
   return (
-    <div style={{ display: "grid", gap: 16 }}>
-      <h2>Operator Audit Logs</h2>
-      <p>
-        Review who changed workflow run state, when it happened, and why.
-      </p>
-      <div style={{ border: "1px solid #d0d0d0", borderRadius: 10, padding: 12 }}>
-        <strong>Demo Tip</strong>
-        <div style={{ marginTop: 6, fontSize: 14 }}>
-          Perform a run action in <Link to="/runs">Runs</Link> (cancel/replay/reschedule),
-          then use filters here to inspect the audit event.
-        </div>
-      </div>
+    <div className="stack">
+      <PageHeader
+        eyebrow="Audit"
+        title="Operator Audit Trail"
+        subtitle="Review who changed run and wait states, when changes happened, and why."
+        actions={
+          <>
+            <button type="button" onClick={() => void loadAuditList(page, appliedFilters)}>
+              Refresh
+            </button>
+            <Link to="/runs">Open runs</Link>
+          </>
+        }
+      />
 
-      <form
-        onSubmit={onApplyFilters}
-        style={{
-          border: "1px solid #d0d0d0",
-          borderRadius: 10,
-          padding: 12,
-          display: "grid",
-          gap: 10,
-        }}
+      <Callout
+        tone="info"
+        title="Cross-surface flow"
+        actions={
+          <>
+            <Link to="/runs">Runs</Link>
+            <Link to="/alerts">Alerts</Link>
+          </>
+        }
       >
-        <strong>Filters</strong>
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-            gap: 10,
-          }}
-        >
-          <label>
-            Action
-            <input
-              value={formFilters.action}
-              onChange={(event) =>
-                setFormFilters((current) => ({
-                  ...current,
-                  action: event.target.value,
-                }))
-              }
-              placeholder="run.cancel"
-              style={{ width: "100%" }}
-            />
-          </label>
+        <p>
+          Perform an operator action in Runs (cancel, replay, release wait), then inspect the matching
+          audit event here.
+        </p>
+      </Callout>
 
-          <label>
-            Actor User ID
-            <input
-              value={formFilters.actorUserId}
-              onChange={(event) =>
-                setFormFilters((current) => ({
-                  ...current,
-                  actorUserId: event.target.value,
-                }))
-              }
-              placeholder="uuid"
-              style={{ width: "100%" }}
-            />
-          </label>
+      {error ? (
+        <Callout tone="danger" title="Unable to load audit data">
+          <p>{error}</p>
+        </Callout>
+      ) : null}
 
-          <label>
-            Target Type
-            <input
-              value={formFilters.targetType}
-              onChange={(event) =>
-                setFormFilters((current) => ({
-                  ...current,
-                  targetType: event.target.value,
-                }))
-              }
-              placeholder="workflow_run"
-              style={{ width: "100%" }}
-            />
-          </label>
+      <SurfaceCard title="Filters" subtitle="Narrow results by action, actor, target, or time window.">
+        <form onSubmit={onApplyFilters} className="stack-sm">
+          <div className="form-grid two">
+            <label>
+              Action
+              <input
+                value={formFilters.action}
+                onChange={(event) =>
+                  setFormFilters((current) => ({
+                    ...current,
+                    action: event.target.value,
+                  }))
+                }
+                placeholder="run.cancel"
+                style={{ width: "100%", marginTop: 4 }}
+              />
+            </label>
 
-          <label>
-            Target ID
-            <input
-              value={formFilters.targetId}
-              onChange={(event) =>
-                setFormFilters((current) => ({
-                  ...current,
-                  targetId: event.target.value,
-                }))
-              }
-              placeholder="uuid"
-              style={{ width: "100%" }}
-            />
-          </label>
+            <label>
+              Actor user ID
+              <input
+                value={formFilters.actorUserId}
+                onChange={(event) =>
+                  setFormFilters((current) => ({
+                    ...current,
+                    actorUserId: event.target.value,
+                  }))
+                }
+                placeholder="user UUID"
+                style={{ width: "100%", marginTop: 4 }}
+              />
+            </label>
 
-          <label>
-            From (ISO)
-            <input
-              value={formFilters.from}
-              onChange={(event) =>
-                setFormFilters((current) => ({
-                  ...current,
-                  from: event.target.value,
-                }))
-              }
-              placeholder="2026-04-01T00:00:00.000Z"
-              style={{ width: "100%" }}
-            />
-          </label>
+            <label>
+              Target type
+              <input
+                value={formFilters.targetType}
+                onChange={(event) =>
+                  setFormFilters((current) => ({
+                    ...current,
+                    targetType: event.target.value,
+                  }))
+                }
+                placeholder="workflow_run"
+                style={{ width: "100%", marginTop: 4 }}
+              />
+            </label>
 
-          <label>
-            To (ISO)
-            <input
-              value={formFilters.to}
-              onChange={(event) =>
-                setFormFilters((current) => ({
-                  ...current,
-                  to: event.target.value,
-                }))
-              }
-              placeholder="2026-04-02T00:00:00.000Z"
-              style={{ width: "100%" }}
-            />
-          </label>
-        </div>
+            <label>
+              Target ID
+              <input
+                value={formFilters.targetId}
+                onChange={(event) =>
+                  setFormFilters((current) => ({
+                    ...current,
+                    targetId: event.target.value,
+                  }))
+                }
+                placeholder="target UUID"
+                style={{ width: "100%", marginTop: 4 }}
+              />
+            </label>
 
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <button type="submit">Apply Filters</button>
-          <button
-            type="button"
-            onClick={() => {
-              const reset = {
-                action: "",
-                actorUserId: "",
-                targetType: "",
-                targetId: "",
-                from: "",
-                to: "",
-              };
-              setFormFilters(reset);
-              setAppliedFilters(reset);
-              setPage(1);
-            }}
-          >
-            Reset
-          </button>
-        </div>
-      </form>
+            <label>
+              From (ISO)
+              <input
+                value={formFilters.from}
+                onChange={(event) =>
+                  setFormFilters((current) => ({
+                    ...current,
+                    from: event.target.value,
+                  }))
+                }
+                placeholder="2026-04-01T00:00:00.000Z"
+                style={{ width: "100%", marginTop: 4 }}
+              />
+            </label>
 
-      {error ? <p style={{ color: "#b42318" }}>{error}</p> : null}
-
-      <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 16 }}>
-        <section style={{ border: "1px solid #d0d0d0", borderRadius: 10, padding: 12 }}>
-          <h3 style={{ marginTop: 0 }}>Audit Entries</h3>
-          {loadingList ? <p>Loading audit logs...</p> : null}
-          {logs.length === 0 ? (
-            <p style={{ marginBottom: 0 }}>
-              No audit events found for the current filters. Try clearing filters or run an
-              operator action from the Runs page first.
-            </p>
-          ) : null}
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
-              <thead>
-                <tr>
-                  <th align="left">Timestamp</th>
-                  <th align="left">Action</th>
-                  <th align="left">Actor</th>
-                  <th align="left">Target</th>
-                  <th align="left">Reason</th>
-                </tr>
-              </thead>
-              <tbody>
-                {logs.map((entry) => {
-                  const targetLink = buildAuditTargetLink(entry);
-                  return (
-                    <tr
-                      key={entry.id}
-                      onClick={() => setSelectedLogId(entry.id)}
-                      style={{
-                        cursor: "pointer",
-                        borderTop: "1px solid #efefef",
-                        background: selectedLogId === entry.id ? "#f7f9fc" : "transparent",
-                      }}
-                    >
-                      <td>{entry.timestamp}</td>
-                      <td>{toAuditActionLabel(entry.actionType)}</td>
-                      <td>{entry.actorName || entry.actorEmail || shortId(entry.actorUserId)}</td>
-                      <td>
-                        {targetLink ? (
-                          <Link to={targetLink}>{summarizeAuditTarget(entry)}</Link>
-                        ) : (
-                          summarizeAuditTarget(entry)
-                        )}
-                      </td>
-                      <td>{entry.reason || entry.note || "-"}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+            <label>
+              To (ISO)
+              <input
+                value={formFilters.to}
+                onChange={(event) =>
+                  setFormFilters((current) => ({
+                    ...current,
+                    to: event.target.value,
+                  }))
+                }
+                placeholder="2026-04-02T00:00:00.000Z"
+                style={{ width: "100%", marginTop: 4 }}
+              />
+            </label>
           </div>
 
-          <div style={{ display: "flex", gap: 8, marginTop: 10, alignItems: "center" }}>
+          <div className="inline-actions">
+            <button type="submit" className="button-primary">Apply filters</button>
+            <button type="button" onClick={onResetFilters}>Reset</button>
+            <span className="tag">{summarizeAuditFilters(appliedFilters)}</span>
+          </div>
+        </form>
+      </SurfaceCard>
+
+      <div className="template-grid">
+        <SurfaceCard title="Audit entries" subtitle="Operator actions recorded for this workspace.">
+          {loadingList ? <p>Loading audit logs...</p> : null}
+
+          {logs.length === 0 ? (
+            <div className="empty-state">
+              <p>No audit events found for the current filters.</p>
+              <p>Try clearing filters or perform an operator action from the Runs page first.</p>
+              <div className="inline-actions">
+                <button type="button" onClick={onResetFilters}>Clear filters</button>
+                <Link to="/runs">Go to runs</Link>
+              </div>
+            </div>
+          ) : null}
+
+          {logs.length > 0 ? (
+            <div style={{ overflowX: "auto" }}>
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Timestamp</th>
+                    <th>Action</th>
+                    <th>Actor</th>
+                    <th>Target</th>
+                    <th>Reason</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {logs.map((entry) => {
+                    const targetLink = buildAuditTargetLink(entry);
+                    return (
+                      <tr
+                        key={entry.id}
+                        onClick={() => setSelectedLogId(entry.id)}
+                        style={{
+                          cursor: "pointer",
+                          background: selectedLogId === entry.id ? "#f4f8ff" : "transparent",
+                        }}
+                      >
+                        <td>{formatDateTime(entry.timestamp)}</td>
+                        <td>{toAuditActionLabel(entry.actionType)}</td>
+                        <td>{entry.actorName || entry.actorEmail || shortId(entry.actorUserId)}</td>
+                        <td>
+                          {targetLink ? (
+                            <Link to={targetLink}>{summarizeAuditTarget(entry)}</Link>
+                          ) : (
+                            summarizeAuditTarget(entry)
+                          )}
+                        </td>
+                        <td>{entry.reason || entry.note || "-"}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
+
+          <div className="inline-actions" style={{ marginTop: 8 }}>
             <button
               type="button"
               disabled={page <= 1 || loadingList}
@@ -375,58 +401,57 @@ export function AuditLogsPage() {
             >
               Next
             </button>
-            <span style={{ fontSize: 13, color: "#555" }}>
+            <span className="tag">
               Page {pagination.page} | {pagination.total} total
             </span>
           </div>
-        </section>
+        </SurfaceCard>
 
-        <section style={{ border: "1px solid #d0d0d0", borderRadius: 10, padding: 12 }}>
-          <h3 style={{ marginTop: 0 }}>Audit Detail</h3>
+        <SurfaceCard title="Audit detail" subtitle="Expanded context for the selected event." highlight>
           {loadingDetail ? <p>Loading detail...</p> : null}
           {!selectedLog ? <p>Select an entry for details.</p> : null}
+
           {selectedLog ? (
-            <div style={{ display: "grid", gap: 10 }}>
-              <div>{toAuditEntryDescription(selectedLog)}</div>
-              <div>
-                <strong>ID:</strong> <span style={{ fontFamily: "monospace" }}>{selectedLog.id}</span>
-              </div>
-              <div>
-                <strong>Timestamp:</strong> {selectedLog.timestamp}
-              </div>
-              <div>
-                <strong>Actor Role:</strong> {selectedLog.actorRole || "-"}
-              </div>
-              <div>
-                <strong>Correlation ID:</strong> {selectedLog.correlationId || "-"}
-              </div>
-              <div>
-                <strong>Previous State:</strong>
+            <div className="stack-sm">
+              <Callout tone="info" title="Action summary">
+                <p>{toAuditEntryDescription(selectedLog)}</p>
+              </Callout>
+
+              <div><strong>ID:</strong> <code>{selectedLog.id}</code></div>
+              <div><strong>Timestamp:</strong> {formatDateTime(selectedLog.timestamp)}</div>
+              <div><strong>Actor role:</strong> {selectedLog.actorRole || "-"}</div>
+              <div><strong>Correlation ID:</strong> {selectedLog.correlationId || "-"}</div>
+
+              <div className="card-muted" style={{ borderRadius: 10, padding: 10 }}>
+                <strong>Previous state</strong>
                 <pre style={{ whiteSpace: "pre-wrap", margin: "4px 0 0" }}>
                   {JSON.stringify(selectedLog.previousStateSummary || {}, null, 2)}
                 </pre>
               </div>
-              <div>
-                <strong>New State:</strong>
+
+              <div className="card-muted" style={{ borderRadius: 10, padding: 10 }}>
+                <strong>New state</strong>
                 <pre style={{ whiteSpace: "pre-wrap", margin: "4px 0 0" }}>
                   {JSON.stringify(selectedLog.newStateSummary || {}, null, 2)}
                 </pre>
               </div>
-              <div>
-                <strong>Metadata:</strong>
+
+              <div className="card-muted" style={{ borderRadius: 10, padding: 10 }}>
+                <strong>Metadata</strong>
                 <pre style={{ whiteSpace: "pre-wrap", margin: "4px 0 0" }}>
                   {JSON.stringify(selectedLog.metadata || {}, null, 2)}
                 </pre>
               </div>
 
               {buildAuditTargetLink(selectedLog) ? (
-                <div>
-                  <Link to={buildAuditTargetLink(selectedLog)!}>Open related run/wait context</Link>
+                <div className="inline-actions">
+                  <Link to={buildAuditTargetLink(selectedLog)!}>Open related run/wait</Link>
+                  <Link to="/runs">Back to runs</Link>
                 </div>
               ) : null}
             </div>
           ) : null}
-        </section>
+        </SurfaceCard>
       </div>
     </div>
   );

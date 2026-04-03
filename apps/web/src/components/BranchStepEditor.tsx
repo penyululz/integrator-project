@@ -1,4 +1,4 @@
-﻿import type { ReactNode } from "react";
+import type { ReactNode } from "react";
 import type { WorkflowBranchStep, WorkflowStep } from "../types/workflow";
 import { ConditionEditor } from "./ConditionEditor";
 
@@ -20,7 +20,7 @@ export function BranchStepEditor({
   ) => ReactNode;
 }) {
   return (
-    <div style={{ display: "grid", gap: 10 }}>
+    <div className="stack">
       <ConditionEditor
         value={step.condition}
         referenceHints={referenceHints}
@@ -32,18 +32,18 @@ export function BranchStepEditor({
         }}
       />
 
-      <div style={{ display: "grid", gap: 8 }}>
-        <h4 style={{ margin: 0 }}>Then</h4>
+      <div className="stack">
+        <h4>When condition is true</h4>
         {step.then.map((nestedStep, index) => renderNestedStep("then", index, nestedStep))}
-        <button type="button" onClick={() => onAddNestedStep("then")}>Add Then Step</button>
+        <button type="button" onClick={() => onAddNestedStep("then")}>Add true-path step</button>
       </div>
 
-      <div style={{ display: "grid", gap: 8 }}>
-        <h4 style={{ margin: 0 }}>Else</h4>
+      <div className="stack">
+        <h4>When condition is false</h4>
         {(step.else || []).map((nestedStep, index) =>
           renderNestedStep("else", index, nestedStep),
         )}
-        <button type="button" onClick={() => onAddNestedStep("else")}>Add Else Step</button>
+        <button type="button" onClick={() => onAddNestedStep("else")}>Add false-path step</button>
       </div>
     </div>
   );

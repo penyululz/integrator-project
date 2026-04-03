@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  ALERT_EVENT_GROUPS,
   formatHeadersJson,
   formatRecipientsCsv,
+  getAlertCooldownCopy,
   parseHeadersJson,
   parseRecipientsCsv,
 } from "./alert-settings-helpers";
@@ -42,5 +44,18 @@ describe("alert settings helpers", () => {
     expect(() => parseHeadersJson('["array"]')).toThrow(
       "Webhook headers must be a key/value object.",
     );
+  });
+
+  it("groups alert events by category and formats cooldown copy", () => {
+    const allEventKeys = ALERT_EVENT_GROUPS.flatMap((group) =>
+      group.events.map((event) => event.key),
+    );
+    expect(allEventKeys).toContain("workflow.dead_lettered");
+    expect(allEventKeys).toContain("alert.test");
+    expect(new Set(allEventKeys).size).toBe(allEventKeys.length);
+
+    expect(getAlertCooldownCopy(30)).toBe("30s dedupe window");
+    expect(getAlertCooldownCopy(300)).toBe("5m dedupe window");
+    expect(getAlertCooldownCopy(7200)).toBe("2h dedupe window");
   });
 });

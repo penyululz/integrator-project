@@ -58,3 +58,35 @@ export function toAuditEntryDescription(
     : entry.targetType || "target";
   return `${actor} performed ${entry.actionType} on ${target}`.trim();
 }
+
+export function summarizeAuditFilters(filters: {
+  action?: string;
+  actorUserId?: string;
+  targetType?: string;
+  targetId?: string;
+  from?: string;
+  to?: string;
+}): string {
+  const parts: string[] = [];
+
+  if (filters.action) {
+    parts.push(`action ${filters.action}`);
+  }
+  if (filters.actorUserId) {
+    parts.push(`actor ${shortId(filters.actorUserId)}`);
+  }
+  if (filters.targetType) {
+    parts.push(`target ${filters.targetType}`);
+  }
+  if (filters.targetId) {
+    parts.push(`target id ${shortId(filters.targetId)}`);
+  }
+  if (filters.from || filters.to) {
+    parts.push(`window ${filters.from || "start"} to ${filters.to || "now"}`);
+  }
+
+  if (parts.length === 0) {
+    return "No filters applied";
+  }
+  return parts.join(" | ");
+}

@@ -11,26 +11,66 @@ import {
   listRetryJobs,
   listRuns,
   listScheduledWaits,
+  listWorkflows,
   releaseWaitNow,
   replayRun,
   rescheduleWait,
   resumeRunIfWaiting,
+  triggerWorkflowTestRun,
   type EventLogRecord,
   type RetryQueueRecord,
   type RunRecord,
   type ScheduledWaitRecord,
+  type WorkflowRecord,
+  type WorkflowTestRunResponse,
 } from "../api";
 import { RunStatusBadge } from "../components/RunStatusBadge";
+import { Callout, MetricTile, PageHeader, StatusPill, SurfaceCard } from "../components/ui-kit";
 import {
+  buildRunSimulatorPayload,
   compactPayload,
+  countRunsByStatus,
   getActionTimingSummary,
   getFailureClassification,
   getRunDurationMs,
   getRunStepTimeline,
+  parseRunSimulatorPayloadInput,
   RUN_EVENT_FILTER_OPTIONS,
+  summarizeRunOutcome,
   toRunLogHighlights,
 } from "./runs-helpers";
 import { shortId, toAuditActionLabel } from "./audit-helpers";
+
+function toTone(status: string): "info" | "success" | "warning" | "danger" {
+  if (status === "success") {
+    return "success";
+  }
+  if (status === "retrying" || status === "waiting") {
+    return "warning";
+  }
+  if (status === "failed" || status === "dead_lettered" || status === "cancelled") {
+    return "danger";
+  }
+  return "info";
+}
+
+function formatDateTime(value: string | null | undefined): string {
+  if (!value) {
+    return "-";
+  }
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed)) {
+    return value;
+  }
+  return new Date(parsed).toLocaleString();
+}
+
+function getLatestRunForWorkflow(runs: RunRecord[], workflowId: string): RunRecord | null {
+  const candidate = [...runs]
+    .filter((run) => run.workflow_id === workflowId)
+    .sort((left, right) => right.created_at.localeCompare(left.created_at))[0];
+  return candidate || null;
+}
 
 export function RunsPage() {
   const [searchParams] = useSearchParams();
@@ -44,6 +84,7 @@ export function RunsPage() {
   const [runs, setRuns] = useState<RunRecord[]>([]);
   const [retries, setRetries] = useState<RetryQueueRecord[]>([]);
   const [scheduledWaits, setScheduledWaits] = useState<ScheduledWaitRecord[]>([]);
+  const [workflows, setWorkflows] = useState<WorkflowRecord[]>([]);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [selectedRun, setSelectedRun] = useState<RunRecord | null>(null);
   const [logs, setLogs] = useState<EventLogRecord[]>([]);
@@ -54,6 +95,14 @@ export function RunsPage() {
   const [actionLoading, setActionLoading] = useState(false);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  const [selectedTestWorkflowId, setSelectedTestWorkflowId] = useState<string>("");
+  const [testPayloadInput, setTestPayloadInput] = useState<string>(
+    JSON.stringify(buildRunSimulatorPayload(), null, 2),
+  );
+  const [simulatorLoading, setSimulatorLoading] = useState(false);
+  const [simulatorResult, setSimulatorResult] = useState<WorkflowTestRunResponse | null>(null);
+
   const requestedRunId = searchParams.get("runId");
   const requestedWaitId = searchParams.get("waitId");
 
@@ -71,6 +120,11 @@ export function RunsPage() {
     return scheduledWaits.filter((wait) => wait.workflow_run_id === selectedRunId);
   }, [scheduledWaits, selectedRunId]);
 
+  const selectedTestWorkflow = useMemo(
+    () => workflows.find((workflow) => workflow.id === selectedTestWorkflowId) || null,
+    [workflows, selectedTestWorkflowId],
+  );
+
   const timeline = useMemo(() => getRunStepTimeline(selectedRun), [selectedRun]);
   const logHighlights = useMemo(() => toRunLogHighlights(logs), [logs]);
   const runDurationMs = useMemo(() => getRunDurationMs(selectedRun), [selectedRun]);
@@ -83,6 +137,7 @@ export function RunsPage() {
     [logHighlights],
   );
   const retryCount = selectedRun ? Math.max(0, selectedRun.attempt_count - 1) : 0;
+  const runStatusCounts = useMemo(() => countRunsByStatus(runs), [runs]);
 
   const branchSelections = useMemo(
     () => logHighlights.filter((entry) => entry.eventType === "workflow.branch.selected"),
@@ -124,26 +179,27 @@ export function RunsPage() {
     [logHighlights],
   );
 
-  async function loadRuns(currentSelectedRunId?: string | null) {
+  async function loadRuns(currentSelectedRunId?: string | null): Promise<RunRecord[]> {
     setLoadingRuns(true);
     setError(null);
 
     try {
-      const [nextRuns, nextRetries, nextScheduledWaits] = await Promise.all([
+      const [nextRuns, nextRetries, nextScheduledWaits, nextWorkflows] = await Promise.all([
         listRuns(),
         listRetryJobs(),
         listScheduledWaits(),
+        listWorkflows(),
       ]);
       setRuns(nextRuns);
       setRetries(nextRetries);
       setScheduledWaits(nextScheduledWaits);
+      setWorkflows(nextWorkflows);
 
       if (nextRuns.length === 0) {
         setSelectedRunId(null);
         setSelectedRun(null);
         setLogs([]);
         setRelatedAuditLogs([]);
-        return;
       }
 
       const runIdFromWait = requestedWaitId
@@ -153,15 +209,41 @@ export function RunsPage() {
         currentSelectedRunId ||
         requestedRunId ||
         runIdFromWait ||
-        nextRuns[0].id;
-      const preferredRunId = nextRuns.some(
-        (run) => run.id === preferredRunIdCandidate,
-      )
-        ? preferredRunIdCandidate
-        : nextRuns[0].id;
+        nextRuns[0]?.id ||
+        null;
+      const preferredRunId =
+        preferredRunIdCandidate && nextRuns.some((run) => run.id === preferredRunIdCandidate)
+          ? preferredRunIdCandidate
+          : nextRuns[0]?.id || null;
+
       setSelectedRunId(preferredRunId);
+
+      if (nextWorkflows.length === 0) {
+        setSelectedTestWorkflowId("");
+      } else {
+        setSelectedTestWorkflowId((current) => {
+          if (current && nextWorkflows.some((workflow) => workflow.id === current)) {
+            return current;
+          }
+
+          if (preferredRunId) {
+            const runWorkflowId = nextRuns.find((run) => run.id === preferredRunId)?.workflow_id;
+            if (
+              runWorkflowId &&
+              nextWorkflows.some((workflow) => workflow.id === runWorkflowId)
+            ) {
+              return runWorkflowId;
+            }
+          }
+
+          return nextWorkflows[0].id;
+        });
+      }
+
+      return nextRuns;
     } catch (loadError) {
       setError((loadError as Error).message || "Failed to load runs.");
+      return [];
     } finally {
       setLoadingRuns(false);
     }
@@ -353,6 +435,45 @@ export function RunsPage() {
     }
   }
 
+  async function onRunSimulatorTest() {
+    if (!selectedTestWorkflowId) {
+      setError("Select an automation before sending a test payload.");
+      return;
+    }
+
+    const parsed = parseRunSimulatorPayloadInput(testPayloadInput);
+    if (parsed.error) {
+      setError(parsed.error);
+      return;
+    }
+
+    setSimulatorLoading(true);
+    setSimulatorResult(null);
+    setActionMessage(null);
+    setError(null);
+
+    try {
+      const response = await triggerWorkflowTestRun({
+        workflowId: selectedTestWorkflowId,
+        payload: parsed.payload || {},
+      });
+      setSimulatorResult(response);
+      setActionMessage(
+        `Test queued for ${response.workflowKey}. Open the latest run to verify timeline, alerts, and audit.`,
+      );
+
+      const nextRuns = await loadRuns(selectedRunId);
+      const latestRun = getLatestRunForWorkflow(nextRuns, selectedTestWorkflowId);
+      if (latestRun) {
+        setSelectedRunId(latestRun.id);
+      }
+    } catch (simulatorError) {
+      setError((simulatorError as Error).message || "Failed to queue test run.");
+    } finally {
+      setSimulatorLoading(false);
+    }
+  }
+
   useEffect(() => {
     void loadRuns(selectedRunId);
   }, [requestedRunId, requestedWaitId]);
@@ -365,261 +486,382 @@ export function RunsPage() {
   }, [selectedRunId, eventTypeFilter]);
 
   return (
-    <div style={{ display: "grid", gap: 16 }}>
-      <h2>Runs and Execution Logs</h2>
-      <p>
-        Use this page to confirm first workflow success, inspect retries/delays, and review
-        recovery actions.
-      </p>
+    <div className="stack">
+      <PageHeader
+        eyebrow="Run Explorer"
+        title="Runs, Timeline, and Recovery"
+        subtitle="Track execution outcomes, inspect retries and durable waits, and run first-success tests without leaving the app."
+        actions={
+          <>
+            <label>
+              Event filter
+              <select
+                value={eventTypeFilter}
+                onChange={(event) => setEventTypeFilter(event.target.value)}
+                style={{ marginLeft: 8 }}
+              >
+                {RUN_EVENT_FILTER_OPTIONS.map((option) => (
+                  <option key={option || "all"} value={option}>
+                    {option || "all events"}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button type="button" onClick={() => setEventTypeFilter("")}>Clear filter</button>
+            <button type="button" onClick={() => void loadRuns(selectedRunId)}>Refresh runs</button>
+          </>
+        }
+      />
 
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-        <button type="button" onClick={() => void loadRuns(selectedRunId)}>
-          Refresh Runs
-        </button>
+      {error ? (
+        <Callout tone="danger" title="Unable to complete the request">
+          <p>{error}</p>
+        </Callout>
+      ) : null}
 
-        <label>
-          Log Event Filter
-          <select
-            value={eventTypeFilter}
-            onChange={(event) => setEventTypeFilter(event.target.value)}
-            style={{ marginLeft: 8 }}
-          >
-            {RUN_EVENT_FILTER_OPTIONS.map((option) => (
-              <option key={option || "all"} value={option}>
-                {option || "all events"}
-              </option>
-            ))}
-          </select>
-        </label>
+      {actionMessage ? (
+        <Callout
+          tone="success"
+          title="Run update"
+          actions={
+            <>
+              <Link to="/runs">Refresh run list</Link>
+              <Link to="/dashboard">View dashboard</Link>
+              {isOperator ? <Link to="/alerts">Open alerts</Link> : null}
+            </>
+          }
+        >
+          <p>{actionMessage}</p>
+        </Callout>
+      ) : null}
 
-        <button type="button" onClick={() => setEventTypeFilter("")}>Clear Filter</button>
+      <SurfaceCard title="Run health at a glance" subtitle="Recent run outcomes for this workspace.">
+        <div className="metric-grid">
+          <MetricTile label="Total" value={String(runStatusCounts.total)} />
+          <MetricTile label="Success" value={String(runStatusCounts.success)} />
+          <MetricTile label="Failed" value={String(runStatusCounts.failed)} />
+          <MetricTile label="Dead-lettered" value={String(runStatusCounts.deadLettered)} />
+          <MetricTile label="Retrying" value={String(runStatusCounts.retrying)} />
+          <MetricTile label="Waiting" value={String(runStatusCounts.waiting)} />
+        </div>
+      </SurfaceCard>
+
+      <div className="template-grid">
+        <SurfaceCard
+          title="In-app test simulator"
+          subtitle="Select an automation, edit a sample payload, and queue a test run with one click."
+          highlight
+        >
+          <div className="form-grid">
+            <label>
+              Automation
+              <select
+                value={selectedTestWorkflowId}
+                onChange={(event) => setSelectedTestWorkflowId(event.target.value)}
+                style={{ marginTop: 4, width: "100%" }}
+              >
+                {workflows.length === 0 ? (
+                  <option value="">No automations available</option>
+                ) : null}
+                {workflows.map((workflow) => (
+                  <option key={workflow.id} value={workflow.id}>
+                    {workflow.name} ({workflow.status})
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label>
+              Sample payload JSON
+              <textarea
+                value={testPayloadInput}
+                onChange={(event) => setTestPayloadInput(event.target.value)}
+                rows={8}
+                style={{ width: "100%", fontFamily: "monospace", marginTop: 4 }}
+              />
+            </label>
+
+            <div className="inline-actions">
+              <button
+                type="button"
+                onClick={() => void onRunSimulatorTest()}
+                className="button-primary"
+                disabled={simulatorLoading || !selectedTestWorkflowId}
+              >
+                {simulatorLoading ? "Sending test..." : "Send test run"}
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  setTestPayloadInput(JSON.stringify(buildRunSimulatorPayload(), null, 2))
+                }
+              >
+                Reset payload
+              </button>
+              {selectedTestWorkflow ? (
+                <Link to={`/workflows?workflowId=${encodeURIComponent(selectedTestWorkflow.id)}`}>
+                  Edit automation
+                </Link>
+              ) : null}
+            </div>
+          </div>
+
+          {simulatorResult ? (
+            <Callout
+              tone="success"
+              title="Test queued"
+              actions={
+                <>
+                  <Link to="/runs">Open runs</Link>
+                  {isOperator ? <Link to="/audit-logs">Check audit</Link> : null}
+                  {isOperator ? <Link to="/alerts">Check alerts</Link> : null}
+                </>
+              }
+            >
+              <p>
+                Workflow <strong>{simulatorResult.workflowKey}</strong> accepted a test payload.
+                Correlation ID: <code>{simulatorResult.correlationId}</code>
+              </p>
+            </Callout>
+          ) : null}
+        </SurfaceCard>
+
+        <SurfaceCard
+          title="What next"
+          subtitle="Move through the full continuity path after every test run."
+          muted
+        >
+          <div className="steps-progress">
+            <div className="step-row">
+              <span className="step-index">1</span>
+              <div className="stack-sm" style={{ width: "100%" }}>
+                <strong>Send test run</strong>
+                <p>Queue a test event from the simulator panel.</p>
+              </div>
+            </div>
+            <div className="step-row">
+              <span className="step-index">2</span>
+              <div className="stack-sm" style={{ width: "100%" }}>
+                <strong>Inspect timeline</strong>
+                <p>Review step outcomes, retries, delays, and branch decisions.</p>
+                <div className="inline-actions">
+                  <Link to="/runs">Run detail</Link>
+                </div>
+              </div>
+            </div>
+            <div className="step-row">
+              <span className="step-index">3</span>
+              <div className="stack-sm" style={{ width: "100%" }}>
+                <strong>Confirm operator signals</strong>
+                <p>Validate related audit entries and alert delivery behavior.</p>
+                <div className="inline-actions">
+                  {isOperator ? <Link to="/audit-logs">Audit logs</Link> : null}
+                  {isOperator ? <Link to="/alerts">Alert settings</Link> : null}
+                  <Link to="/dashboard">Dashboard</Link>
+                </div>
+              </div>
+            </div>
+          </div>
+        </SurfaceCard>
       </div>
 
-      {error ? <p style={{ color: "#b42318" }}>{error}</p> : null}
-      {actionMessage ? <p style={{ color: "#116329" }}>{actionMessage}</p> : null}
-
-      <div style={{ display: "grid", gridTemplateColumns: "minmax(300px, 1fr) 2fr", gap: 16 }}>
-        <section style={{ border: "1px solid #d0d0d0", borderRadius: 10, padding: 12 }}>
-          <h3 style={{ marginTop: 0 }}>Recent Runs</h3>
+      <div className="template-grid">
+        <SurfaceCard title="Run list" subtitle="Select a run to inspect execution details and lifecycle events.">
           {loadingRuns ? <p>Loading runs...</p> : null}
+
           {runs.length === 0 ? (
-            <div>
+            <div className="empty-state">
               <p>No runs yet.</p>
-              <p style={{ marginTop: 0 }}>
-                To generate your first run: connect an integration, create a workflow from a
-                template, then trigger a test event.
-              </p>
-              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                <Link to="/first-automation">First Automation</Link>
-                <Link to="/integrations">Connect Integrations</Link>
-                <Link to="/workflows">Create Workflow</Link>
-                <Link to="/onboarding">Open Onboarding</Link>
-                <Link to="/dashboard">Open Dashboard</Link>
-                {isOperator ? <Link to="/alerts">Alert Settings</Link> : null}
-                {isOperator ? <Link to="/audit-logs">Audit Logs</Link> : null}
+              <p>Connect an app, create an automation from template, and send a test event.</p>
+              <div className="inline-actions">
+                <Link to="/first-automation">First automation</Link>
+                <Link to="/integrations">Connect apps</Link>
+                <Link to="/workflows">Create automation</Link>
               </div>
             </div>
           ) : null}
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead>
-              <tr>
-                <th align="left">Run</th>
-                <th align="left">Status</th>
-                <th align="left">Attempts</th>
-              </tr>
-            </thead>
-            <tbody>
-              {runs.map((run) => (
-                <tr
-                  key={run.id}
-                  style={{
-                    borderTop: "1px solid #ececec",
-                    background: selectedRunId === run.id ? "#f7f9fc" : "transparent",
-                    cursor: "pointer",
-                  }}
-                  onClick={() => setSelectedRunId(run.id)}
-                >
-                  <td>
-                    <div style={{ fontFamily: "monospace", fontSize: 12 }}>{run.id.slice(0, 8)}</div>
-                    <div style={{ fontSize: 12, color: "#555" }}>{run.created_at}</div>
-                  </td>
-                  <td>
-                    <RunStatusBadge status={run.status} />
-                  </td>
-                  <td>
-                    {run.attempt_count}/{run.max_attempts}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </section>
 
-        <section style={{ border: "1px solid #d0d0d0", borderRadius: 10, padding: 12, display: "grid", gap: 14 }}>
-          <h3 style={{ marginTop: 0 }}>Run Detail</h3>
+          {runs.length > 0 ? (
+            <div style={{ overflowX: "auto" }}>
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Run</th>
+                    <th>Status</th>
+                    <th>Attempts</th>
+                    <th>Started</th>
+                    <th>Finished</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {runs.map((run) => (
+                    <tr
+                      key={run.id}
+                      style={{
+                        background: selectedRunId === run.id ? "#f4f8ff" : "transparent",
+                        cursor: "pointer",
+                      }}
+                      onClick={() => setSelectedRunId(run.id)}
+                    >
+                      <td>
+                        <div><code>{shortId(run.id)}</code></div>
+                        <div style={{ fontSize: 12, color: "#6f8291" }}>{formatDateTime(run.created_at)}</div>
+                      </td>
+                      <td>
+                        <RunStatusBadge status={run.status} />
+                      </td>
+                      <td>
+                        {run.attempt_count}/{run.max_attempts}
+                      </td>
+                      <td>{formatDateTime(run.started_at)}</td>
+                      <td>{formatDateTime(run.finished_at)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
+        </SurfaceCard>
+
+        <SurfaceCard
+          title="Run detail"
+          subtitle="Timeline, delays, retries, and event stream for the selected run."
+          highlight
+        >
           {loadingDetail ? <p>Loading run detail...</p> : null}
-          {!selectedRun ? <p>Select a run to inspect timeline and logs.</p> : null}
+          {!selectedRun ? <p>Select a run to inspect execution details.</p> : null}
 
           {selectedRun ? (
-            <>
-              <div style={{ display: "grid", gap: 4 }}>
-                <div>
-                  <strong>Run ID:</strong> <span style={{ fontFamily: "monospace" }}>{selectedRun.id}</span>
-                </div>
-                <div>
-                  <strong>Workflow ID:</strong>{" "}
-                  <span style={{ fontFamily: "monospace" }}>{selectedRun.workflow_id}</span>
-                </div>
-                <div>
-                  <strong>Status:</strong> <RunStatusBadge status={selectedRun.status} />
-                </div>
-                <div>
-                  <strong>Attempts:</strong> {selectedRun.attempt_count}/{selectedRun.max_attempts}
-                </div>
-                <div>
-                  <strong>Retry Count:</strong> {retryCount}
-                </div>
-                <div>
-                  <strong>Run Duration:</strong>{" "}
-                  {runDurationMs !== null ? `${runDurationMs}ms` : "not available"}
-                </div>
-                <div>
-                  <strong>Failure Classification:</strong> {failureClassification || "-"}
-                </div>
-                <div>
-                  <strong>Adapter Timing:</strong>{" "}
-                  {actionTiming.count > 0
-                    ? `avg ${Math.round(actionTiming.avgMs)}ms, max ${Math.round(actionTiming.maxMs)}ms`
-                    : "not available"}
+            <div className="stack">
+              <Callout tone={toTone(selectedRun.status)} title="Outcome summary">
+                <p>{summarizeRunOutcome(selectedRun)}</p>
+              </Callout>
+
+              <div className="metric-grid">
+                <MetricTile label="Attempts" value={`${selectedRun.attempt_count}/${selectedRun.max_attempts}`} />
+                <MetricTile label="Retries" value={String(retryCount)} />
+                <MetricTile
+                  label="Duration"
+                  value={runDurationMs !== null ? `${runDurationMs}ms` : "n/a"}
+                />
+                <MetricTile label="Failure class" value={failureClassification || "n/a"} />
+                <MetricTile
+                  label="Action timing"
+                  value={
+                    actionTiming.count > 0
+                      ? `avg ${Math.round(actionTiming.avgMs)}ms`
+                      : "n/a"
+                  }
+                />
+              </div>
+
+              <div className="card-muted" style={{ borderRadius: 12, padding: 12 }}>
+                <div className="inline-actions" style={{ justifyContent: "space-between" }}>
+                  <div>
+                    <strong>Run metadata</strong>
+                    <div style={{ fontSize: 13, color: "#4f6475" }}>
+                      Run <code>{selectedRun.id}</code> | Workflow <code>{selectedRun.workflow_id}</code>
+                    </div>
+                  </div>
+                  <RunStatusBadge status={selectedRun.status} />
                 </div>
                 {selectedRun.last_error ? (
-                  <div style={{ color: "#b42318" }}>
-                    <strong>Last Error:</strong> {selectedRun.last_error}
-                  </div>
+                  <p style={{ color: "#b42318", marginTop: 8 }}>
+                    <strong>Last error:</strong> {selectedRun.last_error}
+                  </p>
                 ) : null}
-                {selectedRun.dead_lettered_at ? (
-                  <div style={{ color: "#8a1c1c" }}>
-                    <strong>Dead-lettered At:</strong> {selectedRun.dead_lettered_at}
-                  </div>
-                ) : null}
-                {selectedRun.replay_of_run_id ? (
-                  <div>
-                    <strong>Replay Source Run:</strong>{" "}
-                    <span style={{ fontFamily: "monospace" }}>
-                      {selectedRun.replay_of_run_id}
-                    </span>
-                  </div>
-                ) : null}
-                {selectedRun.cancellation_requested_at ? (
-                  <div style={{ color: "#6b7280" }}>
-                    <strong>Cancellation Requested At:</strong>{" "}
-                    {selectedRun.cancellation_requested_at}
-                  </div>
-                ) : null}
-                {selectedRun.cancelled_at ? (
-                  <div style={{ color: "#6b7280" }}>
-                    <strong>Cancelled At:</strong> {selectedRun.cancelled_at}
-                  </div>
-                ) : null}
+                <div className="tag-row" style={{ marginTop: 8 }}>
+                  {selectedRun.dead_lettered_at ? (
+                    <span className="tag">Dead-lettered: {formatDateTime(selectedRun.dead_lettered_at)}</span>
+                  ) : null}
+                  {selectedRun.cancelled_at ? (
+                    <span className="tag">Cancelled: {formatDateTime(selectedRun.cancelled_at)}</span>
+                  ) : null}
+                  {selectedRun.replay_of_run_id ? (
+                    <span className="tag">Replay of {shortId(selectedRun.replay_of_run_id)}</span>
+                  ) : null}
+                </div>
               </div>
 
               {isOperator ? (
-                <div style={{ border: "1px solid #ececec", borderRadius: 8, padding: 10 }}>
-                  <strong>Admin Recovery Actions</strong>
-                  <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+                <div className="card-muted" style={{ borderRadius: 12, padding: 12 }}>
+                  <strong>Operator actions</strong>
+                  <div className="inline-actions" style={{ marginTop: 8 }}>
                     <button
                       type="button"
                       onClick={() => void onCancelRun()}
                       disabled={actionLoading}
                     >
-                      Cancel Run
+                      Cancel run
                     </button>
                     <button
                       type="button"
                       onClick={() => void onReplayRun()}
-                      disabled={
-                        actionLoading || selectedRun.status !== "dead_lettered"
-                      }
+                      disabled={actionLoading || selectedRun.status !== "dead_lettered"}
                     >
-                      Replay Dead-letter
+                      Replay dead-letter
                     </button>
                     <button
                       type="button"
                       onClick={() => void onResumeWaitingRun()}
                       disabled={actionLoading || selectedRun.status !== "waiting"}
                     >
-                      Resume If Waiting
+                      Release waiting run
                     </button>
+                    <Link
+                      to={`/audit-logs?targetType=workflow_run&targetId=${encodeURIComponent(selectedRun.id)}`}
+                    >
+                      Open related audit trail
+                    </Link>
                   </div>
-                  <p style={{ marginBottom: 0, fontSize: 12, color: "#555" }}>
-                    Running cancellations are best-effort and applied at safe execution
-                    boundaries.
+                  <p style={{ fontSize: 12, marginTop: 8 }}>
+                    Cancellations on currently running external calls are best-effort and apply at
+                    safe execution boundaries.
                   </p>
                 </div>
               ) : null}
 
-              {isOperator ? (
-                <div style={{ border: "1px solid #ececec", borderRadius: 8, padding: 10 }}>
-                  <strong>Operator Audit Trail</strong>
-                  <div style={{ marginTop: 8 }}>
-                    <Link
-                      to={`/audit-logs?targetType=workflow_run&targetId=${encodeURIComponent(selectedRun.id)}`}
-                    >
-                      Open full audit history for this run
-                    </Link>
-                  </div>
-                  {relatedAuditLogs.length === 0 ? (
-                    <p style={{ marginBottom: 0 }}>No operator audit events for this run.</p>
-                  ) : null}
-                  <ul style={{ marginTop: 8 }}>
-                    {relatedAuditLogs.map((entry) => (
-                      <li key={entry.id}>
-                        {entry.timestamp} - {toAuditActionLabel(entry.actionType)} -{" "}
-                        {entry.reason || entry.note || "no note"} (
-                        <Link to={`/audit-logs?targetType=workflow_run&targetId=${selectedRun.id}`}>
-                          audit {shortId(entry.id)}
-                        </Link>
-                        )
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              ) : null}
-
-              <div style={{ border: "1px solid #ececec", borderRadius: 8, padding: 10 }}>
-                <strong>Retry Attempts</strong>
-                {selectedRunRetries.length === 0 ? <p style={{ marginBottom: 0 }}>No retry records.</p> : null}
-                <ul style={{ marginTop: 8 }}>
+              <div className="template-grid">
+                <div className="card-muted" style={{ borderRadius: 12, padding: 12 }}>
+                  <strong>Retry records</strong>
+                  {selectedRunRetries.length === 0 ? <p>No retry records.</p> : null}
                   {selectedRunRetries.map((retry) => (
-                    <li key={retry.id}>
-                      {retry.step_id || "unknown-step"} - {retry.status} - {retry.attempts}/
-                      {retry.max_attempts} next: {retry.next_run_at}
-                      {retry.failure_classification
-                        ? ` (${retry.failure_classification})`
-                        : ""}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-
-              <div style={{ border: "1px solid #ececec", borderRadius: 8, padding: 10 }}>
-                <strong>Scheduled Waits</strong>
-                {selectedRunScheduledWaits.length === 0 ? (
-                  <p style={{ marginBottom: 0 }}>No durable wait records.</p>
-                ) : null}
-                <ul style={{ marginTop: 8 }}>
-                  {selectedRunScheduledWaits.map((wait) => (
-                    <li key={wait.id}>
-                      <div>
-                        {wait.step_id} ({wait.step_path}) - {wait.status} - scheduled{" "}
-                        {wait.scheduled_for}
-                        {wait.claimed_at ? ` - claimed ${wait.claimed_at}` : ""}
-                        {wait.completed_at ? ` - completed ${wait.completed_at}` : ""}
-                        {wait.last_error ? ` - ${wait.last_error}` : ""}
+                    <div key={retry.id} className="step-card" style={{ marginTop: 8 }}>
+                      <div className="step-header">
+                        <strong>{retry.step_id || "unknown-step"}</strong>
+                        <StatusPill tone={retry.status === "failed" ? "danger" : "info"}>
+                          {retry.status}
+                        </StatusPill>
                       </div>
-                      {isOperator &&
-                      (wait.status === "pending" || wait.status === "processing") ? (
-                        <div style={{ display: "flex", gap: 8, marginTop: 6, flexWrap: "wrap" }}>
+                      <p>
+                        attempts {retry.attempts}/{retry.max_attempts} | next retry {formatDateTime(retry.next_run_at)}
+                      </p>
+                      {retry.failure_classification ? <p>classification: {retry.failure_classification}</p> : null}
+                    </div>
+                  ))}
+                </div>
+
+                <div className="card-muted" style={{ borderRadius: 12, padding: 12 }}>
+                  <strong>Durable waits</strong>
+                  {selectedRunScheduledWaits.length === 0 ? <p>No delay records for this run.</p> : null}
+                  {selectedRunScheduledWaits.map((wait) => (
+                    <div key={wait.id} className="step-card delay" style={{ marginTop: 8 }}>
+                      <div className="step-header">
+                        <strong>{wait.step_id}</strong>
+                        <StatusPill tone={wait.status === "failed" ? "danger" : "warning"}>
+                          {wait.status}
+                        </StatusPill>
+                      </div>
+                      <p>
+                        path <code>{wait.step_path}</code> | scheduled {formatDateTime(wait.scheduled_for)}
+                      </p>
+                      <p>
+                        claimed {formatDateTime(wait.claimed_at)} | completed {formatDateTime(wait.completed_at)}
+                      </p>
+                      {wait.last_error ? <p style={{ color: "#b42318" }}>{wait.last_error}</p> : null}
+
+                      {isOperator && (wait.status === "pending" || wait.status === "processing") ? (
+                        <div className="inline-actions">
                           <button
                             type="button"
                             onClick={() => void onRescheduleWait(wait)}
@@ -632,53 +874,15 @@ export function RunsPage() {
                             onClick={() => void onReleaseWaitNow(wait)}
                             disabled={actionLoading}
                           >
-                            Release Now
+                            Release now
                           </button>
                           <button
                             type="button"
                             onClick={() => void onCancelWait(wait)}
                             disabled={actionLoading}
                           >
-                            Cancel Wait
+                            Cancel wait
                           </button>
-                        </div>
-                      ) : null}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-
-              <div style={{ border: "1px solid #ececec", borderRadius: 8, padding: 10 }}>
-                <strong>Step Timeline</strong>
-                {timeline.length === 0 ? <p style={{ marginBottom: 0 }}>No step timeline available yet.</p> : null}
-                <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
-                  {timeline.map((step) => (
-                    <div
-                      key={`${step.stepPath}-${step.stepId}-${step.attempt}`}
-                      style={{ border: "1px solid #e0e0e0", borderRadius: 8, padding: 8 }}
-                    >
-                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-                        <strong>{step.stepId}</strong>
-                        <span style={{ fontFamily: "monospace", fontSize: 12 }}>{step.stepPath}</span>
-                        <RunStatusBadge status={step.status} />
-                        <span>attempt {step.attempt}</span>
-                      </div>
-
-                      {step.skippedReason ? (
-                        <div style={{ marginTop: 6 }}>
-                          skipped reason: <code>{step.skippedReason}</code>
-                        </div>
-                      ) : null}
-
-                      {step.error ? (
-                        <div style={{ marginTop: 6, color: "#b42318" }}>
-                          error: {step.error}
-                        </div>
-                      ) : null}
-
-                      {step.output ? (
-                        <div style={{ marginTop: 6, fontSize: 12 }}>
-                          output: <code>{compactPayload(step.output)}</code>
                         </div>
                       ) : null}
                     </div>
@@ -686,113 +890,142 @@ export function RunsPage() {
                 </div>
               </div>
 
-              <div style={{ border: "1px solid #ececec", borderRadius: 8, padding: 10 }}>
-                <strong>Branch and Delay Decisions</strong>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 8 }}>
-                  <div>
-                    <h4 style={{ margin: "0 0 6px" }}>Branch Selections</h4>
-                    {branchSelections.length === 0 ? <p>No branch decisions logged.</p> : null}
-                    <ul>
-                      {branchSelections.map((entry) => (
-                        <li key={entry.id}>
-                          {entry.stepId || "step"}
-                          {" -> "}
-                          {entry.selectedBranch || "none"} (attempt {entry.attempt || 1})
-                        </li>
-                      ))}
-                    </ul>
+              <div className="card-muted" style={{ borderRadius: 12, padding: 12 }}>
+                <strong>Step timeline</strong>
+                {timeline.length === 0 ? <p>No timeline entries yet.</p> : null}
+                {timeline.map((step) => (
+                  <div key={`${step.stepPath}-${step.stepId}-${step.attempt}`} className="step-card" style={{ marginTop: 8 }}>
+                    <div className="step-header">
+                      <div className="inline-actions">
+                        <strong>{step.stepId}</strong>
+                        <code>{step.stepPath}</code>
+                        <RunStatusBadge status={step.status} />
+                      </div>
+                      <span className="step-summary">attempt {step.attempt}</span>
+                    </div>
+                    {step.skippedReason ? <p>Skipped reason: <code>{step.skippedReason}</code></p> : null}
+                    {step.error ? <p style={{ color: "#b42318" }}>Error: {step.error}</p> : null}
+                    {step.output ? <p>Output: <code>{compactPayload(step.output)}</code></p> : null}
                   </div>
-                  <div>
-                    <h4 style={{ margin: "0 0 6px" }}>Delay State</h4>
-                    {delayEvents.length === 0 ? <p>No delay events logged.</p> : null}
-                    <ul>
-                      {delayEvents.map((entry) => (
-                        <li key={entry.id}>
-                          {entry.eventType} {entry.stepId ? `(${entry.stepId})` : ""}
-                          {entry.delayMs !== undefined ? ` - ${entry.delayMs}ms` : ""}
-                          {entry.scheduledFor ? ` - scheduled ${entry.scheduledFor}` : ""}
-                          {entry.resumedAfterMs !== undefined
-                            ? ` - resumed after ${entry.resumedAfterMs}ms`
-                            : ""}
-                          {entry.scheduledWaitId ? ` - wait ${entry.scheduledWaitId}` : ""}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
+                ))}
+              </div>
+
+              <div className="template-grid">
+                <div className="card-muted" style={{ borderRadius: 12, padding: 12 }}>
+                  <strong>Branch decisions</strong>
+                  {branchSelections.length === 0 ? <p>No branch decisions recorded.</p> : null}
+                  <ul>
+                    {branchSelections.map((entry) => (
+                      <li key={entry.id}>
+                        {entry.stepId || "step"} selected {entry.selectedBranch || "none"} (attempt {entry.attempt || 1})
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+
+                <div className="card-muted" style={{ borderRadius: 12, padding: 12 }}>
+                  <strong>Delay lifecycle</strong>
+                  {delayEvents.length === 0 ? <p>No delay events recorded.</p> : null}
+                  <ul>
+                    {delayEvents.map((entry) => (
+                      <li key={entry.id}>
+                        {entry.eventType}
+                        {entry.stepId ? ` (${entry.stepId})` : ""}
+                        {entry.delayMs !== undefined ? ` | ${entry.delayMs}ms` : ""}
+                        {entry.scheduledFor ? ` | scheduled ${formatDateTime(entry.scheduledFor)}` : ""}
+                        {entry.resumedAfterMs !== undefined ? ` | resumed after ${entry.resumedAfterMs}ms` : ""}
+                      </li>
+                    ))}
+                  </ul>
                 </div>
               </div>
 
-              <div style={{ border: "1px solid #ececec", borderRadius: 8, padding: 10 }}>
-                <strong>Retry Lifecycle</strong>
-                {retryEvents.length === 0 ? <p style={{ marginBottom: 0 }}>No retry lifecycle events.</p> : null}
-                <ul style={{ marginTop: 8 }}>
-                  {retryEvents.map((entry) => (
-                    <li key={entry.id}>
-                      {entry.eventType} {entry.stepId ? `(${entry.stepId})` : ""}
-                      {entry.attempt ? ` attempt ${entry.attempt}` : ""}
-                      {entry.message ? ` - ${entry.message}` : ""}
-                    </li>
-                  ))}
-                </ul>
+              <div className="template-grid">
+                <div className="card-muted" style={{ borderRadius: 12, padding: 12 }}>
+                  <strong>Retry lifecycle events</strong>
+                  {retryEvents.length === 0 ? <p>No retry lifecycle events.</p> : null}
+                  <ul>
+                    {retryEvents.map((entry) => (
+                      <li key={entry.id}>
+                        {entry.eventType}
+                        {entry.stepId ? ` (${entry.stepId})` : ""}
+                        {entry.attempt ? ` attempt ${entry.attempt}` : ""}
+                        {entry.message ? ` | ${entry.message}` : ""}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+
+                <div className="card-muted" style={{ borderRadius: 12, padding: 12 }}>
+                  <strong>Deferred/throttled blockers</strong>
+                  {blockedExecutionEvents.length === 0 ? <p>No quota or throttling blockers.</p> : null}
+                  <ul>
+                    {blockedExecutionEvents.map((entry) => (
+                      <li key={entry.id}>
+                        {entry.eventType}
+                        {entry.stepId ? ` (${entry.stepId})` : ""}
+                        {entry.reason ? ` | reason: ${entry.reason}` : ""}
+                        {entry.outcome ? ` | outcome: ${entry.outcome}` : ""}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
               </div>
 
-              <div style={{ border: "1px solid #ececec", borderRadius: 8, padding: 10 }}>
-                <strong>Deferred and Throttled Reasons</strong>
-                {blockedExecutionEvents.length === 0 ? (
-                  <p style={{ marginBottom: 0 }}>
-                    No quota, fairness, or throttling blockers logged.
-                  </p>
-                ) : null}
-                <ul style={{ marginTop: 8 }}>
-                  {blockedExecutionEvents.map((entry) => (
-                    <li key={entry.id}>
-                      {entry.eventType}
-                      {entry.stepId ? ` (${entry.stepId})` : ""}
-                      {entry.reason ? ` - reason: ${entry.reason}` : ""}
-                      {entry.outcome ? ` - outcome: ${entry.outcome}` : ""}
-                      {entry.message ? ` - ${entry.message}` : ""}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-
-              <div style={{ border: "1px solid #ececec", borderRadius: 8, padding: 10 }}>
-                <strong>Event Logs</strong>
-                {logHighlights.length === 0 ? <p style={{ marginBottom: 0 }}>No logs for this run.</p> : null}
-                <div style={{ overflowX: "auto", marginTop: 8 }}>
-                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-                    <thead>
-                      <tr>
-                        <th align="left">When</th>
-                        <th align="left">Event</th>
-                        <th align="left">Step</th>
-                        <th align="left">Message</th>
-                        <th align="left">Payload</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {logHighlights.map((entry) => (
-                        <tr key={entry.id} style={{ borderTop: "1px solid #efefef" }}>
-                          <td>{entry.createdAt}</td>
-                          <td>{entry.eventType}</td>
-                          <td>{entry.stepId || "-"}</td>
-                          <td>
-                            {entry.message ||
-                              entry.reason ||
-                              entry.outcome ||
-                              entry.classification ||
-                              "-"}
-                          </td>
-                          <td style={{ fontFamily: "monospace" }}>{compactPayload(entry.payload)}</td>
+              <div className="card-muted" style={{ borderRadius: 12, padding: 12 }}>
+                <strong>Event logs</strong>
+                {logHighlights.length === 0 ? <p>No logs for this run.</p> : null}
+                {logHighlights.length > 0 ? (
+                  <div style={{ overflowX: "auto" }}>
+                    <table className="table">
+                      <thead>
+                        <tr>
+                          <th>When</th>
+                          <th>Event</th>
+                          <th>Step</th>
+                          <th>Message</th>
+                          <th>Payload</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                      </thead>
+                      <tbody>
+                        {logHighlights.map((entry) => (
+                          <tr key={entry.id}>
+                            <td>{formatDateTime(entry.createdAt)}</td>
+                            <td>{entry.eventType}</td>
+                            <td>{entry.stepId || "-"}</td>
+                            <td>{entry.message || entry.reason || entry.outcome || entry.classification || "-"}</td>
+                            <td><code>{compactPayload(entry.payload)}</code></td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : null}
               </div>
-            </>
+
+              {isOperator ? (
+                <div className="card-muted" style={{ borderRadius: 12, padding: 12 }}>
+                  <strong>Related operator audit events</strong>
+                  {relatedAuditLogs.length === 0 ? <p>No operator events for this run.</p> : null}
+                  {relatedAuditLogs.length > 0 ? (
+                    <ul>
+                      {relatedAuditLogs.map((entry) => (
+                        <li key={entry.id}>
+                          {formatDateTime(entry.timestamp)} | {toAuditActionLabel(entry.actionType)} |
+                          {" "}{entry.reason || entry.note || "no note"}
+                          {" "}
+                          <Link to={`/audit-logs?targetType=workflow_run&targetId=${encodeURIComponent(selectedRun.id)}`}>
+                            open audit {shortId(entry.id)}
+                          </Link>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
           ) : null}
-        </section>
+        </SurfaceCard>
       </div>
     </div>
   );

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildAuditTargetLink,
   shortId,
+  summarizeAuditFilters,
   summarizeAuditTarget,
   toAuditActionLabel,
   toAuditEntryDescription,
@@ -48,5 +49,17 @@ describe("audit-helpers", () => {
     expect(description).toContain("Ops Admin");
     expect(description).toContain("run.replay");
     expect(description).toContain("workflow_run");
+  });
+
+  it("summarizes active audit filters", () => {
+    expect(
+      summarizeAuditFilters({
+        action: "run.cancel",
+        targetType: "workflow_run",
+        targetId: "f7c3b10f-0500-4b1a-9fd4-b4f177b88944",
+      }),
+    ).toContain("action run.cancel");
+
+    expect(summarizeAuditFilters({})).toBe("No filters applied");
   });
 });

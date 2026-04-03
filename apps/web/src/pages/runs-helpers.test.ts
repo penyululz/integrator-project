@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildRunSimulatorPayload,
   compactPayload,
+  countRunsByStatus,
   getActionTimingSummary,
   getFailureClassification,
   getRunDurationMs,
   getRunStepTimeline,
+  parseRunSimulatorPayloadInput,
+  summarizeRunOutcome,
   toRunLogHighlights,
 } from "./runs-helpers";
 
@@ -129,5 +133,95 @@ describe("runs-helpers", () => {
     expect(result).not.toContain("secret-token");
     expect(result).toContain("[redacted]");
     expect(result).toContain("visible");
+  });
+
+  it("parses simulator payload JSON safely", () => {
+    expect(parseRunSimulatorPayloadInput('{"message":"ok"}')).toEqual({
+      payload: {
+        message: "ok",
+      },
+      error: null,
+    });
+
+    expect(parseRunSimulatorPayloadInput("[]")).toEqual({
+      payload: null,
+      error: "Payload must be a JSON object.",
+    });
+
+    expect(parseRunSimulatorPayloadInput("{ invalid json")).toEqual({
+      payload: null,
+      error: "Payload must be valid JSON.",
+    });
+  });
+
+  it("builds simulator payloads and run status summaries", () => {
+    const payload = buildRunSimulatorPayload(1700000000000);
+    expect(payload.sentAt).toBe("2023-11-14T22:13:20.000Z");
+    expect(payload.source).toBe("runs_page_simulator");
+
+    const counts = countRunsByStatus([
+      {
+        id: "run-1",
+        workflow_id: "wf-1",
+        status: "success",
+        attempt_count: 1,
+        max_attempts: 3,
+        last_error: null,
+        dead_lettered_at: null,
+        started_at: null,
+        finished_at: null,
+        created_at: "2026-03-29T10:00:00.000Z",
+        result_json: {},
+      },
+      {
+        id: "run-2",
+        workflow_id: "wf-1",
+        status: "dead_lettered",
+        attempt_count: 3,
+        max_attempts: 3,
+        last_error: "failed",
+        dead_lettered_at: "2026-03-29T10:01:00.000Z",
+        started_at: null,
+        finished_at: null,
+        created_at: "2026-03-29T10:00:10.000Z",
+        result_json: {},
+      },
+      {
+        id: "run-3",
+        workflow_id: "wf-2",
+        status: "queued",
+        attempt_count: 1,
+        max_attempts: 3,
+        last_error: null,
+        dead_lettered_at: null,
+        started_at: null,
+        finished_at: null,
+        created_at: "2026-03-29T10:00:30.000Z",
+        result_json: {},
+      },
+    ]);
+
+    expect(counts).toMatchObject({
+      total: 3,
+      success: 1,
+      deadLettered: 1,
+      queued: 1,
+    });
+
+    expect(
+      summarizeRunOutcome({
+        id: "run-1",
+        workflow_id: "wf-1",
+        status: "waiting",
+        attempt_count: 1,
+        max_attempts: 3,
+        last_error: null,
+        dead_lettered_at: null,
+        started_at: null,
+        finished_at: null,
+        created_at: "2026-03-29T10:00:00.000Z",
+        result_json: {},
+      }),
+    ).toContain("paused on a scheduled wait");
   });
 });

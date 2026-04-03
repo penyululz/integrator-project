@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   createEmptyActionStep,
   createEmptyBranchStep,
@@ -7,7 +7,6 @@ import {
   isBranchStep,
   isDelayStep,
   type WorkflowActionStep,
-  type WorkflowBranchStep,
   type WorkflowMappedValue,
   type WorkflowStep,
 } from "../types/workflow";
@@ -106,6 +105,32 @@ function updateMappedInput(
   };
 }
 
+function summarizeStep(step: WorkflowStep): string {
+  if (isActionStep(step)) {
+    return `${step.adapter}.${step.action || "(select action)"}`;
+  }
+  if (isDelayStep(step)) {
+    if (step.delayMs !== undefined) {
+      return `Wait ${step.delayMs} ms`;
+    }
+    if (step.delaySeconds !== undefined) {
+      return `Wait ${step.delaySeconds} seconds`;
+    }
+    return "Wait step";
+  }
+  return `Branch with ${step.then.length} then step(s)`;
+}
+
+function getStepClassName(step: WorkflowStep): string {
+  if (isBranchStep(step)) {
+    return "step-card branch";
+  }
+  if (isDelayStep(step)) {
+    return "step-card delay";
+  }
+  return "step-card action";
+}
+
 export function StepCardEditor({
   step,
   adapters,
@@ -137,9 +162,6 @@ export function StepCardEditor({
 
   const selectedType = isBranchStep(step) ? "branch" : isDelayStep(step) ? "delay" : "action";
 
-  const cardPadding = Math.max(10, 14 - depth);
-  const borderColor = depth === 0 ? "#d0d0d0" : "#e4e4e4";
-
   const actionStep = isActionStep(step) ? normalizeActionStep(step, adapters) : null;
   const actionAdapter = actionStep
     ? adapters.find((adapter) => adapter.key === actionStep.adapter)
@@ -153,18 +175,35 @@ export function StepCardEditor({
   }, [actionStep]);
 
   return (
-    <div
-      style={{
-        border: `1px solid ${borderColor}`,
-        borderRadius: 10,
-        padding: cardPadding,
-        background: "#fff",
-        display: "grid",
-        gap: 10,
-      }}
-    >
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-        <strong>Step</strong>
+    <div className={getStepClassName(step)} style={{ marginLeft: depth * 10 }}>
+      <div className="step-header">
+        <div className="stack-sm">
+          <strong>{step.id || "New step"}</strong>
+          <div className="step-summary">{summarizeStep(step)}</div>
+        </div>
+        <div className="inline-actions">
+          <label>
+            Type
+            <select
+              value={selectedType}
+              onChange={(event) => {
+                const nextType = event.target.value as "action" | "branch" | "delay";
+                onChange(convertStepType(step, nextType, adapters));
+              }}
+              style={{ marginLeft: 8 }}
+            >
+              <option value="action">Action</option>
+              <option value="branch">Branch</option>
+              <option value="delay">Delay</option>
+            </select>
+          </label>
+
+          <button type="button" onClick={onDelete}>Remove</button>
+        </div>
+      </div>
+
+      <label>
+        Step ID
         <input
           value={step.id}
           onChange={(event) => {
@@ -175,33 +214,13 @@ export function StepCardEditor({
           }}
           placeholder="step_id"
         />
-
-        <label>
-          Type
-          <select
-            value={selectedType}
-            onChange={(event) => {
-              const nextType = event.target.value as "action" | "branch" | "delay";
-              onChange(convertStepType(step, nextType, adapters));
-            }}
-            style={{ marginLeft: 8 }}
-          >
-            <option value="action">Action</option>
-            <option value="branch">Branch</option>
-            <option value="delay">Delay</option>
-          </select>
-        </label>
-
-        <button type="button" onClick={onDelete}>
-          Remove
-        </button>
-      </div>
+      </label>
 
       {actionStep ? (
-        <div style={{ display: "grid", gap: 10 }}>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <div className="stack">
+          <div className="inline-actions">
             <label>
-              Adapter
+              App
               <select
                 value={actionStep.adapter}
                 onChange={(event) => {
@@ -244,7 +263,7 @@ export function StepCardEditor({
             </label>
 
             <label>
-              On Error
+              On error
               <select
                 value={actionStep.onError || "stop"}
                 onChange={(event) => {
@@ -255,41 +274,42 @@ export function StepCardEditor({
                 }}
                 style={{ marginLeft: 8 }}
               >
-                <option value="stop">stop</option>
-                <option value="continue">continue</option>
-                <option value="retry">retry</option>
+                <option value="stop">Stop workflow</option>
+                <option value="continue">Continue workflow</option>
+                <option value="retry">Retry with policy</option>
               </select>
             </label>
           </div>
 
-          <div>
-            <div style={{ fontWeight: 600, marginBottom: 6 }}>Static Config (JSON object)</div>
-            <textarea
-              value={configText}
-              rows={5}
-              cols={90}
-              onChange={(event) => {
-                setConfigText(event.target.value);
-                setConfigError(null);
-              }}
-              onBlur={() => {
-                const parsed = parseConfig(configText);
-                if (!parsed) {
-                  setConfigError("Config must be a valid JSON object.");
-                  return;
-                }
-                onChange({
-                  ...actionStep,
-                  config: parsed,
-                });
-              }}
-            />
-            {configError ? <div style={{ color: "#b42318" }}>{configError}</div> : null}
-          </div>
+          <details>
+            <summary>Static config (advanced)</summary>
+            <div className="stack-sm" style={{ marginTop: 8 }}>
+              <textarea
+                value={configText}
+                rows={5}
+                onChange={(event) => {
+                  setConfigText(event.target.value);
+                  setConfigError(null);
+                }}
+                onBlur={() => {
+                  const parsed = parseConfig(configText);
+                  if (!parsed) {
+                    setConfigError("Config must be a valid JSON object.");
+                    return;
+                  }
+                  onChange({
+                    ...actionStep,
+                    config: parsed,
+                  });
+                }}
+              />
+              {configError ? <div style={{ color: "#b42318" }}>{configError}</div> : null}
+            </div>
+          </details>
 
-          <div style={{ display: "grid", gap: 8 }}>
-            <div style={{ display: "flex", justifyContent: "space-between" }}>
-              <strong>Input Mappings</strong>
+          <div className="stack">
+            <div className="inline-actions" style={{ justifyContent: "space-between" }}>
+              <strong>Input mapping</strong>
               <button
                 type="button"
                 onClick={() => {
@@ -308,22 +328,23 @@ export function StepCardEditor({
                   );
                 }}
               >
-                Add Mapping
+                Add mapping
               </button>
             </div>
+
+            {inputEntries.length === 0 ? (
+              <div className="empty-state">
+                <p>No mappings yet. Add one to map trigger/context/step outputs into this action.</p>
+              </div>
+            ) : null}
 
             {inputEntries.map(([key, value], index) => (
               <div
                 key={`${key}-${index}`}
-                style={{
-                  border: "1px dashed #d9d9d9",
-                  borderRadius: 8,
-                  padding: 8,
-                  display: "grid",
-                  gap: 8,
-                }}
+                className="card-muted"
+                style={{ borderRadius: 10, padding: 10, border: "1px dashed #c3d2e9" }}
               >
-                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <div className="inline-actions">
                   <input
                     value={key}
                     onChange={(event) => {

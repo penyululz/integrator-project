@@ -18,6 +18,7 @@ import {
   type WorkspaceUsageResponse,
   type WorkflowAnalyticsRow,
 } from "../api";
+import { Callout, MetricTile, PageHeader, StatusPill, SurfaceCard } from "../components/ui-kit";
 import {
   buildWindowFilter,
   formatDurationSeconds,
@@ -121,324 +122,165 @@ export function DashboardPage() {
   }, [window]);
 
   return (
-    <div style={{ display: "grid", gap: 16 }}>
-      <h2>Operations Dashboard</h2>
-      <p>
-        Track workspace health, retention status, and first-run progress from one place.
-      </p>
-
-      <section style={{ border: "1px solid #d0d0d0", borderRadius: 10, padding: 12 }}>
-        <h3 style={{ marginTop: 0 }}>First Success Shortcuts</h3>
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-          <Link to="/onboarding">Onboarding</Link>
-          <Link to="/integrations">Integrations</Link>
-          <Link to="/workflows">Workflows</Link>
-          <Link to="/runs">Runs</Link>
-          {isOperator ? <Link to="/audit-logs">Audit Logs</Link> : null}
-          {isOperator ? <Link to="/alerts">Alert Settings</Link> : null}
-        </div>
-      </section>
-
-      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-        <label>
-          Window
-          <select
-            value={window}
-            onChange={(event) => setWindow(event.target.value as DashboardWindow)}
-            style={{ marginLeft: 8 }}
-          >
-            <option value="24h">Last 24h</option>
-            <option value="7d">Last 7 days</option>
-            <option value="30d">Last 30 days</option>
-          </select>
-        </label>
-        <button type="button" onClick={() => void loadAnalytics(window)}>
-          Refresh
-        </button>
-      </div>
+    <div className="stack">
+      <PageHeader
+        eyebrow="Dashboard"
+        title="Workspace Operations Overview"
+        subtitle="Beginners can follow first-success guidance. Operators can monitor runs, retries, alerts, and retention from one place."
+        actions={
+          <>
+            <label>
+              Window
+              <select
+                value={window}
+                onChange={(event) => setWindow(event.target.value as DashboardWindow)}
+                style={{ marginLeft: 8 }}
+              >
+                <option value="24h">Last 24h</option>
+                <option value="7d">Last 7 days</option>
+                <option value="30d">Last 30 days</option>
+              </select>
+            </label>
+            <button type="button" onClick={() => void loadAnalytics(window)}>
+              Refresh
+            </button>
+            <Link to="/first-automation">First automation</Link>
+          </>
+        }
+      />
 
       {loading ? <p>Loading analytics...</p> : null}
-      {error ? <p style={{ color: "#b42318" }}>{error}</p> : null}
+      {error ? <Callout tone="danger" title="Unable to load dashboard"><p>{error}</p></Callout> : null}
 
       {overview ? (
         <>
-          {quotaSnapshot ? (
-            <section
-              style={{
-                border: "1px solid #d0d0d0",
-                borderRadius: 10,
-                padding: 12,
-                display: "grid",
-                gap: 8,
-              }}
-            >
-              <h3 style={{ marginTop: 0 }}>Scale Limits and Usage</h3>
-              <div style={{ display: "grid", gap: 6 }}>
-                <div>
-                  <strong>Active runs:</strong> {quotaSnapshot.usage.activeWorkflowRuns}/
-                  {quotaSnapshot.limits.maxActiveWorkflowRunsPerWorkspace}
-                </div>
-                <div>
-                  <strong>Queued jobs:</strong> {quotaSnapshot.usage.queuedJobs}/
-                  {quotaSnapshot.limits.maxQueuedJobsPerWorkspace}
-                </div>
-                <div>
-                  <strong>Scheduled waits:</strong> {quotaSnapshot.usage.scheduledWaits}/
-                  {quotaSnapshot.limits.maxScheduledWaitsPerWorkspace}
-                </div>
-                <div>
-                  <strong>Workflows:</strong> {quotaSnapshot.usage.workflows}/
-                  {quotaSnapshot.limits.maxWorkflowsPerWorkspace}
-                </div>
-                {usageSnapshot ? (
-                  <div style={{ fontSize: 13, color: "#555" }}>
-                    Window usage: runs started {usageSnapshot.usage.workflowRunsStarted}, runs
-                    completed {usageSnapshot.usage.workflowRunsCompleted}, retries{" "}
-                    {usageSnapshot.usage.workflowRetries}, adapter actions{" "}
-                    {usageSnapshot.usage.adapterActionsExecuted}
-                  </div>
-                ) : null}
-              </div>
-
-              {quotaSnapshot.warnings.length > 0 ? (
-                <div style={{ color: "#8a5100" }}>
-                  <strong>Warnings:</strong>
-                  <ul style={{ marginTop: 4 }}>
-                    {quotaSnapshot.warnings.map((warning) => (
-                      <li key={warning}>{warning}</li>
-                    ))}
-                  </ul>
-                </div>
-              ) : null}
-
-              {quotaSnapshot.violations.length > 0 ? (
-                <div style={{ color: "#8a1c1c" }}>
-                  <strong>Violations:</strong>
-                  <ul style={{ marginTop: 4 }}>
-                    {quotaSnapshot.violations.map((violation) => (
-                      <li key={violation}>{violation}</li>
-                    ))}
-                  </ul>
-                </div>
-              ) : null}
-            </section>
-          ) : null}
-
-          {isOperator && retentionPolicy ? (
-            <section
-              style={{
-                border: "1px solid #d0d0d0",
-                borderRadius: 10,
-                padding: 12,
-                display: "grid",
-                gap: 8,
-              }}
-            >
-              <h3 style={{ marginTop: 0 }}>Retention and Cleanup</h3>
-              <div style={{ fontSize: 13, color: "#444" }}>
-                Interval: every {retentionPolicy.cleanupIntervalSeconds}s | Batch size:{" "}
-                {retentionPolicy.cleanupBatchSize} | Max batches/domain:{" "}
-                {retentionPolicy.maxBatchesPerDomain}
-              </div>
-              <div style={{ display: "grid", gap: 4 }}>
-                <div>
-                  <strong>Workflow runs:</strong> {retentionPolicy.policy.workflowRunsDays} days
-                </div>
-                <div>
-                  <strong>Event logs:</strong> {retentionPolicy.policy.eventLogsDays} days
-                </div>
-                <div>
-                  <strong>Retry records:</strong> {retentionPolicy.policy.retryRecordsDays} days
-                </div>
-                <div>
-                  <strong>Scheduled waits:</strong> {retentionPolicy.policy.scheduledWaitsDays} days
-                </div>
-                <div>
-                  <strong>Alert logs:</strong> {retentionPolicy.policy.alertLogsDays} days
-                </div>
-                <div>
-                  <strong>Audit logs:</strong> {retentionPolicy.policy.auditLogsDays} days
-                </div>
-              </div>
-              {retentionPolicy.warnings.length > 0 ? (
-                <div style={{ color: "#8a5100" }}>
-                  <strong>Warnings:</strong>
-                  <ul style={{ marginTop: 4 }}>
-                    {retentionPolicy.warnings.map((warning) => (
-                      <li key={warning}>{warning}</li>
-                    ))}
-                  </ul>
-                </div>
-              ) : null}
-              {retentionStatus ? (
-                <div style={{ borderTop: "1px solid #ececec", paddingTop: 8 }}>
-                  <div>
-                    <strong>Running:</strong> {retentionStatus.running ? "yes" : "no"}
-                  </div>
-                  <div>
-                    <strong>Last run:</strong> {retentionStatus.lastRunAt || "never"}
-                  </div>
-                  <div>
-                    <strong>Next run:</strong> {retentionStatus.nextRunAt || "n/a"}
-                  </div>
-                  {retentionStatus.domains.length > 0 ? (
-                    <table style={{ width: "100%", borderCollapse: "collapse", marginTop: 8 }}>
-                      <thead>
-                        <tr>
-                          <th align="left">Domain</th>
-                          <th align="left">Status</th>
-                          <th align="left">Deleted</th>
-                          <th align="left">Batches</th>
-                          <th align="left">Finished</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {retentionStatus.domains.map((domain) => (
-                          <tr key={domain.domain} style={{ borderTop: "1px solid #ececec" }}>
-                            <td>{domain.domain}</td>
-                            <td>{domain.status}</td>
-                            <td>{domain.deletedRecords}</td>
-                            <td>{domain.batches}</td>
-                            <td>{domain.finishedAt}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  ) : (
-                    <p style={{ marginBottom: 0 }}>No cleanup history yet.</p>
-                  )}
-                </div>
-              ) : null}
-            </section>
-          ) : null}
-
           {overview.totalRuns === 0 ? (
-            <section
-              style={{
-                border: "1px dashed #9ca3af",
-                borderRadius: 10,
-                padding: 12,
-                background: "#f8fafc",
-              }}
+            <Callout
+              tone="info"
+              title="No runs yet"
+              actions={
+                <>
+                  <Link to="/first-automation">Start first automation</Link>
+                  <Link to="/integrations">Connect apps</Link>
+                  <Link to="/workflows">Browse templates</Link>
+                </>
+              }
             >
-              <h3 style={{ marginTop: 0 }}>No Runs Yet</h3>
-              <p style={{ marginBottom: 8 }}>
-                Start with onboarding, connect an integration, and create a workflow from a
-                template. After you trigger a test run, this dashboard will populate with
-                metrics, retry data, and queue health.
+              <p>
+                After your first run, this dashboard will populate with run health, retries,
+                queue state, and alerting signals.
               </p>
-              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                <Link to="/onboarding">Open Onboarding</Link>
-                <Link to="/integrations">Connect Integrations</Link>
-                <Link to="/workflows">Create Workflow</Link>
-                <Link to="/runs">View Runs</Link>
-              </div>
-            </section>
+            </Callout>
           ) : null}
 
-          <section
-            style={{
-              border: "1px solid #d0d0d0",
-              borderRadius: 10,
-              padding: 12,
-              display: "grid",
-              gap: 10,
-            }}
-          >
-            <h3 style={{ marginTop: 0 }}>Execution Summary</h3>
-            <div
-              style={{
-                display: "grid",
-                gap: 10,
-                gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-              }}
-            >
-              <SummaryCard label="Runs" value={String(overview.totalRuns)} />
-              <SummaryCard label="Success" value={String(overview.successRuns)} />
-              <SummaryCard label="Failed" value={String(overview.failedRuns)} />
-              <SummaryCard label="Dead-lettered" value={String(overview.deadLetterRuns)} />
-              <SummaryCard label="Failure Rate" value={formatPercent(failureRate)} />
-              <SummaryCard
-                label="Avg Run Duration"
+          <SurfaceCard title="Execution health" subtitle="Core run, retry, and failure signals.">
+            <div className="metric-grid">
+              <MetricTile label="Runs" value={String(overview.totalRuns)} />
+              <MetricTile label="Success" value={String(overview.successRuns)} />
+              <MetricTile label="Failed" value={String(overview.failedRuns)} />
+              <MetricTile label="Dead-lettered" value={String(overview.deadLetterRuns)} />
+              <MetricTile label="Failure rate" value={formatPercent(failureRate)} />
+              <MetricTile
+                label="Avg run duration"
                 value={formatDurationSeconds(overview.avgRunDurationSeconds)}
               />
-              <SummaryCard label="Retry Events" value={String(overview.retryEvents)} />
-              <SummaryCard
-                label="Credential Validation Failures"
+              <MetricTile label="Retry events" value={String(overview.retryEvents)} />
+              <MetricTile
+                label="Credential failures"
                 value={String(overview.credentialValidationFailures)}
               />
             </div>
-          </section>
+          </SurfaceCard>
 
-          <section
-            style={{
-              border: "1px solid #d0d0d0",
-              borderRadius: 10,
-              padding: 12,
-            }}
-          >
-            <h3 style={{ marginTop: 0 }}>Queue Health</h3>
-            <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
-              <div>
-                <strong>Pending Jobs:</strong> {overview.queuePendingJobs}
+          <div className="template-grid">
+            <SurfaceCard title="Queue and scaling" subtitle="Live pressure, limits, and backlog awareness.">
+              <div className="stack-sm">
+                <p>
+                  <strong>Queue:</strong> pending {overview.queuePendingJobs}, due {overview.queueDueJobs}, lag{" "}
+                  {formatDurationSeconds(overview.queueLagSeconds)}
+                </p>
+                {quotaSnapshot ? (
+                  <>
+                    <p>
+                      <strong>Active runs:</strong> {quotaSnapshot.usage.activeWorkflowRuns}/
+                      {quotaSnapshot.limits.maxActiveWorkflowRunsPerWorkspace}
+                    </p>
+                    <p>
+                      <strong>Queued jobs:</strong> {quotaSnapshot.usage.queuedJobs}/
+                      {quotaSnapshot.limits.maxQueuedJobsPerWorkspace}
+                    </p>
+                    <p>
+                      <strong>Scheduled waits:</strong> {quotaSnapshot.usage.scheduledWaits}/
+                      {quotaSnapshot.limits.maxScheduledWaitsPerWorkspace}
+                    </p>
+                  </>
+                ) : null}
+                {usageSnapshot ? (
+                  <p>
+                    <strong>Window usage:</strong> started {usageSnapshot.usage.workflowRunsStarted},
+                    completed {usageSnapshot.usage.workflowRunsCompleted}, retries{" "}
+                    {usageSnapshot.usage.workflowRetries}
+                  </p>
+                ) : null}
+                {quotaSnapshot?.warnings.length ? (
+                  <Callout tone="warning" title="Quota warnings">
+                    <ul>
+                      {quotaSnapshot.warnings.map((warning) => (
+                        <li key={warning}>{warning}</li>
+                      ))}
+                    </ul>
+                  </Callout>
+                ) : null}
+                {quotaSnapshot?.violations.length ? (
+                  <Callout tone="danger" title="Quota violations">
+                    <ul>
+                      {quotaSnapshot.violations.map((violation) => (
+                        <li key={violation}>{violation}</li>
+                      ))}
+                    </ul>
+                  </Callout>
+                ) : null}
               </div>
-              <div>
-                <strong>Due Jobs:</strong> {overview.queueDueJobs}
-              </div>
-              <div>
-                <strong>Queue Lag:</strong> {formatDurationSeconds(overview.queueLagSeconds)}
-              </div>
-            </div>
-          </section>
+            </SurfaceCard>
 
-          <section
-            style={{
-              border: "1px solid #d0d0d0",
-              borderRadius: 10,
-              padding: 12,
-            }}
-          >
-            <h3 style={{ marginTop: 0 }}>Alerting-ready Signals</h3>
-            {alerts.length === 0 ? <p style={{ marginBottom: 0 }}>No active warning signals.</p> : null}
-            <ul style={{ marginTop: 8 }}>
-              {alerts.map((alert) => (
-                <li key={alert.key} style={{ color: alert.severity === "critical" ? "#8a1c1c" : "#8a5100" }}>
-                  <strong>{alert.key}</strong>: {alert.message} (
-                  {typeof alert.value === "number" ? alert.value.toFixed(3) : String(alert.value)} /{" "}
-                  {alert.threshold})
-                </li>
-              ))}
-            </ul>
-            <p style={{ marginBottom: 0 }}>
-              Configure outbound alert delivery in <Link to="/alerts">Alert Settings</Link>.
-            </p>
-          </section>
+            <SurfaceCard title="Alert-ready signals" subtitle="Conditions that should trigger operator awareness.">
+              {alerts.length === 0 ? (
+                <p>No active warning signals.</p>
+              ) : (
+                <div className="stack-sm">
+                  {alerts.map((alert) => (
+                    <div key={alert.key} className="card-muted" style={{ borderRadius: 10, padding: 10 }}>
+                      <div className="inline-actions">
+                        <StatusPill tone={alert.severity === "critical" ? "danger" : "warning"}>
+                          {alert.severity}
+                        </StatusPill>
+                        <strong>{alert.key}</strong>
+                      </div>
+                      <p>{alert.message}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div className="inline-actions">
+                <Link to="/alerts">Configure alerts</Link>
+              </div>
+            </SurfaceCard>
+          </div>
 
-          <section
-            style={{
-              border: "1px solid #d0d0d0",
-              borderRadius: 10,
-              padding: 12,
-              display: "grid",
-              gap: 16,
-              gridTemplateColumns: "1fr 1fr",
-            }}
-          >
-            <div>
-              <h3 style={{ marginTop: 0 }}>Recent Failing Workflows</h3>
+          <div className="template-grid">
+            <SurfaceCard title="Failing workflows" subtitle="Recent workflows with failures or dead-letters.">
               {failingWorkflows.length === 0 ? <p>No failing workflows in selected window.</p> : null}
               <ul>
                 {failingWorkflows.map((workflow) => (
                   <li key={workflow.workflowId}>
-                    {workflow.workflowName} ({workflow.workflowKey}) - failed {workflow.failedRuns}, dead-lettered{" "}
+                    {workflow.workflowName} - failed {workflow.failedRuns}, dead-lettered{" "}
                     {workflow.deadLetterRuns}
                   </li>
                 ))}
               </ul>
-            </div>
+            </SurfaceCard>
 
-            <div>
-              <h3 style={{ marginTop: 0 }}>Top Retrying Workflows</h3>
+            <SurfaceCard title="Top retrying workflows" subtitle="Automation candidates for stability improvements.">
               {topRetryingWorkflows.length === 0 ? <p>No retries in selected window.</p> : null}
               <ul>
                 {topRetryingWorkflows.map((workflow) => (
@@ -447,30 +289,23 @@ export function DashboardPage() {
                   </li>
                 ))}
               </ul>
-            </div>
-          </section>
+            </SurfaceCard>
+          </div>
 
-          <section
-            style={{
-              border: "1px solid #d0d0d0",
-              borderRadius: 10,
-              padding: 12,
-            }}
-          >
-            <h3 style={{ marginTop: 0 }}>Recent Failing Adapters</h3>
-            {failingAdapters.length === 0 ? <p>No adapter failures in selected window.</p> : null}
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <SurfaceCard title="Failing apps" subtitle="Apps with the highest execution failure rates.">
+            {failingAdapters.length === 0 ? <p>No app failures in selected window.</p> : null}
+            <table className="table">
               <thead>
                 <tr>
-                  <th align="left">Adapter</th>
-                  <th align="left">Attempts</th>
-                  <th align="left">Failures</th>
-                  <th align="left">Avg Duration</th>
+                  <th>App</th>
+                  <th>Attempts</th>
+                  <th>Failures</th>
+                  <th>Avg duration</th>
                 </tr>
               </thead>
               <tbody>
                 {failingAdapters.map((adapter) => (
-                  <tr key={adapter.adapterKey} style={{ borderTop: "1px solid #ececec" }}>
+                  <tr key={adapter.adapterKey}>
                     <td>{adapter.adapterKey}</td>
                     <td>{adapter.actionAttempts}</td>
                     <td>{adapter.actionFailures}</td>
@@ -479,18 +314,42 @@ export function DashboardPage() {
                 ))}
               </tbody>
             </table>
-          </section>
+          </SurfaceCard>
+
+          {isOperator && retentionPolicy ? (
+            <SurfaceCard title="Retention" subtitle="Automated cleanup windows and last job state.">
+              <div className="stack-sm">
+                <p>
+                  Interval {retentionPolicy.cleanupIntervalSeconds}s, batch size {retentionPolicy.cleanupBatchSize},
+                  max batches/domain {retentionPolicy.maxBatchesPerDomain}
+                </p>
+                <div className="tag-row">
+                  <span className="tag">Runs {retentionPolicy.policy.workflowRunsDays}d</span>
+                  <span className="tag">Logs {retentionPolicy.policy.eventLogsDays}d</span>
+                  <span className="tag">Retries {retentionPolicy.policy.retryRecordsDays}d</span>
+                  <span className="tag">Waits {retentionPolicy.policy.scheduledWaitsDays}d</span>
+                  <span className="tag">Alerts {retentionPolicy.policy.alertLogsDays}d</span>
+                  <span className="tag">Audit {retentionPolicy.policy.auditLogsDays}d</span>
+                </div>
+                {retentionStatus ? (
+                  <p>
+                    Last run: {retentionStatus.lastRunAt || "never"} | Next run: {retentionStatus.nextRunAt || "n/a"}
+                  </p>
+                ) : null}
+                {retentionPolicy.warnings.length > 0 ? (
+                  <Callout tone="warning" title="Retention warnings">
+                    <ul>
+                      {retentionPolicy.warnings.map((warning) => (
+                        <li key={warning}>{warning}</li>
+                      ))}
+                    </ul>
+                  </Callout>
+                ) : null}
+              </div>
+            </SurfaceCard>
+          ) : null}
         </>
       ) : null}
-    </div>
-  );
-}
-
-function SummaryCard({ label, value }: { label: string; value: string }) {
-  return (
-    <div style={{ border: "1px solid #ececec", borderRadius: 8, padding: 10 }}>
-      <div style={{ fontSize: 12, color: "#555" }}>{label}</div>
-      <div style={{ fontSize: 22, fontWeight: 700 }}>{value}</div>
     </div>
   );
 }

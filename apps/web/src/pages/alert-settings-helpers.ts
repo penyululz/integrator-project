@@ -44,6 +44,54 @@ export const ALERT_EVENT_OPTIONS: Array<{
 
 export const ALERT_SEVERITY_OPTIONS: AlertSeverity[] = ["warn", "critical"];
 
+export type AlertEventGroup = {
+  key: "workflow_health" | "platform_signals" | "scale_controls" | "testing";
+  label: string;
+  description: string;
+  events: Array<{
+    key: AlertEventType;
+    label: string;
+  }>;
+};
+
+export const ALERT_EVENT_GROUPS: AlertEventGroup[] = [
+  {
+    key: "workflow_health",
+    label: "Workflow health",
+    description: "Critical workflow execution outcomes that usually require immediate action.",
+    events: ALERT_EVENT_OPTIONS.filter((option) =>
+      ["workflow.dead_lettered", "workflow.failed.non_retryable"].includes(option.key),
+    ),
+  },
+  {
+    key: "platform_signals",
+    label: "Platform signals",
+    description: "Aggregate reliability trends detected by analytics and monitoring.",
+    events: ALERT_EVENT_OPTIONS.filter((option) =>
+      [
+        "signal.failure_rate",
+        "signal.dead_letter_rate",
+        "signal.queue_lag",
+        "signal.credential_validation_failures",
+      ].includes(option.key),
+    ),
+  },
+  {
+    key: "scale_controls",
+    label: "Scale and throttling",
+    description: "Backpressure, quota, and throttling signals for noisy workloads.",
+    events: ALERT_EVENT_OPTIONS.filter((option) =>
+      ["scale.quota_violation", "scale.throttling_sustained"].includes(option.key),
+    ),
+  },
+  {
+    key: "testing",
+    label: "Testing",
+    description: "Events used to verify alert channel delivery.",
+    events: ALERT_EVENT_OPTIONS.filter((option) => option.key === "alert.test"),
+  },
+];
+
 export function parseRecipientsCsv(input: string): string[] {
   return input
     .split(",")
@@ -96,4 +144,14 @@ export function formatHeadersJson(headers: Record<string, string>): string {
 
 export function toBoolString(value: boolean): string {
   return value ? "enabled" : "disabled";
+}
+
+export function getAlertCooldownCopy(seconds: number): string {
+  if (seconds < 60) {
+    return `${seconds}s dedupe window`;
+  }
+  if (seconds < 3600) {
+    return `${Math.round(seconds / 60)}m dedupe window`;
+  }
+  return `${Math.round(seconds / 3600)}h dedupe window`;
 }

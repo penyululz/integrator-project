@@ -1,6 +1,7 @@
 import { FormEvent, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { devLogin, getAuthSession, login } from "../api";
+import { Callout, PageHeader, SurfaceCard } from "../components/ui-kit";
 
 export function LoginPage({ onLoggedIn }: { onLoggedIn: () => void }) {
   const existingSession = getAuthSession();
@@ -64,71 +65,83 @@ export function LoginPage({ onLoggedIn }: { onLoggedIn: () => void }) {
   }
 
   return (
-    <div>
-      <h2>Login</h2>
-      <p>
-        Use your workspace credentials. After sign-in, you will land in the first automation wizard.
-        For local demos, seeded defaults are available.
-      </p>
-      <div style={{ border: "1px solid #d0d0d0", borderRadius: 10, padding: 12, marginBottom: 12 }}>
-        <strong>Local Demo Defaults</strong>
-        <div style={{ marginTop: 6, fontSize: 13 }}>
-          email: <code>admin@example.com</code> | password: <code>dev-password</code> |
-          org: <code>demo-org</code> | workspace: <code>default</code>
-        </div>
-        <button
-          type="button"
-          onClick={applySeededDefaults}
-          style={{ marginTop: 8 }}
-          disabled={loading}
-        >
-          Fill Demo Defaults
-        </button>
+    <div className="stack">
+      <PageHeader
+        eyebrow="Welcome"
+        title="Sign In and Launch Your First Automation"
+        subtitle="After login, you’ll be guided through a template-based first success flow."
+      />
+
+      <div className="template-grid">
+        <SurfaceCard title="Sign in" subtitle="Use workspace credentials to continue.">
+          <form onSubmit={onSubmit} className="form-grid">
+            <label>
+              Email
+              <input value={email} onChange={(event) => setEmail(event.target.value)} />
+            </label>
+
+            <label>
+              Password
+              <input
+                type="password"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+              />
+            </label>
+
+            <label>
+              Organization slug
+              <input
+                value={organizationSlug}
+                onChange={(event) => setOrganizationSlug(event.target.value)}
+              />
+            </label>
+
+            <label>
+              Workspace slug
+              <input
+                value={workspaceSlug}
+                onChange={(event) => setWorkspaceSlug(event.target.value)}
+              />
+            </label>
+
+            <div className="inline-actions">
+              <button type="submit" className="button-primary" disabled={loading}>
+                {loading ? "Signing in..." : "Sign in"}
+              </button>
+              <button type="button" onClick={() => void onDevLogin()} disabled={loading}>
+                Dev login
+              </button>
+            </div>
+          </form>
+        </SurfaceCard>
+
+        <SurfaceCard title="Local demo defaults" subtitle="Use these values for a zero-friction local demo.">
+          <p>
+            email: <code>admin@example.com</code>
+          </p>
+          <p>
+            password: <code>dev-password</code>
+          </p>
+          <p>
+            org: <code>demo-org</code>
+          </p>
+          <p>
+            workspace: <code>default</code>
+          </p>
+          <div className="inline-actions">
+            <button type="button" onClick={applySeededDefaults} disabled={loading}>
+              Fill demo defaults
+            </button>
+          </div>
+        </SurfaceCard>
       </div>
-      <form onSubmit={onSubmit}>
-        <p>
-          <label>Email</label>
-          <br />
-          <input value={email} onChange={(event) => setEmail(event.target.value)} />
-        </p>
-        <p>
-          <label>Password</label>
-          <br />
-          <input
-            type="password"
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-          />
-        </p>
-        <p>
-          <label>Organization Slug</label>
-          <br />
-          <input
-            value={organizationSlug}
-            onChange={(event) => setOrganizationSlug(event.target.value)}
-          />
-        </p>
-        <p>
-          <label>Workspace Slug</label>
-          <br />
-          <input
-            value={workspaceSlug}
-            onChange={(event) => setWorkspaceSlug(event.target.value)}
-          />
-        </p>
-        <button type="submit" disabled={loading}>
-          {loading ? "Signing in..." : "Login"}
-        </button>
-        <button
-          type="button"
-          disabled={loading}
-          onClick={() => void onDevLogin()}
-          style={{ marginLeft: 8 }}
-        >
-          {loading ? "Please wait..." : "Use Dev Login (local only)"}
-        </button>
-      </form>
-      {error ? <p style={{ color: "red" }}>{error}</p> : null}
+
+      {error ? (
+        <Callout tone="danger" title="Login failed">
+          <p>{error}</p>
+        </Callout>
+      ) : null}
     </div>
   );
 }
