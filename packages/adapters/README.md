@@ -1,5 +1,9 @@
 # Adapter SDK + Plugin Authoring (v1)
 
+For product overview, quick start, and launch docs, start at:
+
+- [`README.md`](../../README.md)
+
 Adapters are loaded dynamically from manifest metadata in `packages/adapters/*/manifest.json`.
 
 ## Quick Start

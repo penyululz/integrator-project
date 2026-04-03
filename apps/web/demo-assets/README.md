@@ -2,6 +2,10 @@
 
 This folder is reserved for launch/demo assets used in README pages, release notes, and community posts.
 
+Primary documentation hub:
+
+- [`README.md`](../../../README.md)
+
 ## Suggested Structure
 
 - `screenshots/`

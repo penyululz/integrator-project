@@ -1,193 +1,187 @@
-# Integration Platform v1 (Monorepo)
+# Integration Platform OSS (v1)
 
-Node.js + TypeScript integration platform with:
+Self-hostable, plugin-based workflow automation for teams that need reliable integrations with operational visibility.
 
-- `apps/api`: Express API + webhook endpoint + worker process
-- `apps/web`: React TypeScript UI
-- `packages/core`: Postgres/Redis runtime, migrations, engine, repositories
-- `packages/shared`: shared adapter interfaces/types/utilities
-- `packages/adapters`: plugin adapters (webhook, sheets, email, shopify, slack)
+## What This Project Is
 
-## Stack
+This repository contains an open-source integration platform (conceptually similar to Zapier/n8n/Make) built for developers and operators who want:
 
-- Runtime: Node.js, TypeScript
-- API: Express
-- UI: React (Vite)
-- DB: PostgreSQL
-- Cache/Queue: Redis
-- Local deployment: Docker Compose
+- workflow automation across multiple providers
+- multi-tenant boundaries and role-based access
+- retry/dead-letter durability
+- run/audit/alert observability
+- local extensibility through adapter plugins
 
-## Monorepo Layout
+## Who It Is For
 
-```text
-apps/
-  api/
-  web/
-packages/
-  core/
-  shared/
-  adapters/
-    webhook/
-    sheets/
-    email/
-    shopify/
-    slack/
-    http-api/      # TODO placeholder (v1 non-implemented)
-    scheduler/     # TODO placeholder (v1 non-implemented)
-infra/
-  terraform/
-  helm/
-```
+- engineering teams automating internal or product workflows
+- platform/operations teams needing replay/cancel/recovery controls
+- OSS contributors building and sharing adapters
+- self-hosted users who prefer infrastructure ownership
 
-## Architecture
+## Key Features
+
+- JWT auth + tenant/workspace isolation + RBAC
+- workflow DSL with mapping, conditions, branches, and delay steps
+- retry engine with backoff + dead-letter states
+- durable waits (DB-backed delay scheduling)
+- manifest-driven plugin loading for adapters
+- metrics, analytics, alerts, audit logs, and retention cleanup
+- onboarding + templates for fast first-success demos
+
+## Architecture At A Glance
+
+- `apps/api`: Express API and webhook ingress
+- `apps/api` worker process: queue consumer for execution/retry/scheduler/alerts/cleanup
+- `apps/web`: React operations UI
+- `packages/core`: engine, auth, repositories, runtime services
+- `packages/shared`: shared types/contracts/utilities
+- `packages/adapters/*`: manifest-driven adapter packages
+- PostgreSQL: durable system of record
+- Redis: queue/backlog coordination
 
 ```mermaid
 graph LR
-  Web["React Web"] --> API["Express API"]
-  API --> Core["Core Engine"]
-  API --> DB[(PostgreSQL)]
-  Core --> Redis[(Redis Queue)]
-  Core --> DB
-  Core --> Plugins["Adapter Plugins"]
-  Plugins --> Shopify["Shopify Adapter"]
-  Plugins --> Sheets["Google Sheets Adapter"]
-  Plugins --> Slack["Slack Adapter"]
-  Plugins --> Email["Email Adapter"]
-  Plugins --> Webhook["Webhook Adapter"]
+  Web["React Web (apps/web)"] --> API["API (apps/api)"]
+  API --> Core["Core Runtime (packages/core)"]
+  Core --> PG["PostgreSQL"]
+  Core --> Redis["Redis"]
+  Core --> Adapters["Adapter Plugins"]
 ```
 
-## Adapter Interface
+## Quick Start
 
-Defined in [`packages/shared/src/types/adapter.ts`](packages/shared/src/types/adapter.ts):
-
-- `init`
-- `authenticate`
-- `listTriggers`
-- `listActions`
-- `runTrigger`
-- `runAction`
-- `validateConfig`
-- `refreshToken`
-
-## Database Migrations
-
-SQL migrations are in `packages/core/src/migrations` and include:
-
-- `users`
-- `organizations`
-- `workspaces`
-- `integrations`
-- `credentials`
-- `workflows`
-- `workflow_steps`
-- `workflow_runs`
-- `event_logs`
-- `retry_queue`
-- `audit_logs`
-
-All tables include tenant/workspace context and indices.
-
-## Workflow Definition Format
-
-Validated by `packages/core/src/workflow/schema.ts`.
-
-```json
-{
-  "id": "wf_shopify_to_slack",
-  "name": "Shopify -> Slack",
-  "workspaceId": "workspace-uuid",
-  "organizationId": "org-uuid",
-  "trigger": {
-    "adapter": "shopify",
-    "trigger": "order_created",
-    "config": {}
-  },
-  "steps": [
-    {
-      "id": "step_slack_notify",
-      "adapter": "slack",
-      "action": "sendMessage",
-      "config": {
-        "channel": "#ops",
-        "text": "New order received"
-      },
-      "onError": "stop"
-    }
-  ],
-  "enabled": true
-}
-```
-
-## API Endpoints
-
-Base URL: `/api/v1`
-
-- `GET /health`
-- `GET/POST /workspaces`
-- `GET/POST /integrations`
-- `POST /integrations/:adapterKey/auth/start`
-- `POST /integrations/:adapterKey/auth/callback`
-- `GET/POST /credentials`
-- `GET/POST /workflows`
-- `GET /runs`
-- `GET /logs`
-- `POST /webhook/:adapterKey/:triggerKey`
-
-## Local Development
-
-1. Copy env file:
-
-```bash
-cp .env.example .env
-```
-
-2. Install:
+1. Install dependencies:
 
 ```bash
 npm install
 ```
 
-3. Run with Docker Compose:
+2. Start dependencies:
 
 ```bash
-docker compose up --build
+docker compose up -d postgres redis
 ```
 
-4. Or run locally:
+3. Create repo-root `.env` from:
+
+- [`apps/api/.env.example`](./apps/api/.env.example)
+
+4. Prepare database:
 
 ```bash
-npm run migrate
-npm run dev
-npm run start:worker
+npm run migrate -w @integration/core
+npm run seed -w @integration/core
 ```
 
-## Tests
-
-Adapter unit tests are included for:
-
-- webhook
-- sheets
-- email
-- shopify
-- slack
-
-Run:
+5. Verify setup:
 
 ```bash
-npm test
+npm run verify:setup -w @integration/core
 ```
 
-## Adding an Adapter
+6. Start services (separate terminals):
 
-1. Create `packages/adapters/<name>/`.
-2. Add `package.json`, `manifest.json`, `tsconfig.json`, `src/index.ts`.
-3. Implement `Adapter` from `@integration/shared`.
-4. Register adapter in `packages/core/src/index.ts`.
-5. Add tests for init/auth/trigger/action behavior.
+```bash
+npm run dev -w @integration/api
+npm run worker -w @integration/api
+npm run dev -w @integration/web
+```
 
-## v1 Scope Notes
+7. Open:
 
-- Implemented adapters: `webhook`, `sheets`, `email`, `shopify`, `slack`.
-- Non-v1 placeholders (TODO): `http-api`, `scheduler`.
-- No adapters beyond this v1 list are implemented.
+- Web: `http://localhost:3000`
+- API health: `http://localhost:4000/api/v1/health`
 
+## Local Development Flow
+
+- API and worker details: [`apps/api/README.md`](./apps/api/README.md)
+- Web details: [`apps/web/README.md`](./apps/web/README.md)
+- Core scripts/tools: [`packages/core/README.md`](./packages/core/README.md)
+- Adapter authoring: [`packages/adapters/README.md`](./packages/adapters/README.md)
+
+## First Success Path (End-to-End)
+
+1. Login with seeded defaults:
+  - `admin@example.com` / `dev-password`
+  - org: `demo-org`
+  - workspace: `default`
+2. Open `/onboarding`.
+3. Connect an integration in `/integrations`.
+4. Pick a template in `/workflows`, validate, and create.
+5. Trigger a test run.
+6. Inspect:
+  - `/runs` for execution timeline and retries
+  - `/audit-logs` for operator/audit events (owner/admin)
+  - `/alerts` to test outbound alerts (owner/admin)
+  - `/dashboard` for operational metrics and retention snapshots
+
+## Demo Path and Assets
+
+Demo assets are organized under:
+
+- [`apps/web/demo-assets/README.md`](./apps/web/demo-assets/README.md)
+
+Expected screenshot slots:
+
+- login
+- onboarding
+- integrations
+- workflow template selection
+- workflow builder
+- runs detail
+- dashboard
+- alert settings
+- audit logs
+
+When screenshots are captured, place them in `apps/web/demo-assets/screenshots/` and link from release notes/README updates.
+
+## Smoke Test Checklist
+
+Use the full launch checklist before release tags:
+
+- [`LAUNCH_CHECKLIST.md`](./LAUNCH_CHECKLIST.md)
+
+Minimal smoke path:
+
+1. install
+2. env file
+3. migrate + seed
+4. start api + worker + web
+5. onboarding
+6. template workflow creation
+7. test run
+8. inspect runs/logs/audit/alerts
+
+## Known Limitations (v1)
+
+- no drag-and-drop workflow canvas (form/JSON-assisted builder only)
+- no remote plugin marketplace/install flow
+- no SSO/SAML/SCIM enterprise identity yet
+- no hosted SaaS control plane or billing
+- Docker Compose is the primary documented deployment path
+
+## Roadmap Summary
+
+See concise roadmap themes in:
+
+- [`ROADMAP.md`](./ROADMAP.md)
+
+Themes:
+
+- GitOps and deployment maturity
+- enterprise identity and governance
+- plugin ecosystem expansion
+- hosted SaaS readiness
+- richer operator workflows
+
+## Deeper Package/App Docs
+
+- API: [`apps/api/README.md`](./apps/api/README.md)
+- Web: [`apps/web/README.md`](./apps/web/README.md)
+- Core: [`packages/core/README.md`](./packages/core/README.md)
+- Adapters: [`packages/adapters/README.md`](./packages/adapters/README.md)
+
+## License
+
+MIT (see package metadata).
