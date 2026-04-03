@@ -429,4 +429,98 @@ describe("Auth + tenant isolation hardening", () => {
       await runtime.close();
     }
   });
+
+  it("supports web-based app connection setup with masked secrets", async () => {
+    const { app, runtime } = await createAuthRuntime();
+    try {
+      const memberLogin = await runtime.authService.login({
+        email: "member@org-a.com",
+        password: "member-a-pass",
+        organizationSlug: "org-a",
+        workspaceSlug: "default",
+      });
+
+      const forbidden = await request(app)
+        .put("/api/v1/apps/webhook/connection")
+        .set("authorization", `Bearer ${memberLogin.accessToken}`)
+        .send({
+          integrationName: "Webhook App",
+          credential: {
+            authType: "none",
+            sensitiveConfig: {
+              signingSecret: "whsec-should-not-leak",
+            },
+          },
+        });
+      expect(forbidden.status).toBe(403);
+
+      const ownerLogin = await runtime.authService.login({
+        email: "owner@org-a.com",
+        password: "owner-a-pass",
+        organizationSlug: "org-a",
+        workspaceSlug: "default",
+      });
+
+      const connected = await request(app)
+        .put("/api/v1/apps/webhook/connection")
+        .set("authorization", `Bearer ${ownerLogin.accessToken}`)
+        .send({
+          integrationName: "Webhook App",
+          integrationConfig: {
+            webhookPath: "orders-created",
+          },
+          credential: {
+            authType: "none",
+            sensitiveConfig: {
+              signingSecret: "whsec-should-not-leak",
+            },
+            metadata: {
+              displayName: "Inbound Orders",
+            },
+          },
+        });
+
+      expect(connected.status).toBe(200);
+      expect(connected.body.app).toEqual(
+        expect.objectContaining({
+          key: "webhook",
+          status: "connected",
+        }),
+      );
+      expect(connected.body.app.connection.integrationConfig).toMatchObject({
+        webhookPath: "orders-created",
+      });
+      expect(JSON.stringify(connected.body)).not.toContain("whsec-should-not-leak");
+
+      const appsResponse = await request(app)
+        .get("/api/v1/apps")
+        .set("authorization", `Bearer ${ownerLogin.accessToken}`);
+      expect(appsResponse.status).toBe(200);
+      expect(appsResponse.body.apps).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            key: "webhook",
+            status: "connected",
+          }),
+        ]),
+      );
+      expect(JSON.stringify(appsResponse.body)).not.toContain("whsec-should-not-leak");
+
+      const credentials = await request(app)
+        .get("/api/v1/credentials")
+        .set("authorization", `Bearer ${ownerLogin.accessToken}`);
+      expect(credentials.status).toBe(200);
+      expect(JSON.stringify(credentials.body)).not.toContain("whsec-should-not-leak");
+      expect(credentials.body.credentials[0].secret_mask).toBe("****");
+
+      const tested = await request(app)
+        .post("/api/v1/apps/webhook/test")
+        .set("authorization", `Bearer ${ownerLogin.accessToken}`)
+        .send({});
+      expect(tested.status).toBe(200);
+      expect(tested.body.status).toBe("valid");
+    } finally {
+      await runtime.close();
+    }
+  });
 });

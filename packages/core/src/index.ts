@@ -122,6 +122,16 @@ export type {
   WorkflowTemplateCategory,
   WorkflowTemplateDifficulty,
 } from "./templates";
+export {
+  getAppConnectionDefinition,
+} from "./integrations/catalog";
+export type {
+  AppConnectionDefinition,
+  AppSetupField,
+  AppSetupFieldInputType,
+  AppSetupFieldTarget,
+  AppSetupMethod,
+} from "./integrations/catalog";
 
 export async function createCoreRuntime(): Promise<CoreRuntime> {
   const env = getCoreEnv();
@@ -172,23 +182,16 @@ export async function createCoreRuntime(): Promise<CoreRuntime> {
       clientSecret: process.env.GOOGLE_CLIENT_SECRET || "",
       redirectUri: process.env.GOOGLE_REDIRECT_URI || "",
     },
-    email: {
-      host: process.env.EMAIL_SMTP_HOST || "",
-      port: Number(process.env.EMAIL_SMTP_PORT || 587),
-      secure: process.env.EMAIL_SMTP_SECURE === "true",
-      user: process.env.EMAIL_SMTP_USER || "",
-      pass: process.env.EMAIL_SMTP_PASS || "",
-      from: process.env.EMAIL_FROM || "noreply@example.com",
-    },
+    email: {},
     shopify: {
       apiKey: process.env.SHOPIFY_CLIENT_ID || "",
       apiSecret: process.env.SHOPIFY_CLIENT_SECRET || "",
-      shopName: process.env.SHOPIFY_SHOP_NAME || "",
-      accessToken: process.env.SHOPIFY_ACCESS_TOKEN || "",
     },
     slack: {
+      clientId: process.env.SLACK_CLIENT_ID || "",
+      clientSecret: process.env.SLACK_CLIENT_SECRET || "",
+      redirectUri: process.env.SLACK_REDIRECT_URI || "",
       botToken: process.env.SLACK_BOT_TOKEN || "",
-      defaultChannel: process.env.SLACK_DEFAULT_CHANNEL || "",
     },
   });
 

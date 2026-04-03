@@ -94,6 +94,40 @@ export class IntegrationRepository {
     });
   }
 
+  async findByAdapter(input: {
+    tenantId: string;
+    organizationId: string;
+    workspaceId: string;
+    adapterKey: string;
+  }): Promise<IntegrationRecord | null> {
+    const result = await this.pool.query<IntegrationStorageRecord>(
+      `SELECT * FROM integrations
+       WHERE tenant_id = $1
+         AND organization_id = $2
+         AND workspace_id = $3
+         AND adapter_key = $4
+       ORDER BY updated_at DESC, created_at DESC
+       LIMIT 1`,
+      [
+        input.tenantId,
+        input.organizationId,
+        input.workspaceId,
+        input.adapterKey,
+      ],
+    );
+
+    const row = result.rows[0];
+    if (!row) {
+      return null;
+    }
+    const config = toApiConfig(row.config_json || {});
+    return {
+      ...row,
+      config_json: config.config,
+      has_sensitive_config: config.hasSensitiveConfig,
+    };
+  }
+
   async create(input: {
     tenantId: string;
     organizationId: string;
@@ -137,5 +171,107 @@ export class IntegrationRepository {
       config_json: config.config,
       has_sensitive_config: config.hasSensitiveConfig,
     };
+  }
+
+  async upsertByAdapter(input: {
+    tenantId: string;
+    organizationId: string;
+    workspaceId: string;
+    adapterKey: string;
+    name: string;
+    config: Record<string, unknown>;
+    status?: string;
+  }): Promise<IntegrationRecord> {
+    const existing = await this.pool.query<{ id: string }>(
+      `SELECT id
+       FROM integrations
+       WHERE tenant_id = $1
+         AND organization_id = $2
+         AND workspace_id = $3
+         AND adapter_key = $4
+       ORDER BY updated_at DESC, created_at DESC
+       LIMIT 1`,
+      [
+        input.tenantId,
+        input.organizationId,
+        input.workspaceId,
+        input.adapterKey,
+      ],
+    );
+
+    const { publicData, sensitiveData } = splitSensitiveFields(input.config || {});
+    const configJson: Record<string, unknown> = {
+      ...publicData,
+    };
+
+    if (hasValues(sensitiveData)) {
+      const envelope = this.credentialCrypto.encrypt(sensitiveData);
+      configJson[ENCRYPTED_CONFIG_KEY] = envelope;
+    }
+
+    if (!existing.rows[0]) {
+      return this.create({
+        tenantId: input.tenantId,
+        organizationId: input.organizationId,
+        workspaceId: input.workspaceId,
+        adapterKey: input.adapterKey,
+        name: input.name,
+        config: input.config,
+      });
+    }
+
+    const result = await this.pool.query<IntegrationStorageRecord>(
+      `UPDATE integrations
+       SET name = $2,
+           status = COALESCE($3, status),
+           config_json = $4,
+           updated_at = NOW()
+       WHERE id = $1
+         AND tenant_id = $5
+         AND organization_id = $6
+         AND workspace_id = $7
+       RETURNING *`,
+      [
+        existing.rows[0].id,
+        input.name,
+        input.status || null,
+        JSON.stringify(configJson),
+        input.tenantId,
+        input.organizationId,
+        input.workspaceId,
+      ],
+    );
+    const updated = result.rows[0];
+    const config = toApiConfig(updated.config_json || {});
+    return {
+      ...updated,
+      config_json: config.config,
+      has_sensitive_config: config.hasSensitiveConfig,
+    };
+  }
+
+  async updateStatusByAdapter(input: {
+    tenantId: string;
+    organizationId: string;
+    workspaceId: string;
+    adapterKey: string;
+    status: string;
+  }): Promise<void> {
+    await this.pool.query(
+      `UPDATE integrations
+       SET status = $5,
+           updated_at = NOW()
+       WHERE tenant_id = $1
+         AND organization_id = $2
+         AND workspace_id = $3
+         AND adapter_key = $4`,
+      [
+        input.tenantId,
+        input.organizationId,
+        input.workspaceId,
+        input.adapterKey,
+        input.status,
+      ],
+    );
   }
 }

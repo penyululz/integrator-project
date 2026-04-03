@@ -93,12 +93,14 @@ export const oauthStartSchema = z.object({
   redirectUri: z.string().url().or(z.string().min(1)),
   state: z.string().optional(),
   scopes: z.array(z.string()).optional(),
+  connection: z.record(z.unknown()).optional(),
 });
 
 export const oauthCallbackSchema = z.object({
   integrationId: z.string().uuid().optional(),
   code: z.string().min(1),
   redirectUri: z.string().url().or(z.string().min(1)),
+  connection: z.record(z.unknown()).optional(),
 });
 
 export const createWorkspaceSchema = z.object({
@@ -123,6 +125,31 @@ export const upsertCredentialSchema = z.object({
   sensitiveConfig: z.record(z.unknown()).optional(),
   metadata: z.record(z.unknown()).optional(),
 });
+
+export const appConnectionSchema = z
+  .object({
+    integrationName: z.string().trim().min(1).max(120).optional(),
+    integrationConfig: z.record(z.unknown()).optional(),
+    credential: z
+      .object({
+        authType: z.string().trim().min(1).max(60).optional(),
+        accessToken: z.string().optional(),
+        refreshToken: z.string().optional(),
+        apiKey: z.string().optional(),
+        expiresAt: z.string().optional(),
+        metadata: z.record(z.unknown()).optional(),
+        sensitiveConfig: z.record(z.unknown()).optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
+
+export const appConnectionTestSchema = z
+  .object({
+    integrationConfig: z.record(z.unknown()).optional(),
+  })
+  .strict();
 
 const workflowMappedValueSchema: z.ZodTypeAny = z.lazy(() =>
   z.union([

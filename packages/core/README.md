@@ -31,6 +31,11 @@ npm run reencrypt:credentials -w @integration/core
 
 - [`packages/core/.env.example`](./.env.example)
 
+### Platform vs Workspace Configuration
+
+- Keep `.env` limited to platform runtime and OAuth app registration values.
+- Store workspace-specific app connection settings through API/web UI (`/apps` + `/integrations`) so credentials are encrypted and tenant-scoped.
+
 ## Package-level Checks
 
 ```bash

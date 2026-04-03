@@ -4,6 +4,7 @@ import {
   AdapterActionResult,
   AdapterAuthResult,
   AdapterCredentialValidationResult,
+  AdapterCredentials,
   AdapterContext,
   AdapterTokenRefreshResult,
   AdapterTriggerResult,
@@ -20,6 +21,13 @@ type EmailConfig = {
   pass: string;
   from: string;
 };
+
+function asRecord(value: unknown): Record<string, unknown> {
+  if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  return {};
+}
 
 export class EmailAdapter implements Adapter {
   readonly key = "email";
@@ -101,14 +109,46 @@ export class EmailAdapter implements Adapter {
   async runAction(
     actionKey: string,
     input: Record<string, unknown>,
-    _context: AdapterContext,
+    context: AdapterContext,
   ): Promise<AdapterActionResult> {
     if (actionKey !== "sendEmail") {
       throw new Error(`Unsupported action "${actionKey}".`);
     }
 
-    if (!this.transport) {
-      throw new Error("Email adapter transport not initialized.");
+    const runtimeMetadata = asRecord(context.credentials?.metadata);
+    const runtimeSensitive = asRecord(context.credentials?.sensitiveConfig);
+    const host = String(runtimeMetadata.host || this.config.host || "");
+    const port = Number(runtimeMetadata.port || this.config.port || 587);
+    const secure =
+      typeof runtimeMetadata.secure === "boolean"
+        ? runtimeMetadata.secure
+        : this.config.secure;
+    const user = String(runtimeMetadata.user || this.config.user || "");
+    const pass = String(runtimeSensitive.pass || context.credentials?.apiKey || this.config.pass || "");
+    const from = String(runtimeMetadata.from || this.config.from || "");
+    const hasRuntimeOverrides =
+      Object.keys(runtimeMetadata).length > 0 ||
+      Object.keys(runtimeSensitive).length > 0 ||
+      Boolean(context.credentials?.apiKey);
+
+    const transport =
+      hasRuntimeOverrides && host && Number.isFinite(port)
+        ? nodemailer.createTransport({
+            host,
+            port,
+            secure,
+            auth:
+              user || pass
+                ? {
+                    user,
+                    pass,
+                  }
+                : undefined,
+          })
+        : this.transport;
+
+    if (!transport) {
+      throw new Error("Email adapter transport is not configured.");
     }
 
     const to = String(input.to || "");
@@ -120,8 +160,8 @@ export class EmailAdapter implements Adapter {
       throw new Error("sendEmail requires to and subject.");
     }
 
-    const result = await this.transport.sendMail({
-      from: this.config.from,
+    const result = await transport.sendMail({
+      from,
       to,
       subject,
       text,
@@ -158,7 +198,30 @@ export class EmailAdapter implements Adapter {
     throw new Error("Email adapter does not support token refresh.");
   }
 
-  async validateCredentials(): Promise<AdapterCredentialValidationResult> {
+  async validateCredentials(
+    credentials: AdapterCredentials,
+  ): Promise<AdapterCredentialValidationResult> {
+    const metadata = asRecord(credentials.metadata);
+    const sensitiveConfig = asRecord(credentials.sensitiveConfig);
+    const host = String(metadata.host || this.config.host || "");
+    const from = String(metadata.from || this.config.from || "");
+    const pass = String(sensitiveConfig.pass || credentials.apiKey || this.config.pass || "");
+
+    if (!host || !from) {
+      return {
+        status: "invalid",
+        reason: "SMTP host and from address are required.",
+      };
+    }
+
+    const user = String(metadata.user || this.config.user || "");
+    if (user && !pass) {
+      return {
+        status: "invalid",
+        reason: "SMTP password is missing.",
+      };
+    }
+
     return {
       status: "valid",
     };

@@ -83,6 +83,9 @@ export class CredentialResolver {
     const encryptedMetadata = isRecord(decrypted.metadata)
       ? (decrypted.metadata as Record<string, unknown>)
       : {};
+    const encryptedSensitiveConfig = isRecord(decrypted.sensitiveConfig)
+      ? (decrypted.sensitiveConfig as Record<string, unknown>)
+      : {};
 
     return {
       providerKey: credential.provider_key,
@@ -96,6 +99,7 @@ export class CredentialResolver {
         ...(credential.metadata_json || {}),
         ...encryptedMetadata,
       },
+      sensitiveConfig: encryptedSensitiveConfig,
       status,
     };
   }

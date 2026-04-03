@@ -1752,8 +1752,25 @@ export class WorkflowEngine {
     if (credentials.refreshToken && merged.refreshToken === undefined) {
       merged.refreshToken = credentials.refreshToken;
     }
+    if (credentials.apiKey && merged.apiKey === undefined) {
+      merged.apiKey = credentials.apiKey;
+    }
     if (credentials.expiresAt && merged.expiresAt === undefined) {
       merged.expiresAt = credentials.expiresAt;
+    }
+    if (isObject(credentials.metadata)) {
+      for (const [key, value] of Object.entries(credentials.metadata)) {
+        if (merged[key] === undefined) {
+          merged[key] = value;
+        }
+      }
+    }
+    if (isObject(credentials.sensitiveConfig)) {
+      for (const [key, value] of Object.entries(credentials.sensitiveConfig)) {
+        if (merged[key] === undefined) {
+          merged[key] = value;
+        }
+      }
     }
     return merged;
   }

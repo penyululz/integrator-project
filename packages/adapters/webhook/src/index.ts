@@ -71,8 +71,12 @@ export class WebhookAdapter implements Adapter {
     ];
   }
 
-  private verifySignature(signature: string | undefined, rawBody: string): boolean {
-    const secret = this.config.signingSecret || "";
+  private verifySignature(
+    signature: string | undefined,
+    rawBody: string,
+    secretOverride?: string,
+  ): boolean {
+    const secret = secretOverride || this.config.signingSecret || "";
     if (!secret) {
       return true;
     }
@@ -91,7 +95,7 @@ export class WebhookAdapter implements Adapter {
   async runTrigger(
     triggerKey: string,
     input: Record<string, unknown>,
-    _context: AdapterContext,
+    context: AdapterContext,
   ): Promise<AdapterTriggerResult> {
     if (triggerKey !== "http_post") {
       throw new Error(`Unsupported trigger key "${triggerKey}"`);
@@ -104,7 +108,14 @@ export class WebhookAdapter implements Adapter {
       (headers["x-signature"] as string | undefined) ||
       (headers["x-webhook-signature"] as string | undefined);
 
-    if (!this.verifySignature(signature, rawBody)) {
+    const runtimeSecret = String(
+      context.credentials?.sensitiveConfig?.signingSecret ||
+        context.credentials?.apiKey ||
+        this.config.signingSecret ||
+        "",
+    );
+
+    if (!this.verifySignature(signature, rawBody, runtimeSecret)) {
       throw new Error("Webhook signature verification failed.");
     }
 

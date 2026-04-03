@@ -141,7 +141,9 @@ export class SlackAdapter implements Adapter {
       throw new Error("Slack client is not initialized.");
     }
     const text = String(input.text || "");
-    const channel = String(input.channel || this.config.defaultChannel || "");
+    const channel = String(
+      input.channel || input.defaultChannel || this.config.defaultChannel || "",
+    );
     if (!text || !channel) {
       throw new Error("sendMessage requires channel and text.");
     }

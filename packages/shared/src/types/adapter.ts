@@ -5,6 +5,7 @@ export type AuthPayload = {
   code?: string;
   state?: string;
   scopes?: string[];
+  connection?: Record<string, unknown>;
 };
 
 export type TriggerDefinition = {
@@ -42,6 +43,7 @@ export type AdapterCredentials = {
   apiKey?: string;
   expiresAt?: string;
   metadata?: Record<string, unknown>;
+  sensitiveConfig?: Record<string, unknown>;
   status?: CredentialStatus;
 };
 

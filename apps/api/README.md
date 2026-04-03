@@ -22,9 +22,15 @@ npm run worker -w @integration/api
 
 - [`apps/api/.env.example`](./.env.example)
 
+### Config Split (v1)
+
+- `.env` is for platform runtime only: database, Redis, JWT/encryption keys, and OAuth app registration secrets.
+- Workspace/user app connection settings (API keys, SMTP settings, webhook signing secret, shop domain, tokens) are configured in the web UI and stored via encrypted credentials.
+
 ## Useful Endpoints
 
 - `GET http://localhost:4000/api/v1/health`
+- `GET http://localhost:4000/api/v1/apps`
 - `GET http://localhost:4000/metrics`
 
 ## Package-level Checks

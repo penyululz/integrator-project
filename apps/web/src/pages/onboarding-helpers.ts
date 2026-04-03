@@ -32,11 +32,11 @@ export function buildOnboardingSteps(snapshot: OnboardingSnapshot): OnboardingSt
   return [
     {
       id: "connect",
-      title: "Connect an Integration",
+      title: "Connect an App",
       description:
-        "Add at least one integration or credential so workflows can call external systems.",
+        "Add at least one app connection so workflows can call external systems.",
       done: hasConnectedIntegration,
-      ctaLabel: hasConnectedIntegration ? "Manage Integrations" : "Connect Integration",
+      ctaLabel: hasConnectedIntegration ? "Manage Apps" : "Connect App",
       ctaPath: "/integrations",
     },
     {

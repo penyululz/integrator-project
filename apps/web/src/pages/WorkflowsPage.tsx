@@ -469,7 +469,18 @@ export function WorkflowsPage() {
                 {adaptersNeedingConnection.length > 0 ? (
                   <div style={{ marginTop: 4, color: "#8a5100", fontSize: 13 }}>
                     Adapter credentials needed: {adaptersNeedingConnection.join(", ")}.{" "}
-                    <Link to="/integrations">Connect in Integrations</Link>.
+                    <Link
+                      to={`/integrations?appKey=${encodeURIComponent(
+                        adaptersNeedingConnection[0],
+                      )}&templateId=${encodeURIComponent(
+                        template.id,
+                      )}&returnTo=${encodeURIComponent(
+                        `/workflows?templateId=${encodeURIComponent(template.id)}`,
+                      )}`}
+                    >
+                      Connect now
+                    </Link>{" "}
+                    and return to this template.
                   </div>
                 ) : null}
               </article>

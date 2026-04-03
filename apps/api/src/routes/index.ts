@@ -2,6 +2,7 @@ import { Router } from "express";
 import {
   evaluateAlertSignals,
   evaluateWorkspaceQuotaState,
+  getAppConnectionDefinition,
   getWorkflowTemplateById,
   getScaleLimitsFromEnv,
   getDefaultAlertThresholds,
@@ -13,6 +14,8 @@ import { redactSensitiveRecord } from "@integration/shared";
 import { requireAuth, requireRole } from "../middleware/auth";
 import {
   alertConfigSchema,
+  appConnectionSchema,
+  appConnectionTestSchema,
   alertTestSchema,
   analyticsQuerySchema,
   auditLogsQuerySchema,
@@ -135,8 +138,168 @@ function mapAuditLogForResponse(entry: {
   };
 }
 
+function hasAnyCredentialInput(input: {
+  accessToken?: string;
+  refreshToken?: string;
+  apiKey?: string;
+  expiresAt?: string;
+  metadata?: Record<string, unknown>;
+  sensitiveConfig?: Record<string, unknown>;
+}): boolean {
+  const hasValue = (value: unknown): boolean => {
+    if (value === undefined || value === null) {
+      return false;
+    }
+    if (typeof value === "string") {
+      return value.trim().length > 0;
+    }
+    if (typeof value === "number" || typeof value === "boolean") {
+      return true;
+    }
+    if (Array.isArray(value)) {
+      return value.length > 0;
+    }
+    if (typeof value === "object") {
+      return Object.keys(value as Record<string, unknown>).length > 0;
+    }
+    return false;
+  };
+
+  return (
+    hasValue(input.accessToken) ||
+    hasValue(input.refreshToken) ||
+    hasValue(input.apiKey) ||
+    hasValue(input.expiresAt) ||
+    hasValue(input.metadata) ||
+    hasValue(input.sensitiveConfig)
+  );
+}
+
+function mapAppConnectionStatus(input: {
+  authType: string;
+  hasIntegration: boolean;
+  credentialStatus?: string;
+  hasSecretData: boolean;
+}): "connected" | "not_connected" | "expired" | "invalid" {
+  if (input.credentialStatus === "expired") {
+    return "expired";
+  }
+  if (input.credentialStatus === "invalid") {
+    return "invalid";
+  }
+  if (input.credentialStatus === "valid") {
+    return "connected";
+  }
+
+  if (input.authType === "none") {
+    return input.hasIntegration ? "connected" : "not_connected";
+  }
+
+  if (input.hasSecretData) {
+    return "connected";
+  }
+
+  return "not_connected";
+}
+
 export function createApiRouter(runtime: CoreRuntime): Router {
   const router = Router();
+
+  async function listAppsForScope(scope: {
+    tenantId: string;
+    organizationId: string;
+    workspaceId: string;
+  }) {
+    const [integrations, credentials] = await Promise.all([
+      runtime.repositories.integrationRepository.list({
+        tenantId: scope.tenantId,
+        organizationId: scope.organizationId,
+        workspaceId: scope.workspaceId,
+      }),
+      runtime.repositories.credentialRepository.list({
+        tenantId: scope.tenantId,
+        organizationId: scope.organizationId,
+        workspaceId: scope.workspaceId,
+      }),
+    ]);
+
+    const integrationByAdapter = new Map(integrations.map((item) => [item.adapter_key, item]));
+    const credentialByProvider = new Map(credentials.map((item) => [item.provider_key, item]));
+    const enabledByKey = new Map(
+      runtime.pluginLoader.listMetadata().map((item) => [item.key, item]),
+    );
+    const installedByKey = new Map(
+      runtime.pluginLoader.listInstalledManifests().map((item) => [item.key, item]),
+    );
+    const allAdapterKeys = new Set<string>([
+      ...installedByKey.keys(),
+      ...enabledByKey.keys(),
+    ]);
+
+    return [...allAdapterKeys]
+      .sort((a, b) => a.localeCompare(b))
+      .map((adapterKey) => {
+      const installed = installedByKey.get(adapterKey);
+      const runtimeMetadata = enabledByKey.get(adapterKey);
+      const authType = runtimeMetadata?.authType || installed?.manifest.auth.type || "custom";
+      const definition = getAppConnectionDefinition({
+        adapterKey,
+        displayName: runtimeMetadata?.displayName || installed?.manifest.displayName || adapterKey,
+        description:
+          runtimeMetadata?.description ||
+          installed?.manifest.description ||
+          `Connection for ${adapterKey}.`,
+        authType,
+      });
+
+      const integration = integrationByAdapter.get(adapterKey);
+      const credential = credentialByProvider.get(adapterKey);
+      const status = mapAppConnectionStatus({
+        authType,
+        hasIntegration: Boolean(integration),
+        credentialStatus: credential?.credential_status,
+        hasSecretData: Boolean(credential?.has_secret_data),
+      });
+
+      return {
+        key: adapterKey,
+        name: definition.displayName,
+        description: definition.description,
+        enabled: installed ? installed.enabled : true,
+        authType,
+        setupMethod: definition.setupMethod,
+        setupLabel: definition.setupLabel,
+        setupNotes: definition.setupNotes,
+        oauthScopes: definition.oauthScopes || [],
+        setupFields: definition.fields,
+        platformManagedFields: definition.platformManagedFields,
+        supportedTriggers:
+          runtimeMetadata?.supportedTriggers || installed?.manifest.supportedTriggers || [],
+        supportedActions:
+          runtimeMetadata?.supportedActions || installed?.manifest.supportedActions || [],
+        status,
+        connected: status === "connected",
+        connection: {
+          integrationId: integration?.id || null,
+          integrationName: integration?.name || null,
+          integrationStatus: integration?.status || null,
+          integrationConfig: integration?.config_json || {},
+          credentialMetadata: credential?.metadata_json || {},
+          hasSensitiveIntegrationConfig: integration?.has_sensitive_config || false,
+          credentialStatus: credential?.credential_status || null,
+          hasSecretData: credential?.has_secret_data || false,
+          validationError: credential?.validation_error || null,
+          updatedAt: credential?.updated_at || integration?.updated_at || null,
+        },
+        actions: {
+          canConnect: installed ? installed.enabled : true,
+          canEdit: installed ? installed.enabled : true,
+          canDisconnect: Boolean(credential),
+          canTestConnection: installed ? installed.enabled : true,
+        },
+      };
+    });
+  }
 
   router.get("/health", (_req, res) => {
     res.json({ status: "ok" });
@@ -231,6 +394,20 @@ export function createApiRouter(runtime: CoreRuntime): Router {
     },
   );
 
+  router.get("/apps", requireAuth, async (req, res, next) => {
+    try {
+      const scope = req.auth!.scope;
+      const apps = await listAppsForScope({
+        tenantId: scope.tenantId,
+        organizationId: scope.organizationId,
+        workspaceId: scope.workspaceId,
+      });
+      res.json({ apps });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.get("/integrations", requireAuth, async (req, res, next) => {
     try {
       const scope = req.auth!.scope;
@@ -291,6 +468,210 @@ export function createApiRouter(runtime: CoreRuntime): Router {
     });
   });
 
+  router.put(
+    "/apps/:appKey/connection",
+    requireRole(["owner", "admin"]),
+    async (req, res, next) => {
+      try {
+        const body = appConnectionSchema.parse(req.body || {});
+        const appKey = resolveRouteParam(req.params.appKey);
+        const scope = req.auth!.scope;
+        const enabledAdapter = runtime.pluginLoader
+          .listMetadata()
+          .find((adapter) => adapter.key === appKey);
+
+        if (!enabledAdapter) {
+          throw createHttpError(404, "App not found.");
+        }
+
+        const existingIntegration =
+          await runtime.repositories.integrationRepository.findByAdapter({
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+            adapterKey: appKey,
+          });
+
+        const definition = getAppConnectionDefinition({
+          adapterKey: appKey,
+          displayName: enabledAdapter.displayName,
+          description: enabledAdapter.description,
+          authType: enabledAdapter.authType,
+        });
+
+        const integration = await runtime.repositories.integrationRepository.upsertByAdapter({
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+          adapterKey: appKey,
+          name:
+            body.integrationName ||
+            existingIntegration?.name ||
+            `${definition.displayName} Connection`,
+          config: body.integrationConfig || existingIntegration?.config_json || {},
+          status: "active",
+        });
+
+        if (
+          body.credential &&
+          (hasAnyCredentialInput(body.credential) || enabledAdapter.authType !== "none")
+        ) {
+          await runtime.repositories.credentialRepository.upsert({
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+            integrationId: integration.id,
+            providerKey: appKey,
+            authType: body.credential.authType || enabledAdapter.authType,
+            accessToken: body.credential.accessToken,
+            refreshToken: body.credential.refreshToken,
+            apiKey: body.credential.apiKey,
+            expiresAt: body.credential.expiresAt,
+            metadata: body.credential.metadata,
+            sensitiveConfig: body.credential.sensitiveConfig,
+          });
+        }
+
+        const app = (
+          await listAppsForScope({
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+          })
+        ).find((item) => item.key === appKey);
+
+        res.status(200).json({
+          app,
+          integration,
+        });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.post(
+    "/apps/:appKey/test",
+    requireRole(["owner", "admin"]),
+    async (req, res, next) => {
+      try {
+        const body = appConnectionTestSchema.parse(req.body || {});
+        const appKey = resolveRouteParam(req.params.appKey);
+        const scope = req.auth!.scope;
+        const adapterMetadata = runtime.pluginLoader
+          .listMetadata()
+          .find((adapter) => adapter.key === appKey);
+        if (!adapterMetadata) {
+          throw createHttpError(404, "App not found.");
+        }
+
+        const adapter = runtime.pluginLoader.get(appKey);
+        const integration =
+          await runtime.repositories.integrationRepository.findByAdapter({
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+            adapterKey: appKey,
+          });
+        const credentials = await runtime.credentialResolver.resolveForAdapter({
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+          providerKey: appKey,
+        });
+
+        let status: "valid" | "expired" | "invalid" = "valid";
+        let reason: string | null = null;
+
+        if (adapter.validateCredentials && credentials) {
+          const result = await adapter.validateCredentials(credentials, {
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+          });
+          status = result.status;
+          reason = result.reason || null;
+        } else {
+          const config = body.integrationConfig || integration?.config_json || {};
+          const validation = await adapter.validateConfig(config);
+          if (!validation.valid) {
+            status = "invalid";
+            reason = (validation.errors || []).join("; ") || "Connection config is invalid.";
+          } else if (credentials?.status === "expired") {
+            status = "expired";
+          } else if (credentials?.status === "invalid") {
+            status = "invalid";
+          }
+        }
+
+        if (credentials) {
+          await runtime.credentialResolver.recordCredentialStatus({
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+            providerKey: appKey,
+            status,
+            validationError: reason,
+          });
+        }
+
+        res.json({
+          appKey,
+          status,
+          reason,
+          testedAt: new Date().toISOString(),
+          hasCredential: Boolean(credentials),
+          hasIntegration: Boolean(integration),
+          authType: adapterMetadata.authType,
+        });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.delete(
+    "/apps/:appKey/connection",
+    requireRole(["owner", "admin"]),
+    async (req, res, next) => {
+      try {
+        const appKey = resolveRouteParam(req.params.appKey);
+        const scope = req.auth!.scope;
+        const deletedCredentials =
+          await runtime.repositories.credentialRepository.deleteByProvider({
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+            providerKey: appKey,
+          });
+        if (deletedCredentials > 0) {
+          await runtime.repositories.integrationRepository.updateStatusByAdapter({
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+            adapterKey: appKey,
+            status: "disconnected",
+          });
+        }
+
+        const app = (
+          await listAppsForScope({
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+          })
+        ).find((item) => item.key === appKey);
+
+        res.json({
+          deletedCredentials,
+          app,
+        });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
   router.post(
     "/integrations",
     requireRole(["owner", "admin"]),
@@ -329,6 +710,7 @@ export function createApiRouter(runtime: CoreRuntime): Router {
           redirectUri: body.redirectUri,
           state: body.state,
           scopes: body.scopes,
+          connection: body.connection,
         });
         res.json(auth);
       } catch (error) {
@@ -353,6 +735,7 @@ export function createApiRouter(runtime: CoreRuntime): Router {
           integrationId: body.integrationId,
           code: body.code,
           redirectUri: body.redirectUri,
+          connection: body.connection,
         });
         res.status(201).json({ status: "connected" });
       } catch (error) {
@@ -1672,6 +2055,12 @@ export function createApiRouter(runtime: CoreRuntime): Router {
         const scope = req.auth!.scope;
 
         const adapter = runtime.pluginLoader.get(adapterKey);
+        const credentials = await runtime.credentialResolver.resolveForAdapter({
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+          providerKey: adapterKey,
+        });
         const triggerResult = await adapter.runTrigger(
           triggerKey,
           {
@@ -1683,6 +2072,7 @@ export function createApiRouter(runtime: CoreRuntime): Router {
             organizationId: scope.organizationId,
             workspaceId: scope.workspaceId,
             requestId: req.header("x-request-id") || undefined,
+            credentials,
           },
         );
 

@@ -95,14 +95,14 @@ export function OnboardingPage() {
     <div style={{ display: "grid", gap: 16 }}>
       <h2>Onboarding</h2>
       <p>
-        Follow this quick path to first success: connect an integration, start from a
+        Follow this quick path to first success: connect an app, start from a
         template, create a workflow, then verify a run.
       </p>
 
       <section style={{ border: "1px solid #d0d0d0", borderRadius: 10, padding: 12 }}>
         <h3 style={{ marginTop: 0 }}>First Success Path (about 10 minutes)</h3>
         <ol style={{ margin: "0 0 10px", paddingLeft: 20 }}>
-          <li>Connect at least one integration on the Integrations page.</li>
+          <li>Connect at least one app on the Apps and Connections page.</li>
           <li>Choose a starter template in Workflows.</li>
           <li>Validate and create the workflow.</li>
           <li>Trigger a test event and confirm it in Runs.</li>

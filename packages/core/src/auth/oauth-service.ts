@@ -13,6 +13,7 @@ export class OAuthService {
       redirectUri: string;
       state?: string;
       scopes?: string[];
+      connection?: Record<string, unknown>;
     },
   ): Promise<{ authUrl: string; state?: string }> {
     const result = await adapter.authenticate({
@@ -21,6 +22,7 @@ export class OAuthService {
       redirectUri: input.redirectUri,
       state: input.state,
       scopes: input.scopes,
+      connection: input.connection,
     });
 
     if (!result.authUrl) {
@@ -42,6 +44,7 @@ export class OAuthService {
       code: string;
       redirectUri: string;
       integrationId?: string;
+      connection?: Record<string, unknown>;
     },
   ): Promise<void> {
     const result = await adapter.authenticate({
@@ -49,6 +52,7 @@ export class OAuthService {
       organizationId: input.organizationId,
       code: input.code,
       redirectUri: input.redirectUri,
+      connection: input.connection,
     });
 
     if (!result.accessToken) {
@@ -65,8 +69,10 @@ export class OAuthService {
       accessToken: result.accessToken,
       refreshToken: result.refreshToken,
       expiresAt: result.expiresAt,
-      metadata: result.metadata,
+      metadata: {
+        ...(input.connection || {}),
+        ...(result.metadata || {}),
+      },
     });
   }
 }
-

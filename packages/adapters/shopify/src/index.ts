@@ -48,17 +48,24 @@ export class ShopifyAdapter implements Adapter {
   }
 
   async authenticate(payload: AuthPayload): Promise<AdapterAuthResult> {
+    const requestedShopName = String(payload.connection?.shopName || this.config.shopName || "");
     if (!payload.code) {
       const scopes = (payload.scopes || ["read_orders"]).join(",");
       const redirectUri = encodeURIComponent(payload.redirectUri || "");
-      const authUrl = `https://${this.config.shopName}.myshopify.com/admin/oauth/authorize?client_id=${encodeURIComponent(this.config.apiKey)}&scope=${encodeURIComponent(scopes)}&redirect_uri=${redirectUri}&state=${encodeURIComponent(payload.state || "")}`;
+      if (!requestedShopName) {
+        throw new Error("Shopify auth requires shopName.");
+      }
+      const authUrl = `https://${requestedShopName}.myshopify.com/admin/oauth/authorize?client_id=${encodeURIComponent(this.config.apiKey)}&scope=${encodeURIComponent(scopes)}&redirect_uri=${redirectUri}&state=${encodeURIComponent(payload.state || "")}`;
       return {
         authUrl,
       };
     }
 
+    if (!requestedShopName) {
+      throw new Error("Shopify auth requires shopName.");
+    }
     const response = await fetch(
-      `https://${this.config.shopName}.myshopify.com/admin/oauth/access_token`,
+      `https://${requestedShopName}.myshopify.com/admin/oauth/access_token`,
       {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -75,7 +82,10 @@ export class ShopifyAdapter implements Adapter {
     const data = (await response.json()) as { access_token: string; scope: string };
     return {
       accessToken: data.access_token,
-      metadata: { scope: data.scope },
+      metadata: {
+        scope: data.scope,
+        shopName: requestedShopName,
+      },
     };
   }
 
@@ -144,7 +154,11 @@ export class ShopifyAdapter implements Adapter {
     const accessToken = String(
       input.accessToken || context.credentials?.accessToken || this.config.accessToken,
     );
-    const shopName = String(input.shopName || this.config.shopName);
+    const shopName = String(
+      input.shopName ||
+        context.credentials?.metadata?.shopName ||
+        this.config.shopName,
+    );
     const client =
       accessToken && shopName
         ? new Shopify({

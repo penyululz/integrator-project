@@ -61,6 +61,58 @@ export type InstalledAdapter = {
   };
 };
 
+export type AppSetupField = {
+  key: string;
+  label: string;
+  inputType: "text" | "password" | "url" | "number" | "boolean";
+  target:
+    | "integrationConfig"
+    | "credentialMetadata"
+    | "credentialSensitiveConfig"
+    | "credentialApiKey"
+    | "credentialAccessToken";
+  required?: boolean;
+  secret?: boolean;
+  placeholder?: string;
+  helpText?: string;
+};
+
+export type AppConnectionRecord = {
+  key: string;
+  name: string;
+  description: string;
+  enabled: boolean;
+  authType: string;
+  setupMethod: "oauth2" | "form" | "none";
+  setupLabel: string;
+  setupNotes: string[];
+  oauthScopes: string[];
+  setupFields: AppSetupField[];
+  platformManagedFields: string[];
+  supportedTriggers: string[];
+  supportedActions: string[];
+  status: "connected" | "not_connected" | "expired" | "invalid";
+  connected: boolean;
+  connection: {
+    integrationId: string | null;
+    integrationName: string | null;
+    integrationStatus: string | null;
+    integrationConfig: Record<string, unknown>;
+    credentialMetadata: Record<string, unknown>;
+    hasSensitiveIntegrationConfig: boolean;
+    credentialStatus: string | null;
+    hasSecretData: boolean;
+    validationError: string | null;
+    updatedAt: string | null;
+  };
+  actions: {
+    canConnect: boolean;
+    canEdit: boolean;
+    canDisconnect: boolean;
+    canTestConnection: boolean;
+  };
+};
+
 export type IntegrationRecord = {
   id: string;
   name: string;
@@ -541,6 +593,55 @@ export async function listAdapters(): Promise<{
   };
 }
 
+export async function listApps(): Promise<AppConnectionRecord[]> {
+  const response = await apiClient().get("/apps");
+  return response.data.apps || [];
+}
+
+export async function upsertAppConnection(input: {
+  appKey: string;
+  integrationName?: string;
+  integrationConfig?: Record<string, unknown>;
+  credential?: {
+    authType?: string;
+    accessToken?: string;
+    refreshToken?: string;
+    apiKey?: string;
+    expiresAt?: string;
+    metadata?: Record<string, unknown>;
+    sensitiveConfig?: Record<string, unknown>;
+  };
+}): Promise<AppConnectionRecord | null> {
+  const response = await apiClient().put(`/apps/${input.appKey}/connection`, {
+    integrationName: input.integrationName,
+    integrationConfig: input.integrationConfig,
+    credential: input.credential,
+  });
+  return response.data.app || null;
+}
+
+export async function testAppConnection(input: {
+  appKey: string;
+  integrationConfig?: Record<string, unknown>;
+}): Promise<{
+  appKey: string;
+  status: "valid" | "expired" | "invalid";
+  reason: string | null;
+  testedAt: string;
+}> {
+  const response = await apiClient().post(`/apps/${input.appKey}/test`, {
+    integrationConfig: input.integrationConfig,
+  });
+  return response.data;
+}
+
+export async function disconnectAppConnection(
+  appKey: string,
+): Promise<{ deletedCredentials: number; app: AppConnectionRecord | null }> {
+  const response = await apiClient().delete(`/apps/${appKey}/connection`);
+  return response.data;
+}
+
 export async function listIntegrations(): Promise<IntegrationRecord[]> {
   const response = await apiClient().get("/integrations");
   return response.data.integrations || [];
@@ -572,11 +673,13 @@ export async function startAdapterAuth(input: {
   redirectUri: string;
   state?: string;
   scopes?: string[];
+  connection?: Record<string, unknown>;
 }): Promise<{ authUrl?: string }> {
   const response = await apiClient().post(`/integrations/${input.adapterKey}/auth/start`, {
     redirectUri: input.redirectUri,
     state: input.state,
     scopes: input.scopes,
+    connection: input.connection,
   });
   return response.data;
 }
@@ -586,11 +689,13 @@ export async function completeAdapterAuth(input: {
   code: string;
   redirectUri: string;
   integrationId?: string;
+  connection?: Record<string, unknown>;
 }): Promise<void> {
   await apiClient().post(`/integrations/${input.adapterKey}/auth/callback`, {
     integrationId: input.integrationId,
     code: input.code,
     redirectUri: input.redirectUri,
+    connection: input.connection,
   });
 }
 

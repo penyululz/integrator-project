@@ -44,7 +44,7 @@ export default function App() {
         <Link to="/login">Login</Link>
         <Link to="/dashboard">Dashboard</Link>
         <Link to="/onboarding">Get Started</Link>
-        <Link to="/integrations">Integrations</Link>
+        <Link to="/integrations">Apps</Link>
         <Link to="/workflows">Workflows</Link>
         <Link to="/runs">Runs</Link>
         {isOperator ? <Link to="/audit-logs">Audit Logs</Link> : null}

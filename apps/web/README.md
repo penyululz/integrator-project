@@ -9,7 +9,7 @@ For full product docs, setup, smoke path, and roadmap, use the root documentatio
 React operational UI for:
 
 - onboarding + templates
-- integrations and credentials
+- apps and connections
 - workflow authoring
 - runs/logs
 - dashboard, alerts, and audit views
@@ -25,6 +25,11 @@ npm run dev -w @integration/web
 ## Environment Reference
 
 - [`apps/web/.env.example`](./.env.example)
+
+### Connection Setup
+
+- Most app setup now happens in the web UI (`/integrations`) per workspace.
+- `.env` remains only for platform-level runtime settings and OAuth app registration values.
 
 ## Demo Assets
 
