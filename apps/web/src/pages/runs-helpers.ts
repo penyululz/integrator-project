@@ -46,6 +46,26 @@ export type RunStatusCounts = {
   other: number;
 };
 
+export type RunStatusFilter =
+  | "all"
+  | "active"
+  | "issues"
+  | "success"
+  | "waiting"
+  | "dead_lettered";
+
+export const RUN_STATUS_FILTER_OPTIONS: Array<{
+  id: RunStatusFilter;
+  label: string;
+}> = [
+  { id: "all", label: "All runs" },
+  { id: "active", label: "Active" },
+  { id: "issues", label: "Needs attention" },
+  { id: "success", label: "Successful" },
+  { id: "waiting", label: "Waiting" },
+  { id: "dead_lettered", label: "Dead-lettered" },
+];
+
 export const RUN_EVENT_FILTER_OPTIONS = [
   "",
   "workflow.execution.deferred",
@@ -79,9 +99,21 @@ export const RUN_EVENT_FILTER_OPTIONS = [
   "workflow.retry.scheduled",
   "workflow.retry.succeeded",
   "workflow.retry.exhausted",
+  "workflow.approval.requested",
+  "workflow.approval.approved",
+  "workflow.approval.denied",
+  "workflow.approval.resume_queued",
+  "workflow.approval.resumed",
   "workflow.failed",
   "workflow.dead_lettered",
 ] as const;
+
+export type RunSimulatorPreset = {
+  id: "starter_webhook" | "shopify_order" | "ops_alert";
+  label: string;
+  description: string;
+  payload: Record<string, unknown>;
+};
 
 function isRecord(input: unknown): input is Record<string, unknown> {
   return typeof input === "object" && input !== null && !Array.isArray(input);
@@ -320,6 +352,29 @@ export function countRunsByStatus(runs: RunRecord[]): RunStatusCounts {
   return counts;
 }
 
+export function filterRunsByStatus(
+  runs: RunRecord[],
+  statusFilter: RunStatusFilter,
+): RunRecord[] {
+  if (statusFilter === "all") {
+    return runs;
+  }
+
+  if (statusFilter === "active") {
+    return runs.filter((run) =>
+      ["queued", "running", "waiting", "retrying"].includes(run.status),
+    );
+  }
+
+  if (statusFilter === "issues") {
+    return runs.filter((run) =>
+      ["failed", "dead_lettered", "cancelled"].includes(run.status),
+    );
+  }
+
+  return runs.filter((run) => run.status === statusFilter);
+}
+
 export function buildRunSimulatorPayload(seed = Date.now()): Record<string, unknown> {
   return {
     message: `Test automation payload ${seed}`,
@@ -330,6 +385,55 @@ export function buildRunSimulatorPayload(seed = Date.now()): Record<string, unkn
       initiatedBy: "ui-simulator",
     },
   };
+}
+
+export function generateSamplePayload(seed = Date.now()): Record<string, unknown> {
+  return buildRunSimulatorPayload(seed);
+}
+
+export function getRunSimulatorPresets(seed = Date.now()): RunSimulatorPreset[] {
+  const baseTime = new Date(seed).toISOString();
+  return [
+    {
+      id: "starter_webhook",
+      label: "Starter webhook",
+      description: "Best for first success and Slack notification templates.",
+      payload: {
+        message: `Starter webhook payload ${seed}`,
+        source: "ui-simulator",
+        sentAt: baseTime,
+        metadata: {
+          channel: "starter",
+          eventType: "webhook.test",
+        },
+      },
+    },
+    {
+      id: "shopify_order",
+      label: "Shopify order",
+      description: "Use for Shopify -> notification style automations.",
+      payload: {
+        orderId: `ord_${seed}`,
+        source: "shopify",
+        sentAt: baseTime,
+        customerEmail: "buyer@example.com",
+        total: 149.25,
+        currency: "USD",
+      },
+    },
+    {
+      id: "ops_alert",
+      label: "Ops alert",
+      description: "Useful for alerting and incident workflows.",
+      payload: {
+        alertId: `alert_${seed}`,
+        source: "monitoring",
+        severity: "warning",
+        message: "Queue lag exceeded threshold",
+        sentAt: baseTime,
+      },
+    },
+  ];
 }
 
 export function parseRunSimulatorPayloadInput(input: string): {
@@ -381,6 +485,11 @@ export function summarizeRunOutcome(run: RunRecord | null): string {
   }
 
   if (run.status === "waiting") {
+    const result = toRecord(run.result_json);
+    const approval = toRecord(result.approval);
+    if (approval.status === "pending") {
+      return "Run is waiting for human approval before the next tool call.";
+    }
     return "Run is paused on a scheduled wait step.";
   }
 
@@ -397,4 +506,12 @@ export function summarizeRunOutcome(run: RunRecord | null): string {
   }
 
   return `Run status: ${run.status.replace(/_/g, " ")}.`;
+}
+
+export function getRunTimeline(run: RunRecord | null): StepTimelineItem[] {
+  return getRunStepTimeline(run);
+}
+
+export function getRunSummary(run: RunRecord | null): string {
+  return summarizeRunOutcome(run);
 }

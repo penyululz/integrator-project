@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import type { AgentToolRecord } from "../api";
 import {
   createEmptyActionStep,
   createEmptyBranchStep,
@@ -14,6 +15,12 @@ import { BranchStepEditor } from "./BranchStepEditor";
 import { ConditionEditor } from "./ConditionEditor";
 import { DelayStepEditor } from "./DelayStepEditor";
 import { ReferencePicker } from "./ReferencePicker";
+import { parseCurlCommand, toFormattedJson } from "../pages/http-step-helpers";
+import {
+  applyAgentPermissionState,
+  extractAgentPermissionState,
+  getAgentPermissionOptions,
+} from "../pages/agent-tools-helpers";
 
 type AdapterMetadata = {
   key: string;
@@ -134,24 +141,35 @@ function getStepClassName(step: WorkflowStep): string {
 export function StepCardEditor({
   step,
   adapters,
+  agentTools = [],
   referenceHints,
   depth,
   onChange,
   onDelete,
+  onMoveUp,
+  onMoveDown,
   createStep,
 }: {
   step: WorkflowStep;
   adapters: AdapterMetadata[];
+  agentTools?: AgentToolRecord[];
   referenceHints: string[];
   depth: number;
   onChange: (step: WorkflowStep) => void;
   onDelete: () => void;
+  onMoveUp?: () => void;
+  onMoveDown?: () => void;
   createStep: (type: "action" | "branch" | "delay") => WorkflowStep;
 }) {
   const [configText, setConfigText] = useState(
     isActionStep(step) ? toJson(step.config) : "{}",
   );
   const [configError, setConfigError] = useState<string | null>(null);
+  const [httpHeadersDraft, setHttpHeadersDraft] = useState("{}");
+  const [httpBodyDraft, setHttpBodyDraft] = useState("{}");
+  const [curlDraft, setCurlDraft] = useState("");
+  const [curlMessage, setCurlMessage] = useState<string | null>(null);
+  const [codeInputDraft, setCodeInputDraft] = useState("{}");
 
   useEffect(() => {
     if (isActionStep(step)) {
@@ -166,6 +184,30 @@ export function StepCardEditor({
   const actionAdapter = actionStep
     ? adapters.find((adapter) => adapter.key === actionStep.adapter)
     : undefined;
+  const isHttpRequestStep =
+    actionStep?.adapter === "http-api" &&
+    actionStep.action === "httpRequest";
+  const isCodeStep =
+    actionStep?.adapter === "code" &&
+    actionStep.action === "executeJavaScript";
+  const isAiStep = actionStep?.adapter === "ai";
+  const isAiAgentStep = isAiStep && actionStep.action === "runAgent";
+  const aiAgentToolOptions = useMemo(
+    () => getAgentPermissionOptions(agentTools),
+    [agentTools],
+  );
+  const agentRequestedToolIds = useMemo(() => {
+    const rawTools = actionStep?.config.tools;
+    if (!Array.isArray(rawTools)) {
+      return [] as string[];
+    }
+    return [...new Set(rawTools.filter((item): item is string => typeof item === "string"))];
+  }, [actionStep?.config.tools]);
+  const agentPermissionState = useMemo(
+    () =>
+      actionStep ? extractAgentPermissionState(actionStep.config) : extractAgentPermissionState({}),
+    [actionStep],
+  );
 
   const inputEntries = useMemo(() => {
     if (!actionStep?.input) {
@@ -173,6 +215,17 @@ export function StepCardEditor({
     }
     return Object.entries(actionStep.input);
   }, [actionStep]);
+
+  useEffect(() => {
+    if (!actionStep) {
+      return;
+    }
+
+    setHttpHeadersDraft(toFormattedJson(actionStep.config.headers || {}));
+    setHttpBodyDraft(toFormattedJson(actionStep.config.body || {}));
+    setCodeInputDraft(toFormattedJson(actionStep.config.input || {}));
+    setCurlMessage(null);
+  }, [actionStep?.id, actionStep?.adapter, actionStep?.action]);
 
   return (
     <div className={getStepClassName(step)} style={{ marginLeft: depth * 10 }}>
@@ -182,6 +235,17 @@ export function StepCardEditor({
           <div className="step-summary">{summarizeStep(step)}</div>
         </div>
         <div className="inline-actions">
+          {onMoveUp ? (
+            <button type="button" onClick={onMoveUp}>
+              Move up
+            </button>
+          ) : null}
+          {onMoveDown ? (
+            <button type="button" onClick={onMoveDown}>
+              Move down
+            </button>
+          ) : null}
+          <span className="tag">Drag to reorder</span>
           <label>
             Type
             <select
@@ -280,6 +344,453 @@ export function StepCardEditor({
               </select>
             </label>
           </div>
+
+          {isHttpRequestStep ? (
+            <div className="card-muted" style={{ borderRadius: 10, padding: 10 }}>
+              <strong>HTTP Request setup</strong>
+              <p>Configure request fields directly, or import from cURL to prefill values.</p>
+              <div className="form-grid two">
+                <label>
+                  Method
+                  <select
+                    value={String(actionStep.config.method || "GET")}
+                    onChange={(event) => {
+                      onChange({
+                        ...actionStep,
+                        config: {
+                          ...actionStep.config,
+                          method: event.target.value,
+                        },
+                      });
+                    }}
+                    style={{ marginTop: 4 }}
+                  >
+                    <option value="GET">GET</option>
+                    <option value="POST">POST</option>
+                    <option value="PUT">PUT</option>
+                    <option value="PATCH">PATCH</option>
+                    <option value="DELETE">DELETE</option>
+                  </select>
+                </label>
+                <label>
+                  URL
+                  <input
+                    value={String(actionStep.config.url || "")}
+                    onChange={(event) => {
+                      onChange({
+                        ...actionStep,
+                        config: {
+                          ...actionStep.config,
+                          url: event.target.value,
+                        },
+                      });
+                    }}
+                    placeholder="https://api.example.com/resource"
+                    style={{ marginTop: 4 }}
+                  />
+                </label>
+              </div>
+
+              <div className="form-grid two">
+                <label>
+                  Headers (JSON object)
+                  <textarea
+                    rows={4}
+                    value={httpHeadersDraft}
+                    onChange={(event) => setHttpHeadersDraft(event.target.value)}
+                    onBlur={() => {
+                      const parsed = parseConfig(httpHeadersDraft);
+                      if (!parsed) {
+                        setConfigError("Headers must be a valid JSON object.");
+                        return;
+                      }
+                      setConfigError(null);
+                      onChange({
+                        ...actionStep,
+                        config: {
+                          ...actionStep.config,
+                          headers: parsed,
+                        },
+                      });
+                    }}
+                  />
+                </label>
+                <label>
+                  Body (JSON object)
+                  <textarea
+                    rows={4}
+                    value={httpBodyDraft}
+                    onChange={(event) => setHttpBodyDraft(event.target.value)}
+                    onBlur={() => {
+                      const parsed = parseConfig(httpBodyDraft);
+                      if (!parsed) {
+                        setConfigError("Body must be a valid JSON object.");
+                        return;
+                      }
+                      setConfigError(null);
+                      onChange({
+                        ...actionStep,
+                        config: {
+                          ...actionStep.config,
+                          body: parsed,
+                        },
+                      });
+                    }}
+                  />
+                </label>
+              </div>
+
+              <label>
+                Import from cURL
+                <textarea
+                  rows={3}
+                  value={curlDraft}
+                  placeholder={`curl -X POST https://api.example.com -H 'Content-Type: application/json' -d '{"hello":"world"}'`}
+                  onChange={(event) => setCurlDraft(event.target.value)}
+                  style={{ marginTop: 4 }}
+                />
+              </label>
+              <div className="inline-actions">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const parsed = parseCurlCommand(curlDraft);
+                    if (!parsed) {
+                      setCurlMessage("Could not parse cURL command.");
+                      return;
+                    }
+
+                    setCurlMessage("Imported cURL into HTTP step config.");
+                    setHttpHeadersDraft(toFormattedJson(parsed.headers));
+                    setHttpBodyDraft(toFormattedJson(parsed.body || {}));
+                    onChange({
+                      ...actionStep,
+                      config: {
+                        ...actionStep.config,
+                        method: parsed.method,
+                        url: parsed.url,
+                        headers: parsed.headers,
+                        body: parsed.body || {},
+                      },
+                    });
+                  }}
+                >
+                  Import cURL
+                </button>
+                {curlMessage ? <span className="tag">{curlMessage}</span> : null}
+              </div>
+            </div>
+          ) : null}
+
+          {isCodeStep ? (
+            <div className="card-muted" style={{ borderRadius: 10, padding: 10 }}>
+              <strong>Code step (advanced)</strong>
+              <p>
+                JavaScript receives <code>input</code> and <code>context</code>, then returns an object.
+              </p>
+              <label>
+                Script
+                <textarea
+                  rows={5}
+                  value={String(actionStep.config.script || "")}
+                  placeholder="return { message: `hello ${input.name}` };"
+                  onChange={(event) => {
+                    onChange({
+                      ...actionStep,
+                      config: {
+                        ...actionStep.config,
+                        script: event.target.value,
+                      },
+                    });
+                  }}
+                  style={{ marginTop: 4 }}
+                />
+              </label>
+              <div className="form-grid two">
+                <label>
+                  Input object (JSON)
+                  <textarea
+                    rows={4}
+                    value={codeInputDraft}
+                    onChange={(event) => setCodeInputDraft(event.target.value)}
+                    onBlur={() => {
+                      const parsed = parseConfig(codeInputDraft);
+                      if (!parsed) {
+                        setConfigError("Code input must be a valid JSON object.");
+                        return;
+                      }
+                      setConfigError(null);
+                      onChange({
+                        ...actionStep,
+                        config: {
+                          ...actionStep.config,
+                          input: parsed,
+                        },
+                      });
+                    }}
+                  />
+                </label>
+                <label>
+                  Timeout (ms)
+                  <input
+                    type="number"
+                    min={50}
+                    max={5000}
+                    value={String(actionStep.config.timeoutMs || 1500)}
+                    onChange={(event) => {
+                      const next = Number(event.target.value || 1500);
+                      onChange({
+                        ...actionStep,
+                        config: {
+                          ...actionStep.config,
+                          timeoutMs: Number.isFinite(next) ? next : 1500,
+                        },
+                      });
+                    }}
+                    style={{ marginTop: 4 }}
+                  />
+                </label>
+              </div>
+            </div>
+          ) : null}
+
+          {isAiStep ? (
+            <div className="card-muted" style={{ borderRadius: 10, padding: 10 }}>
+              <strong>{isAiAgentStep ? "AI Agent node (advanced)" : "AI node"}</strong>
+              <p>
+                Use input mapping for prompt/text/goal fields and keep advanced settings minimal
+                until your first successful run.
+              </p>
+              {isAiAgentStep ? (
+                <div className="stack-sm">
+                  <p>
+                    Agent node runs a bounded goal loop with explicit tool permissions. Start with
+                    2-3 iterations and inspect trace output in run details. High-safety tools can
+                    require human approval before execution.
+                  </p>
+
+                  <div className="form-grid two">
+                    <label>
+                      Agent intent (goal)
+                      <input
+                        value={String((actionStep as WorkflowActionStep).config.goal || "")}
+                        onChange={(event) => {
+                          onChange({
+                            ...(actionStep as WorkflowActionStep),
+                            config: {
+                              ...(actionStep as WorkflowActionStep).config,
+                              goal: event.target.value,
+                            },
+                          });
+                        }}
+                        placeholder="Research customer feedback and post a concise team update"
+                        style={{ marginTop: 4 }}
+                      />
+                    </label>
+                    <label>
+                      Agent role
+                      <select
+                        value={String((actionStep as WorkflowActionStep).config.agentRole || "single")}
+                        onChange={(event) => {
+                          onChange({
+                            ...(actionStep as WorkflowActionStep),
+                            config: {
+                              ...(actionStep as WorkflowActionStep).config,
+                              agentRole: event.target.value,
+                            },
+                          });
+                        }}
+                        style={{ marginTop: 4 }}
+                      >
+                        <option value="single">Single agent</option>
+                        <option value="research">Research Agent</option>
+                        <option value="execution">Execution Agent</option>
+                      </select>
+                    </label>
+                  </div>
+
+                  <div className="form-grid two">
+                    <label>
+                      Memory key (optional)
+                      <input
+                        value={String((actionStep as WorkflowActionStep).config.memoryKey || "")}
+                        onChange={(event) => {
+                          onChange({
+                            ...(actionStep as WorkflowActionStep),
+                            config: {
+                              ...(actionStep as WorkflowActionStep).config,
+                              memoryKey: event.target.value,
+                            },
+                          });
+                        }}
+                        placeholder="agent.last_goal_output"
+                        style={{ marginTop: 4 }}
+                      />
+                    </label>
+                    <label>
+                      Memory scope
+                      <select
+                        value={String((actionStep as WorkflowActionStep).config.memoryScope || "workflow")}
+                        onChange={(event) => {
+                          onChange({
+                            ...(actionStep as WorkflowActionStep),
+                            config: {
+                              ...(actionStep as WorkflowActionStep).config,
+                              memoryScope: event.target.value,
+                            },
+                          });
+                        }}
+                        style={{ marginTop: 4 }}
+                      >
+                        <option value="workflow">Workflow (persistent)</option>
+                        <option value="run">Run (short-term)</option>
+                      </select>
+                    </label>
+                  </div>
+
+                  <label className="tag" style={{ cursor: "pointer" }}>
+                    <input
+                      type="checkbox"
+                      checked={Array.isArray((actionStep as WorkflowActionStep).config.subAgents)}
+                      onChange={(event) => {
+                        const enabled = event.target.checked;
+                        onChange({
+                          ...(actionStep as WorkflowActionStep),
+                          config: {
+                            ...(actionStep as WorkflowActionStep).config,
+                            subAgents: enabled
+                              ? [
+                                  {
+                                    id: "research_agent",
+                                    label: "Research Agent",
+                                    goal: "Collect context for the main goal.",
+                                    tools: ["ai.summarizeText"],
+                                    maxIterations: 2,
+                                  },
+                                  {
+                                    id: "execution_agent",
+                                    label: "Execution Agent",
+                                    goal: "Execute or deliver the final response.",
+                                    tools: ["ai.rewriteContent"],
+                                    maxIterations: 2,
+                                  },
+                                ]
+                              : undefined,
+                          },
+                        });
+                      }}
+                      style={{ marginRight: 6 }}
+                    />
+                    Enable multi-agent handoff (Research Agent to Execution Agent)
+                  </label>
+
+                  <label>
+                    Tool permission mode
+                    <select
+                      value={agentPermissionState.mode}
+                      onChange={(event) => {
+                        const nextMode = event.target.value as "allow_all" | "allow_list";
+                        onChange({
+                          ...(actionStep as WorkflowActionStep),
+                          config: applyAgentPermissionState(
+                            {
+                              ...(actionStep as WorkflowActionStep).config,
+                            },
+                            {
+                              mode: nextMode,
+                              allowedToolIds:
+                                nextMode === "allow_list"
+                                  ? agentPermissionState.allowedToolIds
+                                  : [],
+                            },
+                          ),
+                        });
+                      }}
+                      style={{ marginLeft: 8 }}
+                    >
+                      <option value="allow_all">Allow all selected tools</option>
+                      <option value="allow_list">Allow-list only</option>
+                    </select>
+                  </label>
+
+                  <div className="stack-sm">
+                    <strong>Requested tools</strong>
+                    {aiAgentToolOptions.length === 0 ? (
+                      <p>No agent-callable tools are available in this workspace.</p>
+                    ) : (
+                      aiAgentToolOptions.map((option) => (
+                        <label key={`requested-${option.id}`} className="tag" style={{ cursor: "pointer" }}>
+                          <input
+                            type="checkbox"
+                            checked={agentRequestedToolIds.includes(option.id)}
+                            onChange={(event) => {
+                              const nextSet = new Set(agentRequestedToolIds);
+                              if (event.target.checked) {
+                                nextSet.add(option.id);
+                              } else {
+                                nextSet.delete(option.id);
+                              }
+
+                              onChange({
+                                ...(actionStep as WorkflowActionStep),
+                                config: {
+                                  ...(actionStep as WorkflowActionStep).config,
+                                  tools: Array.from(nextSet),
+                                },
+                              });
+                            }}
+                            style={{ marginRight: 6 }}
+                          />
+                          {option.label}
+                          <span style={{ marginLeft: 6, fontSize: 12, color: "#4f6475" }}>
+                            {option.hint}
+                            {option.requiresApproval ? " | approval required" : ""}
+                          </span>
+                        </label>
+                      ))
+                    )}
+                  </div>
+
+                  {agentPermissionState.mode === "allow_list" ? (
+                    <div className="stack-sm">
+                      <strong>Allowed tools (runtime boundary)</strong>
+                      {aiAgentToolOptions.map((option) => (
+                        <label key={`allowed-${option.id}`} className="tag" style={{ cursor: "pointer" }}>
+                          <input
+                            type="checkbox"
+                            checked={agentPermissionState.allowedToolIds.includes(option.id)}
+                            onChange={(event) => {
+                              const nextSet = new Set(agentPermissionState.allowedToolIds);
+                              if (event.target.checked) {
+                                nextSet.add(option.id);
+                              } else {
+                                nextSet.delete(option.id);
+                              }
+                              onChange({
+                                ...(actionStep as WorkflowActionStep),
+                                config: applyAgentPermissionState(
+                                  {
+                                    ...(actionStep as WorkflowActionStep).config,
+                                  },
+                                  {
+                                    mode: "allow_list",
+                                    allowedToolIds: Array.from(nextSet),
+                                  },
+                                ),
+                              });
+                            }}
+                            style={{ marginRight: 6 }}
+                          />
+                          {option.label}
+                          {option.requiresApproval ? " (approval)" : ""}
+                        </label>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
 
           <details>
             <summary>Static config (advanced)</summary>
@@ -443,6 +954,7 @@ export function StepCardEditor({
               key={`${branch}-${nestedStep.id}-${index}`}
               step={nestedStep}
               adapters={adapters}
+              agentTools={agentTools}
               referenceHints={referenceHints}
               depth={depth + 1}
               createStep={createStep}

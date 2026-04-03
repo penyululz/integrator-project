@@ -34,6 +34,61 @@ describe("workflow template library", () => {
     expect(getWorkflowTemplateById("missing-template-id")).toBeNull();
   });
 
+  it("includes messaging and AI starter templates", () => {
+    const telegramTemplate = getWorkflowTemplateById("telegram-auto-reply");
+    const whatsappTemplate = getWorkflowTemplateById("whatsapp-auto-reply");
+    const aiTemplate = getWorkflowTemplateById("ai-chatbot");
+
+    expect(telegramTemplate?.requiredAdapters).toEqual(
+      expect.arrayContaining(["webhook", "telegram"]),
+    );
+    expect(whatsappTemplate?.requiredAdapters).toEqual(
+      expect.arrayContaining(["webhook", "whatsapp"]),
+    );
+    expect(aiTemplate?.requiredAdapters).toEqual(
+      expect.arrayContaining(["webhook", "ai"]),
+    );
+  });
+
+  it("includes creator templates", () => {
+    const youtubeTemplate = getWorkflowTemplateById("youtube-to-social-post");
+    const redditTemplate = getWorkflowTemplateById("reddit-to-summary");
+    const repurposeTemplate = getWorkflowTemplateById("content-repurposer-ai");
+
+    expect(youtubeTemplate?.requiredAdapters).toEqual(
+      expect.arrayContaining(["youtube", "ai", "http-api"]),
+    );
+    expect(redditTemplate?.requiredAdapters).toEqual(
+      expect.arrayContaining(["reddit"]),
+    );
+    expect(repurposeTemplate?.requiredAdapters).toEqual(
+      expect.arrayContaining(["webhook", "ai"]),
+    );
+  });
+
+  it("includes structured agent templates for research/content/support workflows", () => {
+    const research = getWorkflowTemplateById("research-agent-brief");
+    const content = getWorkflowTemplateById("content-agent-draft");
+    const support = getWorkflowTemplateById("support-agent-triage");
+    const creatorAgent = getWorkflowTemplateById("creator-repurposing-agent");
+    const communityMonitor = getWorkflowTemplateById("community-monitor-agent-notify");
+
+    expect(research?.workflow.steps[0]).toEqual(
+      expect.objectContaining({
+        adapter: "ai",
+        action: "runAgent",
+      }),
+    );
+    expect(content?.requiredAdapters).toEqual(expect.arrayContaining(["webhook", "ai"]));
+    expect(support?.requiredAdapters).toEqual(expect.arrayContaining(["webhook", "ai"]));
+    expect(creatorAgent?.requiredAdapters).toEqual(expect.arrayContaining(["webhook", "ai"]));
+    expect(research?.requiredAdapters).toEqual(expect.arrayContaining(["slack"]));
+    expect(content?.requiredAdapters).toEqual(expect.arrayContaining(["telegram"]));
+    expect(communityMonitor?.requiredAdapters).toEqual(
+      expect.arrayContaining(["reddit", "ai", "slack"]),
+    );
+  });
+
   it("rejects invalid template definitions clearly", () => {
     const invalidTemplate = {
       id: "invalid-template",

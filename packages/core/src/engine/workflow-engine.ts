@@ -41,6 +41,10 @@ import {
 } from "../observability/runtime";
 import type { AlertDeliveryService } from "../alerts/alert-delivery-service";
 import {
+  injectMemoryIntoAgentContext,
+  saveMemory,
+} from "../agents/memory";
+import {
   getAdapterScaleOverridesFromEnv,
   getScaleLimitsFromEnv,
   resolveAdapterScaleLimits,
@@ -80,6 +84,7 @@ type ExecutionState = {
   stepResults: StepResult[];
   currentAttempt: number;
   resumeStepPath?: string;
+  resumeApprovedToolIds?: string[];
   activeRetryJob?: RetryQueueRecord;
   activeScheduledWait?: ScheduledWaitRecord;
 };
@@ -96,6 +101,10 @@ type MutableExecutionState = {
   activeScheduledWait?: ScheduledWaitRecord;
   resume: ResumeState;
   workflowContext: Record<string, unknown>;
+  agentMemory: {
+    workflow: Record<string, unknown>;
+    run: Record<string, unknown>;
+  };
 };
 
 type ResolutionContext = {
@@ -205,6 +214,172 @@ function toIsoTimestamp(value: unknown): string | null {
 
 function isObject(input: unknown): input is Record<string, unknown> {
   return typeof input === "object" && input !== null && !Array.isArray(input);
+}
+
+type PendingApprovalDescriptor = {
+  toolId: string;
+  title: string;
+  safetyLevel: "low" | "guarded" | "high";
+  reason: string;
+  inputPreview: string;
+};
+
+type MemoryWriteDescriptor = {
+  scope: "run" | "workflow";
+  key: string;
+  value: unknown;
+};
+
+function normalizeApprovalSafetyLevel(value: unknown): "low" | "guarded" | "high" {
+  if (value === "low" || value === "guarded" || value === "high") {
+    return value;
+  }
+  return "guarded";
+}
+
+function normalizePendingApprovals(
+  output: Record<string, unknown> | undefined,
+): PendingApprovalDescriptor[] {
+  if (!output || !Array.isArray(output.pendingApprovals)) {
+    return [];
+  }
+
+  return output.pendingApprovals
+    .map((entry): PendingApprovalDescriptor | null => {
+      if (!isObject(entry)) {
+        return null;
+      }
+      const toolId =
+        typeof entry.toolId === "string" && entry.toolId.trim().length > 0
+          ? entry.toolId.trim()
+          : "";
+      if (!toolId) {
+        return null;
+      }
+      const title =
+        typeof entry.title === "string" && entry.title.trim().length > 0
+          ? entry.title.trim()
+          : toolId;
+      const reason =
+        typeof entry.reason === "string" && entry.reason.trim().length > 0
+          ? sanitizeSensitiveMessage(entry.reason)
+          : "Human approval is required before this tool can run.";
+      const inputPreview =
+        typeof entry.inputPreview === "string"
+          ? sanitizeSensitiveMessage(entry.inputPreview)
+          : "";
+      return {
+        toolId,
+        title,
+        safetyLevel: normalizeApprovalSafetyLevel(entry.safetyLevel),
+        reason,
+        inputPreview,
+      };
+    })
+    .filter((entry): entry is PendingApprovalDescriptor => Boolean(entry));
+}
+
+function normalizeMemoryScope(value: unknown): "run" | "workflow" {
+  return value === "workflow" ? "workflow" : "run";
+}
+
+function normalizeMemoryKey(input: unknown): string {
+  if (typeof input !== "string") {
+    return "";
+  }
+  return input
+    .trim()
+    .replace(/\s+/g, "_")
+    .replace(/[^A-Za-z0-9._:-]/g, "_")
+    .slice(0, 160);
+}
+
+function normalizeMemoryWrites(input: {
+  output?: Record<string, unknown>;
+  step: WorkflowActionStep;
+}): MemoryWriteDescriptor[] {
+  const writes: MemoryWriteDescriptor[] = [];
+  const output = input.output;
+
+  if (output && Array.isArray(output.memoryWrites)) {
+    for (const entry of output.memoryWrites) {
+      if (!isObject(entry)) {
+        continue;
+      }
+      const key = normalizeMemoryKey(entry.key);
+      if (!key) {
+        continue;
+      }
+      writes.push({
+        scope: normalizeMemoryScope(entry.scope),
+        key,
+        value: entry.value,
+      });
+    }
+  }
+
+  if (output && isObject(output.memory)) {
+    for (const [key, value] of Object.entries(output.memory)) {
+      const normalizedKey = normalizeMemoryKey(key);
+      if (!normalizedKey) {
+        continue;
+      }
+      writes.push({
+        scope: "run",
+        key: normalizedKey,
+        value,
+      });
+    }
+  }
+
+  if (input.step.adapter === "ai" && input.step.action === "runAgent") {
+    const finalOutput =
+      output && typeof output.finalOutput === "string" && output.finalOutput.trim().length > 0
+        ? output.finalOutput
+        : undefined;
+    if (finalOutput) {
+      writes.push({
+        scope: "run",
+        key: `agent.${input.step.id}.final_output`,
+        value: finalOutput,
+      });
+    }
+
+    if (output?.trace && isObject(output.trace)) {
+      writes.push({
+        scope: "run",
+        key: `agent.${input.step.id}.last_trace`,
+        value: {
+          goal:
+            typeof output.trace.goal === "string" ? output.trace.goal : undefined,
+          iterations:
+            typeof output.trace.iterations === "number"
+              ? output.trace.iterations
+              : undefined,
+          awaitingApproval: Boolean(output.trace.awaitingApproval),
+        },
+      });
+    }
+  }
+
+  const memoryKeyFromConfig = normalizeMemoryKey(
+    (input.step.config as Record<string, unknown>)?.memoryKey,
+  );
+  if (memoryKeyFromConfig && output) {
+    writes.push({
+      scope: normalizeMemoryScope(
+        (input.step.config as Record<string, unknown>)?.memoryScope,
+      ),
+      key: memoryKeyFromConfig,
+      value: output.finalOutput !== undefined ? output.finalOutput : output,
+    });
+  }
+
+  const deduped = new Map<string, MemoryWriteDescriptor>();
+  for (const write of writes) {
+    deduped.set(`${write.scope}:${write.key}`, write);
+  }
+  return [...deduped.values()];
 }
 
 function isActionStep(step: WorkflowStep): step is WorkflowActionStep {
@@ -387,6 +562,9 @@ function parseRetryPayload(input: Record<string, unknown>): RetryPayload | null 
   const stepPath = input.stepPath;
   const stepId = input.stepId;
   const stepAttempt = input.stepAttempt;
+  const approvedToolIds = Array.isArray(input.approvedToolIds)
+    ? input.approvedToolIds.filter((item): item is string => typeof item === "string")
+    : [];
   const triggerEvent = input.triggerEvent as IncomingEvent | undefined;
   const stepResults = input.stepResults as StepResult[] | undefined;
 
@@ -418,6 +596,7 @@ function parseRetryPayload(input: Record<string, unknown>): RetryPayload | null 
     stepIndex: typeof stepIndex === "number" ? stepIndex : undefined,
     stepId,
     stepAttempt,
+    approvedToolIds,
     triggerEvent,
     stepResults,
   };
@@ -1724,6 +1903,24 @@ export class WorkflowEngine {
       },
     });
 
+    if ((payload.approvedToolIds || []).length > 0) {
+      await this.runRepository.appendEventLog({
+        tenantId: retryJob.tenant_id,
+        organizationId: retryJob.organization_id || undefined,
+        workspaceId: retryJob.workspace_id || undefined,
+        workflowId: payload.workflowId,
+        workflowRunId: payload.runId,
+        eventType: "workflow.approval.resumed",
+        payload: {
+          retryJobId: retryJob.id,
+          stepId: payload.stepId,
+          stepPath: payload.stepPath,
+          approvedToolIds: payload.approvedToolIds,
+          message: "Agent execution resumed after approval.",
+        },
+      });
+    }
+
     await this.executeWorkflowState({
       run,
       workflowRecord,
@@ -1731,6 +1928,7 @@ export class WorkflowEngine {
       stepResults: payload.stepResults,
       currentAttempt: retryJob.attempts + 1,
       resumeStepPath: payload.stepPath,
+      resumeApprovedToolIds: payload.approvedToolIds || [],
       activeRetryJob: retryJob,
     });
 
@@ -2466,6 +2664,73 @@ export class WorkflowEngine {
     };
   }
 
+  private async persistMemoryWritesForStep(input: {
+    state: ExecutionState;
+    mutableState: MutableExecutionState;
+    step: WorkflowActionStep;
+    stepPath: string;
+    output?: Record<string, unknown>;
+  }): Promise<void> {
+    const writes = normalizeMemoryWrites({
+      output: input.output,
+      step: input.step,
+    });
+
+    if (writes.length === 0) {
+      return;
+    }
+
+    for (const write of writes) {
+      try {
+        await saveMemory({
+          runRepository: this.runRepository,
+          tenantId: input.state.triggerEvent.tenantId,
+          organizationId: input.state.triggerEvent.organizationId,
+          workspaceId: input.state.triggerEvent.workspaceId,
+          workflowId: input.state.workflowRecord.id,
+          runId: write.scope === "run" ? input.state.run.id : undefined,
+          scope: write.scope,
+          key: write.key,
+          value: write.value,
+          createdByStepId: input.step.id,
+          createdByStepPath: input.stepPath,
+        });
+
+        if (write.scope === "run") {
+          input.mutableState.agentMemory.run[write.key] = write.value;
+        } else {
+          input.mutableState.agentMemory.workflow[write.key] = write.value;
+        }
+        input.mutableState.workflowContext.agentMemory = {
+          workflow: {
+            ...input.mutableState.agentMemory.workflow,
+          },
+          run: {
+            ...input.mutableState.agentMemory.run,
+          },
+        };
+
+        await this.appendRunLog(input.state, "workflow.agent.memory.saved", {
+          stepId: input.step.id,
+          stepPath: input.stepPath,
+          scope: write.scope,
+          key: write.key,
+        });
+      } catch (error) {
+        await this.appendRunLog(input.state, "workflow.agent.memory.failed", {
+          stepId: input.step.id,
+          stepPath: input.stepPath,
+          scope: write.scope,
+          key: write.key,
+          message:
+            error instanceof Error
+              ? sanitizeSensitiveMessage(error.message)
+              : "Agent memory persistence failed.",
+        });
+      }
+    }
+  }
+
   private async executeActionStep(
     state: ExecutionState,
     mutableState: MutableExecutionState,
@@ -2594,6 +2859,32 @@ export class WorkflowEngine {
       if (stepInput.idempotencyKey === undefined) {
         stepInput.idempotencyKey = stepIdempotencyKey;
       }
+      if (step.adapter === "ai" && step.action === "runAgent") {
+        const currentMemory = isObject(stepInput.memory) ? stepInput.memory : {};
+        stepInput.memory = {
+          ...currentMemory,
+          workflow: {
+            ...mutableState.agentMemory.workflow,
+          },
+          run: {
+            ...mutableState.agentMemory.run,
+          },
+        };
+      }
+      if (
+        state.resumeStepPath === stepPath &&
+        Array.isArray(state.resumeApprovedToolIds) &&
+        state.resumeApprovedToolIds.length > 0
+      ) {
+        const existingApprovedToolIds = Array.isArray(stepInput.approvedToolIds)
+          ? stepInput.approvedToolIds.filter(
+              (item): item is string => typeof item === "string",
+            )
+          : [];
+        stepInput.approvedToolIds = [
+          ...new Set([...existingApprovedToolIds, ...state.resumeApprovedToolIds]),
+        ];
+      }
 
       const adapterPermit = await this.acquireAdapterExecutionPermit({
         state,
@@ -2647,12 +2938,173 @@ export class WorkflowEngine {
         });
       }
 
+      const resultOutput = isObject(result.output) ? result.output : undefined;
+      const pendingApprovals = normalizePendingApprovals(resultOutput);
+      const isAwaitingApproval =
+        Boolean(resultOutput?.awaitingApproval) && pendingApprovals.length > 0;
+
+      if (isAwaitingApproval) {
+        const waitingSinceIso = new Date().toISOString();
+        const waitingMessage =
+          "Awaiting human approval for one or more agent tools.";
+        const parkedNextRunAt = new Date(
+          Date.now() + 365 * 24 * 60 * 60 * 1000,
+        ).toISOString();
+        const retryPayload: RetryPayload = {
+          runId: state.run.id,
+          workflowId: state.workflowRecord.id,
+          workflowExternalId: state.workflowRecord.definition_json.id,
+          stepIndex: Number.parseInt(stepPath.split(".")[0], 10),
+          stepPath,
+          stepId: step.id,
+          stepAttempt: attempt,
+          approvedToolIds: state.resumeApprovedToolIds || [],
+          triggerEvent: state.triggerEvent,
+          stepResults: mutableState.stepResults,
+        };
+        const retryMaxAttempts = Math.max(
+          attempt,
+          state.run.max_attempts || attempt,
+        );
+        const retryAttempts = Math.max(0, attempt - 1);
+
+        let retryJobId = mutableState.activeRetryJob?.id || null;
+        if (
+          mutableState.activeRetryJob &&
+          state.resumeStepPath === stepPath
+        ) {
+          await this.runRepository.markRetryJobAwaitingApproval({
+            jobId: mutableState.activeRetryJob.id,
+            payload: retryPayload,
+            attempts: retryAttempts,
+            maxAttempts: retryMaxAttempts,
+            waitingSince: waitingSinceIso,
+            lastError: waitingMessage,
+          });
+          retryJobId = mutableState.activeRetryJob.id;
+        } else {
+          const retryRecord = await this.runRepository.upsertRetryJob({
+            tenantId: state.triggerEvent.tenantId,
+            organizationId: state.triggerEvent.organizationId,
+            workspaceId: state.triggerEvent.workspaceId,
+            workflowRunId: state.run.id,
+            workflowId: state.workflowRecord.id,
+            stepId: step.id,
+            retryKey: retryKeyFor(state.run.id, step.id),
+            payload: retryPayload,
+            attempts: retryAttempts,
+            maxAttempts: retryMaxAttempts,
+            nextRunAt: parkedNextRunAt,
+            lastError: waitingMessage,
+            failureClassification: "approval_required",
+          });
+          await this.runRepository.markRetryJobAwaitingApproval({
+            jobId: retryRecord.id,
+            payload: retryPayload,
+            attempts: retryAttempts,
+            maxAttempts: retryMaxAttempts,
+            waitingSince: waitingSinceIso,
+            lastError: waitingMessage,
+          });
+          retryJobId = retryRecord.id;
+        }
+
+        if (retryJobId) {
+          await this.runRepository.upsertAgentToolApprovals({
+            tenantId: state.triggerEvent.tenantId,
+            organizationId: state.triggerEvent.organizationId,
+            workspaceId: state.triggerEvent.workspaceId,
+            workflowId: state.workflowRecord.id,
+            workflowRunId: state.run.id,
+            retryJobId,
+            stepId: step.id,
+            stepPath,
+            metadata: {
+              runId: state.run.id,
+              workflowId: state.workflowRecord.id,
+              adapterKey: step.adapter,
+              actionKey: step.action,
+              attempt,
+            },
+            approvals: pendingApprovals.map((approval) => ({
+              toolId: approval.toolId,
+              toolTitle: approval.title,
+              toolSafetyLevel: approval.safetyLevel,
+              reason: approval.reason,
+              inputPreview: approval.inputPreview,
+            })),
+          });
+        }
+
+        mutableState.stepResults.push({
+          stepId: step.id,
+          stepPath,
+          status: "skipped",
+          success: false,
+          output: resultOutput,
+          skippedReason: "awaiting_approval",
+          attempt,
+        });
+
+        await this.appendRunLog(state, "workflow.approval.requested", {
+          stepId: step.id,
+          stepPath,
+          adapter: step.adapter,
+          action: step.action,
+          attempt,
+          retryJobId,
+          requestedAt: waitingSinceIso,
+          approvals: pendingApprovals.map((approval) => ({
+            toolId: approval.toolId,
+            title: approval.title,
+            safetyLevel: approval.safetyLevel,
+            reason: approval.reason,
+          })),
+          message: waitingMessage,
+        });
+
+        await this.runRepository.markRunWaiting({
+          runId: state.run.id,
+          attemptCount: attempt,
+          maxAttempts: retryMaxAttempts,
+          lastError: waitingMessage,
+          result: {
+            steps: mutableState.stepResults,
+            approval: {
+              status: "pending",
+              retryJobId,
+              stepId: step.id,
+              stepPath,
+              requestedAt: waitingSinceIso,
+              approvals: pendingApprovals.map((approval) => ({
+                toolId: approval.toolId,
+                title: approval.title,
+                safetyLevel: approval.safetyLevel,
+                reason: approval.reason,
+              })),
+            },
+          },
+        });
+
+        return {
+          halted: true,
+        };
+      }
+
+      await this.persistMemoryWritesForStep({
+        state,
+        mutableState,
+        step,
+        stepPath,
+        output: resultOutput,
+      });
+
       mutableState.stepResults.push({
         stepId: step.id,
         stepPath,
         status: "completed",
         success: true,
-        output: result.output,
+        output: resultOutput || result.output,
         attempt,
       });
 
@@ -2798,6 +3250,7 @@ export class WorkflowEngine {
           stepPath,
           stepId: step.id,
           stepAttempt: attempt,
+          approvedToolIds: state.resumeApprovedToolIds || [],
           triggerEvent: state.triggerEvent,
           stepResults: mutableState.stepResults,
         };
@@ -3548,10 +4001,22 @@ export class WorkflowEngine {
 
   private async executeWorkflowState(state: ExecutionState): Promise<void> {
     const workflow = state.workflowRecord.definition_json;
+    const agentMemory = await injectMemoryIntoAgentContext({
+      runRepository: this.runRepository,
+      tenantId: state.triggerEvent.tenantId,
+      organizationId: state.triggerEvent.organizationId,
+      workspaceId: state.triggerEvent.workspaceId,
+      workflowId: state.workflowRecord.id,
+      runId: state.run.id,
+    }).catch(() => ({
+      workflow: {},
+      run: {},
+    }));
     const mutableState: MutableExecutionState = {
       stepResults: [...state.stepResults],
       activeRetryJob: state.activeRetryJob,
       activeScheduledWait: state.activeScheduledWait,
+      agentMemory,
       resume: {
         targetPath: state.resumeStepPath,
         reached: !state.resumeStepPath,
@@ -3566,6 +4031,14 @@ export class WorkflowEngine {
         organizationId: state.triggerEvent.organizationId,
         workspaceId: state.triggerEvent.workspaceId,
         receivedAt: state.triggerEvent.receivedAt,
+        agentMemory: {
+          workflow: {
+            ...agentMemory.workflow,
+          },
+          run: {
+            ...agentMemory.run,
+          },
+        },
       },
     };
 

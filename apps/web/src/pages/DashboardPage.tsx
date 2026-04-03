@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   getAuthSession,
+  listApps,
+  listRuns,
   getWorkspaceQuotas,
   getWorkspaceUsage,
   getRetentionPolicy,
@@ -17,8 +19,19 @@ import {
   type WorkspaceQuotaResponse,
   type WorkspaceUsageResponse,
   type WorkflowAnalyticsRow,
+  type AppConnectionRecord,
+  type RunRecord,
 } from "../api";
-import { Callout, DemoHint, LoadingInline, MetricTile, PageHeader, StatusPill, SurfaceCard } from "../components/ui-kit";
+import {
+  Callout,
+  DemoHint,
+  EmptyStatePanel,
+  LoadingInline,
+  MetricTile,
+  PageHeader,
+  StatusPill,
+  SurfaceCard,
+} from "../components/ui-kit";
 import {
   buildWindowFilter,
   formatDurationSeconds,
@@ -29,6 +42,17 @@ import {
   getTopRetryingWorkflows,
   type DashboardWindow,
 } from "./dashboard-helpers";
+import {
+  formatRelativeTime,
+  getRecentWorkspaceRuns,
+  getWorkspaceSetupProgress,
+  toRunWorkspaceTone,
+} from "./workspace-activity-helpers";
+import {
+  getLiveRefreshIntervalMs,
+  type LiveRefreshMode,
+  type ViewDensity,
+} from "./workspace-view-helpers";
 
 export function DashboardPage() {
   const session = getAuthSession();
@@ -37,7 +61,7 @@ export function DashboardPage() {
     session?.scope.orgRole === "admin" ||
     session?.scope.workspaceRole === "owner" ||
     session?.scope.workspaceRole === "admin";
-  const [window, setWindow] = useState<DashboardWindow>("24h");
+  const [timeWindow, setTimeWindow] = useState<DashboardWindow>("24h");
   const [overview, setOverview] = useState<AnalyticsOverview | null>(null);
   const [alerts, setAlerts] = useState<AnalyticsAlertSignal[]>([]);
   const [workflowRows, setWorkflowRows] = useState<WorkflowAnalyticsRow[]>([]);
@@ -54,6 +78,11 @@ export function DashboardPage() {
   const [retentionStatus, setRetentionStatus] = useState<RetentionStatusSummary | null>(
     null,
   );
+  const [recentRuns, setRecentRuns] = useState<RunRecord[]>([]);
+  const [appConnections, setAppConnections] = useState<AppConnectionRecord[]>([]);
+  const [lastUpdatedAt, setLastUpdatedAt] = useState<string | null>(null);
+  const [viewDensity, setViewDensity] = useState<ViewDensity>("comfortable");
+  const [liveRefreshMode, setLiveRefreshMode] = useState<LiveRefreshMode>("30s");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -73,6 +102,14 @@ export function DashboardPage() {
     () => getRecentFailingAdapters(adapterRows, 6),
     [adapterRows],
   );
+  const workspaceSetup = useMemo(
+    () => getWorkspaceSetupProgress(appConnections),
+    [appConnections],
+  );
+  const workspaceRecentRuns = useMemo(
+    () => getRecentWorkspaceRuns(recentRuns, 6),
+    [recentRuns],
+  );
 
   async function loadAnalytics(selectedWindow: DashboardWindow) {
     setLoading(true);
@@ -87,6 +124,8 @@ export function DashboardPage() {
         usagePayload,
         retentionPolicyPayload,
         retentionStatusPayload,
+        runsPayload,
+        appsPayload,
       ] = await Promise.all([
         getAnalyticsOverview(filters),
         getWorkflowAnalytics({
@@ -101,6 +140,8 @@ export function DashboardPage() {
         getWorkspaceUsage(filters),
         isOperator ? getRetentionPolicy() : Promise.resolve(null),
         isOperator ? getRetentionStatus() : Promise.resolve(null),
+        listRuns(),
+        listApps(),
       ]);
       setOverview(overviewPayload.overview);
       setAlerts(overviewPayload.alerts);
@@ -110,6 +151,9 @@ export function DashboardPage() {
       setUsageSnapshot(usagePayload);
       setRetentionPolicy(retentionPolicyPayload);
       setRetentionStatus(retentionStatusPayload);
+      setRecentRuns(runsPayload);
+      setAppConnections(appsPayload);
+      setLastUpdatedAt(new Date().toISOString());
     } catch (loadError) {
       setError((loadError as Error).message || "Failed to load analytics.");
     } finally {
@@ -118,8 +162,23 @@ export function DashboardPage() {
   }
 
   useEffect(() => {
-    void loadAnalytics(window);
-  }, [window]);
+    void loadAnalytics(timeWindow);
+  }, [timeWindow]);
+
+  useEffect(() => {
+    const intervalMs = getLiveRefreshIntervalMs(liveRefreshMode);
+    if (!intervalMs) {
+      return;
+    }
+
+    const intervalHandle = window.setInterval(() => {
+      void loadAnalytics(timeWindow);
+    }, intervalMs);
+
+    return () => {
+      window.clearInterval(intervalHandle);
+    };
+  }, [liveRefreshMode, timeWindow]);
 
   return (
     <div className="stack">
@@ -132,8 +191,8 @@ export function DashboardPage() {
             <label>
               Window
               <select
-                value={window}
-                onChange={(event) => setWindow(event.target.value as DashboardWindow)}
+                value={timeWindow}
+                onChange={(event) => setTimeWindow(event.target.value as DashboardWindow)}
                 style={{ marginLeft: 8 }}
               >
                 <option value="24h">Last 24h</option>
@@ -141,7 +200,31 @@ export function DashboardPage() {
                 <option value="30d">Last 30 days</option>
               </select>
             </label>
-            <button type="button" onClick={() => void loadAnalytics(window)}>
+            <label>
+              View
+              <select
+                value={viewDensity}
+                onChange={(event) => setViewDensity(event.target.value as ViewDensity)}
+                style={{ marginLeft: 8 }}
+              >
+                <option value="comfortable">Comfortable</option>
+                <option value="compact">Compact</option>
+              </select>
+            </label>
+            <label>
+              Live
+              <select
+                value={liveRefreshMode}
+                onChange={(event) => setLiveRefreshMode(event.target.value as LiveRefreshMode)}
+                style={{ marginLeft: 8 }}
+              >
+                <option value="off">Off</option>
+                <option value="15s">15s</option>
+                <option value="30s">30s</option>
+                <option value="60s">60s</option>
+              </select>
+            </label>
+            <button type="button" onClick={() => void loadAnalytics(timeWindow)}>
               Refresh
             </button>
             <Link to="/first-automation">First automation</Link>
@@ -157,26 +240,107 @@ export function DashboardPage() {
         watch your first run metrics here.
       </DemoHint>
 
+      <div className="inline-actions">
+        <StatusPill tone="info">Workspace mode: {viewDensity}</StatusPill>
+        <StatusPill tone={liveRefreshMode === "off" ? "warning" : "success"}>
+          {liveRefreshMode === "off" ? "Live refresh off" : `Auto-refresh ${liveRefreshMode}`}
+        </StatusPill>
+        <span className="tag">
+          Last updated {lastUpdatedAt ? formatRelativeTime(lastUpdatedAt) : "not yet"}
+        </span>
+      </div>
+
       {overview ? (
         <>
           {overview.totalRuns === 0 ? (
-            <Callout
-              tone="info"
-              title="No runs yet"
-              actions={
-                <>
-                  <Link to="/first-automation">Start first automation</Link>
-                  <Link to="/integrations">Connect apps</Link>
-                  <Link to="/workflows">Browse templates</Link>
-                </>
+            <EmptyStatePanel
+              title="Your dashboard activates after the first run"
+              description="Connect an app, launch a starter automation, and send one test event to unlock health metrics."
+              primaryAction={
+                <Link className="button-link-primary" to="/first-automation">
+                  Start first automation
+                </Link>
               }
-            >
-              <p>
-                After your first run, this dashboard will populate with run health, retries,
-                queue state, and alerting signals.
-              </p>
-            </Callout>
+              secondaryAction={<Link to="/integrations">Connect apps</Link>}
+            />
           ) : null}
+
+          <div className="workspace-home-grid">
+            <SurfaceCard
+              title="Workspace pulse"
+              subtitle="Recent automation activity and setup progress for your shared workspace."
+              highlight
+            >
+              <div className="metric-grid">
+                <MetricTile label="Ready apps" value={String(workspaceSetup.readyApps)} />
+                <MetricTile
+                  label="Connected ready apps"
+                  value={String(workspaceSetup.connectedReadyApps)}
+                />
+                <MetricTile label="Setup completion" value={`${workspaceSetup.percent}%`} />
+              </div>
+              {workspaceRecentRuns.length === 0 ? (
+                <p>No recent runs yet. Create a starter automation and run one test event.</p>
+              ) : (
+                <div className="activity-list">
+                  {workspaceRecentRuns.map((run) => (
+                    <div key={run.id} className="activity-item">
+                      <div className="inline-actions">
+                        <StatusPill tone={toRunWorkspaceTone(run.status)}>
+                          {run.status.replace(/_/g, " ")}
+                        </StatusPill>
+                        <code>{run.id.slice(0, 8)}</code>
+                      </div>
+                      <p>
+                        Workflow {run.workflow_id.slice(0, 8)} updated{" "}
+                        {formatRelativeTime(run.created_at)}.
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div className="inline-actions">
+                <Link to="/first-automation">Create first automation</Link>
+                <Link to="/runs">Open run explorer</Link>
+                <Link to="/integrations">Manage apps</Link>
+              </div>
+            </SurfaceCard>
+
+            <SurfaceCard
+              title="Workspace continuity"
+              subtitle="Keep app setup, run validation, alerts, and audits connected for your team."
+              muted
+            >
+              <div className="steps-progress">
+                <div className="step-row">
+                  <span className="step-index">1</span>
+                  <div className="stack-sm">
+                    <strong>Connect the apps your team needs</strong>
+                    <p>Start with Slack, Webhook, Email, or Sheets to unlock starter templates.</p>
+                  </div>
+                </div>
+                <div className="step-row">
+                  <span className="step-index">2</span>
+                  <div className="stack-sm">
+                    <strong>Launch a test automation run</strong>
+                    <p>Use the in-app simulator to test without leaving your workspace.</p>
+                  </div>
+                </div>
+                <div className="step-row">
+                  <span className="step-index">3</span>
+                  <div className="stack-sm">
+                    <strong>Share outcomes with operators</strong>
+                    <p>Runs, alerts, and audit logs help teams confirm behavior quickly.</p>
+                  </div>
+                </div>
+              </div>
+              <div className="inline-actions">
+                <Link to="/workflows">Build automation</Link>
+                <Link to="/runs">Inspect timeline</Link>
+                {isOperator ? <Link to="/audit-logs">Audit actions</Link> : null}
+              </div>
+            </SurfaceCard>
+          </div>
 
           <SurfaceCard title="Execution health" subtitle="Core run, retry, and failure signals.">
             <div className="metric-grid">
@@ -299,7 +463,7 @@ export function DashboardPage() {
 
           <SurfaceCard title="Failing apps" subtitle="Apps with the highest execution failure rates.">
             {failingAdapters.length === 0 ? <p>No app failures in selected window.</p> : null}
-            <table className="table">
+            <table className={`table ${viewDensity === "compact" ? "compact" : ""}`}>
               <thead>
                 <tr>
                   <th>App</th>

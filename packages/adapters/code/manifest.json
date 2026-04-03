@@ -1,0 +1,19 @@
+﻿{
+  "schemaVersion": "1.0",
+  "key": "code",
+  "displayName": "Code (JavaScript)",
+  "version": "1.0.0",
+  "description": "Advanced JavaScript execution step for custom transforms.",
+  "entry": "./src/index.ts",
+  "exportName": "CodeAdapter",
+  "auth": {
+    "type": "none"
+  },
+  "supportedTriggers": [],
+  "supportedActions": ["executeJavaScript"],
+  "defaultEnabled": true,
+  "platform": {
+    "apiVersion": "v1",
+    "minCoreVersion": "1.0.0"
+  }
+}

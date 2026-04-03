@@ -3,6 +3,11 @@ import {
   buildRunSimulatorPayload,
   compactPayload,
   countRunsByStatus,
+  filterRunsByStatus,
+  generateSamplePayload,
+  getRunSimulatorPresets,
+  getRunSummary,
+  getRunTimeline,
   getActionTimingSummary,
   getFailureClassification,
   getRunDurationMs,
@@ -51,6 +56,21 @@ describe("runs-helpers", () => {
     expect(timeline[0].stepId).toBe("step_a");
     expect(timeline[1].stepId).toBe("step_b");
     expect(timeline[1].error).toBe("oops");
+    expect(getRunTimeline({
+      id: "run-1",
+      workflow_id: "wf-1",
+      status: "failed",
+      attempt_count: 1,
+      max_attempts: 1,
+      last_error: null,
+      dead_lettered_at: null,
+      started_at: null,
+      finished_at: null,
+      created_at: "2026-03-29T10:00:00.000Z",
+      result_json: {
+        steps: [{ stepId: "x", stepPath: "0", status: "completed", success: true }],
+      },
+    })).toHaveLength(1);
   });
 
   it("extracts run log highlights", () => {
@@ -158,6 +178,7 @@ describe("runs-helpers", () => {
     const payload = buildRunSimulatorPayload(1700000000000);
     expect(payload.sentAt).toBe("2023-11-14T22:13:20.000Z");
     expect(payload.source).toBe("runs_page_simulator");
+    expect(generateSamplePayload(1700000000000)).toEqual(payload);
 
     const counts = countRunsByStatus([
       {
@@ -223,5 +244,67 @@ describe("runs-helpers", () => {
         result_json: {},
       }),
     ).toContain("paused on a scheduled wait");
+    expect(getRunSummary(null)).toContain("Select a run");
+  });
+
+  it("filters runs by status slices for rich list views", () => {
+    const runs = [
+      {
+        id: "run-1",
+        workflow_id: "wf-1",
+        status: "queued",
+        attempt_count: 1,
+        max_attempts: 3,
+        last_error: null,
+        dead_lettered_at: null,
+        started_at: null,
+        finished_at: null,
+        created_at: "2026-03-29T10:00:00.000Z",
+        result_json: {},
+      },
+      {
+        id: "run-2",
+        workflow_id: "wf-1",
+        status: "success",
+        attempt_count: 1,
+        max_attempts: 3,
+        last_error: null,
+        dead_lettered_at: null,
+        started_at: null,
+        finished_at: null,
+        created_at: "2026-03-29T10:00:10.000Z",
+        result_json: {},
+      },
+      {
+        id: "run-3",
+        workflow_id: "wf-2",
+        status: "dead_lettered",
+        attempt_count: 3,
+        max_attempts: 3,
+        last_error: "failed",
+        dead_lettered_at: "2026-03-29T10:00:30.000Z",
+        started_at: null,
+        finished_at: null,
+        created_at: "2026-03-29T10:00:20.000Z",
+        result_json: {},
+      },
+    ];
+
+    expect(filterRunsByStatus(runs, "all")).toHaveLength(3);
+    expect(filterRunsByStatus(runs, "active").map((run) => run.id)).toEqual(["run-1"]);
+    expect(filterRunsByStatus(runs, "issues").map((run) => run.id)).toEqual(["run-3"]);
+    expect(filterRunsByStatus(runs, "success").map((run) => run.id)).toEqual(["run-2"]);
+    expect(filterRunsByStatus(runs, "dead_lettered").map((run) => run.id)).toEqual(["run-3"]);
+  });
+
+  it("returns stable simulator presets for guided testing", () => {
+    const presets = getRunSimulatorPresets(1700000000000);
+    expect(presets).toHaveLength(3);
+    expect(presets[0].id).toBe("starter_webhook");
+    expect(presets[1].id).toBe("shopify_order");
+    expect(presets[2].id).toBe("ops_alert");
+    expect(presets[0].payload).toMatchObject({
+      source: "ui-simulator",
+    });
   });
 });

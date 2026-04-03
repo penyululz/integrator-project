@@ -2,10 +2,20 @@
 
 export type AppIconKey =
   | "slack"
+  | "telegram"
+  | "whatsapp"
+  | "ai"
+  | "youtube"
+  | "reddit"
   | "shopify"
   | "sheets"
   | "email"
   | "webhook"
+  | "http"
+  | "scheduler"
+  | "graphql"
+  | "code"
+  | "database"
   | "default";
 
 export function getAppVisual(appKey: string): {
@@ -15,6 +25,16 @@ export function getAppVisual(appKey: string): {
   switch (appKey) {
     case "slack":
       return { iconKey: "slack", accent: "#4a154b" };
+    case "telegram":
+      return { iconKey: "telegram", accent: "#229ed9" };
+    case "whatsapp":
+      return { iconKey: "whatsapp", accent: "#25d366" };
+    case "ai":
+      return { iconKey: "ai", accent: "#2563eb" };
+    case "youtube":
+      return { iconKey: "youtube", accent: "#ff0033" };
+    case "reddit":
+      return { iconKey: "reddit", accent: "#ff4500" };
     case "shopify":
       return { iconKey: "shopify", accent: "#2f855a" };
     case "sheets":
@@ -23,6 +43,16 @@ export function getAppVisual(appKey: string): {
       return { iconKey: "email", accent: "#2c5282" };
     case "webhook":
       return { iconKey: "webhook", accent: "#b45309" };
+    case "http-api":
+      return { iconKey: "http", accent: "#0b5cab" };
+    case "scheduler":
+      return { iconKey: "scheduler", accent: "#7d4cc2" };
+    case "graphql":
+      return { iconKey: "graphql", accent: "#d43f8d" };
+    case "code":
+      return { iconKey: "code", accent: "#1f4b99" };
+    case "database":
+      return { iconKey: "database", accent: "#25614b" };
     default:
       return { iconKey: "default", accent: "#1f4b99" };
   }

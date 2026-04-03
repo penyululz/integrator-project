@@ -1,0 +1,19 @@
+{
+  "schemaVersion": "1.0",
+  "key": "telegram",
+  "displayName": "Telegram Adapter",
+  "version": "1.0.0",
+  "description": "Receives Telegram messages and sends replies through bot API.",
+  "entry": "./src/index.ts",
+  "exportName": "TelegramAdapter",
+  "auth": {
+    "type": "token"
+  },
+  "supportedTriggers": ["incoming_message"],
+  "supportedActions": ["sendMessage"],
+  "defaultEnabled": true,
+  "platform": {
+    "apiVersion": "v1",
+    "minCoreVersion": "1.0.0"
+  }
+}

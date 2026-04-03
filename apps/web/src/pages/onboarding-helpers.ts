@@ -81,6 +81,23 @@ export function getNextPendingStep(steps: OnboardingStep[]): OnboardingStep | nu
   return steps.find((step) => !step.done) || null;
 }
 
+export function getOnboardingProgress(steps: OnboardingStep[]): {
+  completionPercent: number;
+  completedSteps: number;
+  totalSteps: number;
+} {
+  const completedSteps = steps.filter((step) => step.done).length;
+  return {
+    completionPercent: getOnboardingCompletion(steps),
+    completedSteps,
+    totalSteps: steps.length,
+  };
+}
+
+export function getNextRecommendedStep(steps: OnboardingStep[]): OnboardingStep | null {
+  return getNextPendingStep(steps);
+}
+
 export function buildFirstSuccessLinks(input: {
   steps: OnboardingStep[];
   isOperator: boolean;

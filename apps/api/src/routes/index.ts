@@ -13,6 +13,14 @@ import {
 import { redactSensitiveRecord } from "@integration/shared";
 import { requireAuth, requireRole } from "../middleware/auth";
 import {
+  buildApprovalDeniedRunResult,
+  canQueueApprovalContinuation,
+  mergeApprovedToolIdsIntoRetryPayload,
+} from "./approval-workflow";
+import {
+  agentApprovalsQuerySchema,
+  agentMemoryQuerySchema,
+  approvalDecisionSchema,
   alertConfigSchema,
   appConnectionSchema,
   appConnectionTestSchema,
@@ -29,6 +37,7 @@ import {
   operatorNoteSchema,
   runReplaySchema,
   upsertCredentialSchema,
+  upsertAgentMemorySchema,
   validateWorkflowSchema,
   workflowTestRunSchema,
   waitRescheduleSchema,
@@ -136,6 +145,89 @@ function mapAuditLogForResponse(entry: {
     note: toNullableString(safeMetadata.note),
     correlationId: toNullableString(safeMetadata.correlationId),
     metadata: safeMetadata,
+  };
+}
+
+function mapAgentApprovalForResponse(entry: {
+  id: string;
+  tenant_id: string;
+  organization_id: string;
+  workspace_id: string;
+  workflow_id: string;
+  workflow_run_id: string;
+  retry_job_id: string | null;
+  step_id: string;
+  step_path: string;
+  tool_id: string;
+  tool_title: string;
+  tool_safety_level: string;
+  reason: string | null;
+  input_preview: string | null;
+  status: string;
+  requested_at: string;
+  decided_at: string | null;
+  expires_at: string | null;
+  actor_user_id: string | null;
+  actor_note: string | null;
+  metadata_json: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}) {
+  return {
+    id: entry.id,
+    organizationId: entry.organization_id,
+    workspaceId: entry.workspace_id,
+    workflowId: entry.workflow_id,
+    workflowRunId: entry.workflow_run_id,
+    retryJobId: entry.retry_job_id,
+    stepId: entry.step_id,
+    stepPath: entry.step_path,
+    toolId: entry.tool_id,
+    toolTitle: entry.tool_title,
+    toolSafetyLevel: entry.tool_safety_level,
+    reason: entry.reason,
+    inputPreview: entry.input_preview,
+    status: entry.status,
+    requestedAt: entry.requested_at,
+    decidedAt: entry.decided_at,
+    expiresAt: entry.expires_at,
+    actorUserId: entry.actor_user_id,
+    actorNote: entry.actor_note,
+    metadata: redactSensitiveRecord(entry.metadata_json || {}),
+    createdAt: entry.created_at,
+    updatedAt: entry.updated_at,
+  };
+}
+
+function mapAgentMemoryForResponse(entry: {
+  id: string;
+  scope: "workflow" | "run";
+  workflow_id: string;
+  workflow_run_id: string | null;
+  memory_key: string;
+  memory_value_json: unknown;
+  created_by_step_id: string | null;
+  created_by_step_path: string | null;
+  created_at: string;
+  updated_at: string;
+}) {
+  const safeValue = redactSensitiveRecord(
+    isRecord(entry.memory_value_json)
+      ? entry.memory_value_json
+      : { value: entry.memory_value_json },
+  );
+
+  return {
+    id: entry.id,
+    scope: entry.scope,
+    workflowId: entry.workflow_id,
+    runId: entry.workflow_run_id,
+    key: entry.memory_key,
+    value: isRecord(entry.memory_value_json) ? safeValue : safeValue.value,
+    createdByStepId: entry.created_by_step_id,
+    createdByStepPath: entry.created_by_step_path,
+    createdAt: entry.created_at,
+    updatedAt: entry.updated_at,
   };
 }
 
@@ -255,6 +347,9 @@ export function createApiRouter(runtime: CoreRuntime): Router {
 
       const integration = integrationByAdapter.get(adapterKey);
       const credential = credentialByProvider.get(adapterKey);
+      const platformSetupMissingFields = definition.platformManagedFields.filter(
+        (fieldName) => !(process.env[fieldName] && String(process.env[fieldName]).trim().length > 0),
+      );
       const status = mapAppConnectionStatus({
         authType,
         hasIntegration: Boolean(integration),
@@ -266,14 +361,19 @@ export function createApiRouter(runtime: CoreRuntime): Router {
         key: adapterKey,
         name: definition.displayName,
         description: definition.description,
+        supportModel: definition.supportModel,
+        readinessTier: definition.readinessTier,
+        catalogCategory: definition.catalogCategory,
         enabled: installed ? installed.enabled : true,
         authType,
         setupMethod: definition.setupMethod,
         setupLabel: definition.setupLabel,
         setupNotes: definition.setupNotes,
+        setupGuide: definition.setupGuide,
         oauthScopes: definition.oauthScopes || [],
         setupFields: definition.fields,
         platformManagedFields: definition.platformManagedFields,
+        platformSetupMissingFields,
         supportedTriggers:
           runtimeMetadata?.supportedTriggers || installed?.manifest.supportedTriggers || [],
         supportedActions:
@@ -444,8 +544,27 @@ export function createApiRouter(runtime: CoreRuntime): Router {
   });
 
   router.get("/adapters", requireAuth, (_req, res) => {
-    const enabledAdapters = runtime.pluginLoader.listMetadata();
+    const enabledAdapters = runtime.pluginLoader.listMetadata().map((adapter) => {
+      const definition = getAppConnectionDefinition({
+        adapterKey: adapter.key,
+        displayName: adapter.displayName,
+        description: adapter.description,
+        authType: adapter.authType,
+      });
+      return {
+        ...adapter,
+        supportModel: definition.supportModel,
+        readinessTier: definition.readinessTier,
+        catalogCategory: definition.catalogCategory,
+      };
+    });
     const installedAdapters = runtime.pluginLoader.listInstalledManifests().map((entry) => ({
+      ...getAppConnectionDefinition({
+        adapterKey: entry.key,
+        displayName: entry.manifest.displayName,
+        description: entry.manifest.description,
+        authType: entry.manifest.auth.type,
+      }),
       key: entry.key,
       enabled: entry.enabled,
       manifestPath: entry.manifestPath,
@@ -468,6 +587,160 @@ export function createApiRouter(runtime: CoreRuntime): Router {
       loadResults: runtime.pluginLoader.getLoadResults(),
     });
   });
+
+  router.get("/agent/tools", requireAuth, async (_req, res, next) => {
+    try {
+      const [tools, topTools, mcpTools] = await Promise.all([
+        runtime.agentToolRegistry.listTools(),
+        runtime.agentToolRegistry.listTopIntegrationTools(),
+        runtime.mcpFoundation.listTools(),
+      ]);
+
+      res.json({
+        tools,
+        topTools,
+        mcp: {
+          tools: mcpTools,
+          contexts: runtime.mcpFoundation.listContexts(),
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get("/agent/memory", requireAuth, async (req, res, next) => {
+    try {
+      const scope = req.auth!.scope;
+      const query = agentMemoryQuerySchema.parse({
+        workflowId: resolveOptionalQueryParam(
+          req.query.workflowId as string | string[] | undefined,
+        ),
+        runId: resolveOptionalQueryParam(req.query.runId as string | string[] | undefined),
+        scope: resolveOptionalQueryParam(req.query.scope as string | string[] | undefined),
+        query: resolveOptionalQueryParam(req.query.query as string | string[] | undefined),
+        limit: resolveOptionalQueryParam(req.query.limit as string | string[] | undefined),
+      });
+
+      let workflowId = query.workflowId;
+      if (query.scope === "workflow" || workflowId) {
+        if (!workflowId) {
+          throw createHttpError(400, "workflowId is required for workflow scope.");
+        }
+        const workflow = await runtime.repositories.workflowRepository.findByIdScoped({
+          workflowId,
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+        });
+        if (!workflow) {
+          throw createHttpError(404, "Not found.");
+        }
+      }
+
+      if (query.runId) {
+        const run = await runtime.repositories.runRepository.findRunByIdScoped({
+          runId: query.runId,
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+        });
+        if (!run) {
+          throw createHttpError(404, "Not found.");
+        }
+        workflowId = workflowId || run.workflow_id;
+      }
+
+      const memories = await runtime.repositories.runRepository.listAgentMemories({
+        tenantId: scope.tenantId,
+        organizationId: scope.organizationId,
+        workspaceId: scope.workspaceId,
+        workflowId,
+        runId: query.runId,
+        scope: query.scope,
+        query: query.query,
+        limit: query.limit,
+      });
+
+      res.json({
+        memories: memories.map((entry) => mapAgentMemoryForResponse(entry)),
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.put(
+    "/agent/memory",
+    requireRole(["owner", "admin"]),
+    async (req, res, next) => {
+      try {
+        const body = upsertAgentMemorySchema.parse(req.body || {});
+        const scope = req.auth!.scope;
+        const actor = req.auth!.user;
+
+        let workflowId = body.workflowId;
+        let runId = body.runId;
+
+        if (body.scope === "workflow") {
+          const workflow = await runtime.repositories.workflowRepository.findByIdScoped({
+            workflowId: body.workflowId!,
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+          });
+          if (!workflow) {
+            throw createHttpError(404, "Not found.");
+          }
+        } else {
+          const run = await runtime.repositories.runRepository.findRunByIdScoped({
+            runId: body.runId!,
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+          });
+          if (!run) {
+            throw createHttpError(404, "Not found.");
+          }
+          workflowId = run.workflow_id;
+          runId = run.id;
+        }
+
+        const memory = await runtime.repositories.runRepository.upsertAgentMemory({
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+          workflowId: workflowId!,
+          runId: runId || null,
+          scope: body.scope,
+          key: body.key,
+          value: body.value,
+        });
+
+        await runtime.repositories.runRepository.appendAuditLog({
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+          actorUserId: actor.id,
+          action: "agent.memory.upsert",
+          entityType: "agent_memory",
+          entityId: memory.id,
+          metadata: {
+            scope: body.scope,
+            key: body.key,
+            workflowId: workflowId || null,
+            runId: runId || null,
+          },
+        });
+
+        res.status(200).json({
+          memory: mapAgentMemoryForResponse(memory),
+        });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
 
   router.put(
     "/apps/:appKey/connection",
@@ -1558,6 +1831,400 @@ export function createApiRouter(runtime: CoreRuntime): Router {
           runId: run.id,
           releasedWaits: releasedCount,
           status: releasedCount > 0 ? "released" : "no_op",
+        });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.get(
+    "/approvals",
+    requireRole(["owner", "admin"]),
+    async (req, res, next) => {
+      try {
+        const scope = req.auth!.scope;
+        const query = agentApprovalsQuerySchema.parse({
+          runId: resolveOptionalQueryParam(
+            req.query.runId as string | string[] | undefined,
+          ),
+          actorUserId: resolveOptionalQueryParam(
+            req.query.actorUserId as string | string[] | undefined,
+          ),
+          toolId: resolveOptionalQueryParam(
+            req.query.toolId as string | string[] | undefined,
+          ),
+          status: resolveOptionalQueryParam(
+            req.query.status as string | string[] | undefined,
+          ),
+          from: resolveOptionalQueryParam(req.query.from as string | string[] | undefined),
+          to: resolveOptionalQueryParam(req.query.to as string | string[] | undefined),
+          page: resolveOptionalQueryParam(req.query.page as string | string[] | undefined),
+          limit: resolveOptionalQueryParam(req.query.limit as string | string[] | undefined),
+        });
+
+        const result = await runtime.repositories.runRepository.listAgentToolApprovals({
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+          runId: query.runId,
+          actorUserId: query.actorUserId,
+          toolId: query.toolId,
+          status: query.status,
+          from: query.from,
+          to: query.to,
+          page: query.page,
+          limit: query.limit,
+        });
+
+        res.json({
+          approvals: result.approvals.map((entry) => mapAgentApprovalForResponse(entry)),
+          pagination: {
+            page: result.page,
+            limit: result.limit,
+            total: result.total,
+            hasMore: result.hasMore,
+          },
+        });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.get(
+    "/approvals/:approvalId",
+    requireRole(["owner", "admin"]),
+    async (req, res, next) => {
+      try {
+        const scope = req.auth!.scope;
+        const approvalId = resolveRouteParam(req.params.approvalId);
+        const approval =
+          await runtime.repositories.runRepository.findAgentToolApprovalByIdScoped({
+            approvalId,
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+          });
+        if (!approval) {
+          res.status(404).json({ error: "Not found." });
+          return;
+        }
+
+        res.json({
+          approval: mapAgentApprovalForResponse(approval),
+        });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.post(
+    "/approvals/:approvalId/approve",
+    requireRole(["owner", "admin"]),
+    async (req, res, next) => {
+      try {
+        const approvalId = resolveRouteParam(req.params.approvalId);
+        const body = approvalDecisionSchema.parse(req.body || {});
+        const scope = req.auth!.scope;
+        const user = req.auth!.user;
+        const decision =
+          await runtime.repositories.runRepository.decideAgentToolApprovalScoped({
+            approvalId,
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+            actorUserId: user.id,
+            decision: "approved",
+            note: body.note,
+          });
+        if (!decision) {
+          res.status(404).json({ error: "Not found." });
+          return;
+        }
+
+        const approval = decision.approval;
+        let continuationQueued = false;
+        let approvedToolIds: string[] = [];
+        const nowIso = new Date().toISOString();
+
+        if (decision.changed && approval.retry_job_id) {
+          const pendingCount =
+            await runtime.repositories.runRepository.countPendingAgentToolApprovalsByRetryJob({
+              retryJobId: approval.retry_job_id,
+              tenantId: scope.tenantId,
+              organizationId: scope.organizationId,
+              workspaceId: scope.workspaceId,
+            });
+
+          if (pendingCount === 0) {
+            const retryJob =
+              await runtime.repositories.runRepository.findRetryJobByIdScoped({
+                jobId: approval.retry_job_id,
+                tenantId: scope.tenantId,
+                organizationId: scope.organizationId,
+                workspaceId: scope.workspaceId,
+              });
+            if (retryJob && canQueueApprovalContinuation(retryJob.status)) {
+              const approvedApprovals =
+                await runtime.repositories.runRepository.listAgentToolApprovalsByRetryJob({
+                  retryJobId: approval.retry_job_id,
+                  tenantId: scope.tenantId,
+                  organizationId: scope.organizationId,
+                  workspaceId: scope.workspaceId,
+                  statuses: ["approved"],
+                });
+              approvedToolIds = [...new Set(approvedApprovals.map((item) => item.tool_id))];
+              const retryPayload = mergeApprovedToolIdsIntoRetryPayload({
+                payloadJson: retryJob.payload_json,
+                approvedToolIds,
+              });
+              await runtime.repositories.runRepository.markRetryJobPending({
+                jobId: retryJob.id,
+                payload: retryPayload,
+                attempts: retryJob.attempts,
+                nextRunAt: nowIso,
+                lastError: "Human approval granted. Resuming agent step.",
+                failureClassification: "approval_granted",
+              });
+              continuationQueued = true;
+
+              const run = await runtime.repositories.runRepository.findRunByIdScoped({
+                runId: approval.workflow_run_id,
+                tenantId: scope.tenantId,
+                organizationId: scope.organizationId,
+                workspaceId: scope.workspaceId,
+              });
+              if (run && run.status === "waiting") {
+                await runtime.repositories.runRepository.markRunRetrying({
+                  runId: run.id,
+                  attemptCount: Math.max(1, retryJob.attempts + 1),
+                  maxAttempts: Math.max(run.max_attempts || 1, retryJob.max_attempts || 1),
+                  lastError: "Human approval granted. Waiting for worker pickup.",
+                  result: {
+                    ...(isRecord(run.result_json) ? run.result_json : {}),
+                    approval: {
+                      status: "approved",
+                      approvedAt: nowIso,
+                      approvedBy: user.id,
+                      approvedToolIds,
+                      retryJobId: retryJob.id,
+                    },
+                  },
+                });
+              }
+            }
+          }
+        }
+
+        if (decision.changed) {
+          await runtime.repositories.runRepository.appendEventLog({
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+            workflowId: approval.workflow_id,
+            workflowRunId: approval.workflow_run_id,
+            eventType: "workflow.approval.approved",
+            payload: {
+              approvalId: approval.id,
+              retryJobId: approval.retry_job_id,
+              actorUserId: user.id,
+              note: body.note || null,
+              toolId: approval.tool_id,
+              toolTitle: approval.tool_title,
+              continuationQueued,
+              approvedToolIds,
+            },
+          });
+
+          if (continuationQueued) {
+            await runtime.repositories.runRepository.appendEventLog({
+              tenantId: scope.tenantId,
+              organizationId: scope.organizationId,
+              workspaceId: scope.workspaceId,
+              workflowId: approval.workflow_id,
+              workflowRunId: approval.workflow_run_id,
+              eventType: "workflow.approval.resume_queued",
+              payload: {
+                approvalId: approval.id,
+                retryJobId: approval.retry_job_id,
+                actorUserId: user.id,
+                approvedToolIds,
+                resumedAt: nowIso,
+              },
+            });
+          }
+
+          await runtime.repositories.runRepository.appendAuditLog({
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+            actorUserId: user.id,
+            action: "approval.approve",
+            entityType: "agent_tool_approval",
+            entityId: approval.id,
+            metadata: {
+              toolId: approval.tool_id,
+              toolTitle: approval.tool_title,
+              workflowRunId: approval.workflow_run_id,
+              retryJobId: approval.retry_job_id,
+              note: body.note || null,
+              continuationQueued,
+            },
+          });
+        }
+
+        const refreshed =
+          await runtime.repositories.runRepository.findAgentToolApprovalByIdScoped({
+            approvalId: approval.id,
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+          });
+
+        res.status(decision.changed ? 200 : 202).json({
+          approval: mapAgentApprovalForResponse(refreshed || approval),
+          changed: decision.changed,
+          continuation: {
+            queued: continuationQueued,
+            approvedToolIds,
+          },
+        });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.post(
+    "/approvals/:approvalId/deny",
+    requireRole(["owner", "admin"]),
+    async (req, res, next) => {
+      try {
+        const approvalId = resolveRouteParam(req.params.approvalId);
+        const body = approvalDecisionSchema.parse(req.body || {});
+        const scope = req.auth!.scope;
+        const user = req.auth!.user;
+        const decision =
+          await runtime.repositories.runRepository.decideAgentToolApprovalScoped({
+            approvalId,
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+            actorUserId: user.id,
+            decision: "denied",
+            note: body.note,
+          });
+        if (!decision) {
+          res.status(404).json({ error: "Not found." });
+          return;
+        }
+
+        const approval = decision.approval;
+        const denialMessage = body.note || "Human approval denied.";
+        if (decision.changed && approval.retry_job_id) {
+          const retryJob =
+            await runtime.repositories.runRepository.findRetryJobByIdScoped({
+              jobId: approval.retry_job_id,
+              tenantId: scope.tenantId,
+              organizationId: scope.organizationId,
+              workspaceId: scope.workspaceId,
+            });
+          if (retryJob && canQueueApprovalContinuation(retryJob.status)) {
+            await runtime.repositories.runRepository.markRetryJobCancelled({
+              jobId: retryJob.id,
+              attempts: retryJob.attempts,
+              lastError: denialMessage,
+            });
+          }
+        }
+
+        const run = await runtime.repositories.runRepository.findRunByIdScoped({
+          runId: approval.workflow_run_id,
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+        });
+        if (
+          decision.changed &&
+          run &&
+          run.status !== "success" &&
+          run.status !== "failed" &&
+          run.status !== "dead_lettered" &&
+          run.status !== "cancelled"
+        ) {
+          const existingSteps =
+            isRecord(run.result_json) && Array.isArray(run.result_json.steps)
+              ? run.result_json.steps
+              : [];
+          await runtime.repositories.runRepository.completeRun({
+            runId: run.id,
+            status: "failed",
+            result: buildApprovalDeniedRunResult({
+              message: denialMessage,
+              approvalId: approval.id,
+              toolId: approval.tool_id,
+              deniedBy: user.id,
+              existingSteps,
+            }),
+            attemptCount: Math.max(run.attempt_count || 1, 1),
+            maxAttempts: Math.max(run.max_attempts || 1, 1),
+            lastError: denialMessage,
+            deadLetteredAt: null,
+          });
+        }
+
+        if (decision.changed) {
+          await runtime.repositories.runRepository.appendEventLog({
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+            workflowId: approval.workflow_id,
+            workflowRunId: approval.workflow_run_id,
+            eventType: "workflow.approval.denied",
+            payload: {
+              approvalId: approval.id,
+              retryJobId: approval.retry_job_id,
+              actorUserId: user.id,
+              note: body.note || null,
+              toolId: approval.tool_id,
+              toolTitle: approval.tool_title,
+              reason: denialMessage,
+            },
+          });
+          await runtime.repositories.runRepository.appendAuditLog({
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+            actorUserId: user.id,
+            action: "approval.deny",
+            entityType: "agent_tool_approval",
+            entityId: approval.id,
+            metadata: {
+              toolId: approval.tool_id,
+              toolTitle: approval.tool_title,
+              workflowRunId: approval.workflow_run_id,
+              retryJobId: approval.retry_job_id,
+              note: body.note || null,
+            },
+          });
+        }
+
+        const refreshed =
+          await runtime.repositories.runRepository.findAgentToolApprovalByIdScoped({
+            approvalId: approval.id,
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+          });
+
+        res.status(decision.changed ? 200 : 202).json({
+          approval: mapAgentApprovalForResponse(refreshed || approval),
+          changed: decision.changed,
+          continuation: {
+            queued: false,
+          },
         });
       } catch (error) {
         next(error);

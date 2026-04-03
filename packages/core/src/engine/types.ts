@@ -42,6 +42,7 @@ export type RetryPayload = {
   stepPath?: string;
   stepId: string;
   stepAttempt: number;
+  approvedToolIds?: string[];
   triggerEvent: IncomingEvent;
   stepResults: StepResult[];
 };

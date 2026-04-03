@@ -1,6 +1,7 @@
 import { Pool } from "pg";
 import {
   redactSensitiveRecord,
+  redactSensitiveValue,
   sanitizeSensitiveMessage,
 } from "@integration/shared";
 
@@ -51,6 +52,7 @@ export type EventLogRecord = {
 export type RetryQueueStatus =
   | "pending"
   | "processing"
+  | "awaiting_approval"
   | "resolved"
   | "dead_lettered"
   | "cancelled";
@@ -203,6 +205,83 @@ export type AuditLogListResult = {
   hasMore: boolean;
 };
 
+export type AgentToolApprovalStatus =
+  | "pending"
+  | "approved"
+  | "denied"
+  | "expired";
+
+export type AgentToolApprovalRecord = {
+  id: string;
+  tenant_id: string;
+  organization_id: string;
+  workspace_id: string;
+  workflow_id: string;
+  workflow_run_id: string;
+  retry_job_id: string | null;
+  step_id: string;
+  step_path: string;
+  tool_id: string;
+  tool_title: string;
+  tool_safety_level: string;
+  reason: string | null;
+  input_preview: string | null;
+  status: AgentToolApprovalStatus;
+  requested_at: string;
+  decided_at: string | null;
+  expires_at: string | null;
+  actor_user_id: string | null;
+  actor_note: string | null;
+  metadata_json: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+};
+
+export type AgentToolApprovalFilter = {
+  tenantId: string;
+  organizationId: string;
+  workspaceId: string;
+  runId?: string;
+  actorUserId?: string;
+  toolId?: string;
+  status?: AgentToolApprovalStatus;
+  from?: string;
+  to?: string;
+  page?: number;
+  limit?: number;
+};
+
+export type AgentToolApprovalListResult = {
+  approvals: AgentToolApprovalRecord[];
+  total: number;
+  page: number;
+  limit: number;
+  hasMore: boolean;
+};
+
+export type AgentToolApprovalDecisionResult = {
+  approval: AgentToolApprovalRecord;
+  changed: boolean;
+};
+
+export type AgentMemoryScope = "run" | "workflow";
+
+export type AgentMemoryRecord = {
+  id: string;
+  tenant_id: string;
+  organization_id: string;
+  workspace_id: string;
+  workflow_id: string;
+  workflow_run_id: string | null;
+  scope: AgentMemoryScope;
+  memory_key: string;
+  memory_value_json: unknown;
+  created_by_step_id: string | null;
+  created_by_step_path: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 function toIsoIfPossible(value: unknown): string | null {
   if (typeof value === "string") {
     return value;
@@ -334,6 +413,52 @@ export class RunRepository {
     if (input.to) {
       values.push(input.to);
       predicates.push(`al.created_at <= $${values.length}`);
+    }
+
+    return {
+      predicates,
+      values,
+    };
+  }
+
+  private buildApprovalFilter(input: AgentToolApprovalFilter): {
+    predicates: string[];
+    values: unknown[];
+  } {
+    const predicates = [
+      "tenant_id = $1",
+      "organization_id = $2",
+      "workspace_id = $3",
+    ];
+    const values: unknown[] = [
+      input.tenantId,
+      input.organizationId,
+      input.workspaceId,
+    ];
+
+    if (input.runId) {
+      values.push(input.runId);
+      predicates.push(`workflow_run_id = $${values.length}`);
+    }
+    if (input.actorUserId) {
+      values.push(input.actorUserId);
+      predicates.push(`actor_user_id = $${values.length}`);
+    }
+    if (input.toolId) {
+      values.push(input.toolId);
+      predicates.push(`tool_id = $${values.length}`);
+    }
+    if (input.status) {
+      values.push(input.status);
+      predicates.push(`status = $${values.length}`);
+    }
+    if (input.from) {
+      values.push(input.from);
+      predicates.push(`requested_at >= $${values.length}`);
+    }
+    if (input.to) {
+      values.push(input.to);
+      predicates.push(`requested_at <= $${values.length}`);
     }
 
     return {
@@ -664,7 +789,7 @@ export class RunRepository {
              AND tenant_id = $2
              AND organization_id = $3
              AND workspace_id = $4
-             AND status IN ('pending', 'processing')
+             AND status IN ('pending', 'processing', 'awaiting_approval')
            RETURNING 1
          )
          SELECT COUNT(*)::bigint AS count FROM updated`,
@@ -803,7 +928,7 @@ export class RunRepository {
        WHERE tenant_id = $1
          AND organization_id = $2
          AND workspace_id = $3
-         AND status = 'pending'`,
+         AND status IN ('pending', 'awaiting_approval')`,
       [input.tenantId, input.organizationId, input.workspaceId],
     );
     return Number(result.rows[0]?.total || 0);
@@ -1093,6 +1218,60 @@ export class RunRepository {
     return claimed.rows[0] || null;
   }
 
+  async findRetryJobByIdScoped(input: {
+    jobId: string;
+    tenantId: string;
+    organizationId: string;
+    workspaceId: string;
+  }): Promise<RetryQueueRecord | null> {
+    const result = await this.pool.query<RetryQueueRecord>(
+      `SELECT *
+       FROM retry_queue
+       WHERE id = $1
+         AND tenant_id = $2
+         AND organization_id = $3
+         AND workspace_id = $4
+       LIMIT 1`,
+      [input.jobId, input.tenantId, input.organizationId, input.workspaceId],
+    );
+    return result.rows[0] || null;
+  }
+
+  async markRetryJobAwaitingApproval(input: {
+    jobId: string;
+    payload?: Record<string, unknown>;
+    attempts: number;
+    maxAttempts: number;
+    waitingSince: string;
+    lastError: string;
+  }): Promise<void> {
+    await this.pool.query(
+      `UPDATE retry_queue
+       SET payload_json = CASE
+             WHEN $2 IS NULL THEN payload_json
+             ELSE $2::jsonb
+           END,
+           attempts = $3,
+           max_attempts = $4,
+           next_run_at = $5,
+           status = 'awaiting_approval',
+           last_error = $6,
+           failure_classification = 'approval_required',
+           resolved_at = NULL,
+           dead_lettered_at = NULL,
+           updated_at = NOW()
+       WHERE id = $1`,
+      [
+        input.jobId,
+        input.payload ? JSON.stringify(redactSensitiveRecord(input.payload)) : null,
+        Math.max(0, input.attempts),
+        Math.max(1, input.maxAttempts),
+        input.waitingSince,
+        sanitizeSensitiveMessage(input.lastError),
+      ],
+    );
+  }
+
   async markRetryJobPending(input: {
     jobId: string;
     payload?: Record<string, unknown>;
@@ -1219,7 +1398,7 @@ export class RunRepository {
            AND tenant_id = $2
            AND organization_id = $3
            AND workspace_id = $4
-           AND status IN ('pending', 'processing')
+           AND status IN ('pending', 'processing', 'awaiting_approval')
          RETURNING 1
        )
        SELECT COUNT(*)::bigint AS count FROM updated`,
@@ -1611,7 +1790,7 @@ export class RunRepository {
       queue_lag_seconds: string | null;
     }>(
       `SELECT
-         SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END)::bigint AS pending_jobs,
+         SUM(CASE WHEN status IN ('pending', 'awaiting_approval') THEN 1 ELSE 0 END)::bigint AS pending_jobs,
          SUM(CASE WHEN status = 'pending' AND next_run_at <= NOW() THEN 1 ELSE 0 END)::bigint AS due_jobs,
          COALESCE(
            EXTRACT(EPOCH FROM NOW()) -
@@ -1842,6 +2021,506 @@ export class RunRepository {
       actionFailures: Number(row.action_failures || 0),
       avgActionDurationMs: Number(row.avg_action_duration_ms || 0),
     }));
+  }
+
+  async upsertAgentToolApprovals(input: {
+    tenantId: string;
+    organizationId: string;
+    workspaceId: string;
+    workflowId: string;
+    workflowRunId: string;
+    retryJobId: string | null;
+    stepId: string;
+    stepPath: string;
+    expiresAt?: string | null;
+    metadata?: Record<string, unknown>;
+    approvals: Array<{
+      toolId: string;
+      toolTitle: string;
+      toolSafetyLevel: string;
+      reason?: string | null;
+      inputPreview?: string | null;
+    }>;
+  }): Promise<AgentToolApprovalRecord[]> {
+    if (input.approvals.length === 0) {
+      return [];
+    }
+
+    const rows: AgentToolApprovalRecord[] = [];
+    for (const approval of input.approvals) {
+      const result = await this.pool.query<AgentToolApprovalRecord>(
+        `INSERT INTO agent_tool_approvals (
+           tenant_id,
+           organization_id,
+           workspace_id,
+           workflow_id,
+           workflow_run_id,
+           retry_job_id,
+           step_id,
+           step_path,
+           tool_id,
+           tool_title,
+           tool_safety_level,
+           reason,
+           input_preview,
+           status,
+           requested_at,
+           decided_at,
+           expires_at,
+           actor_user_id,
+           actor_note,
+           metadata_json,
+           created_at,
+           updated_at
+         )
+         VALUES (
+           $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+           $11, $12, $13, 'pending', NOW(), NULL, $14, NULL, NULL, $15, NOW(), NOW()
+         )
+         ON CONFLICT (retry_job_id, tool_id)
+         DO UPDATE SET
+           tool_title = EXCLUDED.tool_title,
+           tool_safety_level = EXCLUDED.tool_safety_level,
+           reason = EXCLUDED.reason,
+           input_preview = EXCLUDED.input_preview,
+           status = 'pending',
+           requested_at = NOW(),
+           decided_at = NULL,
+           expires_at = EXCLUDED.expires_at,
+           actor_user_id = NULL,
+           actor_note = NULL,
+           metadata_json = EXCLUDED.metadata_json,
+           updated_at = NOW()
+         RETURNING *`,
+        [
+          input.tenantId,
+          input.organizationId,
+          input.workspaceId,
+          input.workflowId,
+          input.workflowRunId,
+          input.retryJobId,
+          input.stepId,
+          input.stepPath,
+          approval.toolId,
+          approval.toolTitle,
+          approval.toolSafetyLevel,
+          approval.reason ? sanitizeSensitiveMessage(approval.reason) : null,
+          approval.inputPreview ? sanitizeSensitiveMessage(approval.inputPreview) : null,
+          input.expiresAt || null,
+          JSON.stringify(redactSensitiveRecord(input.metadata || {})),
+        ],
+      );
+      if (result.rows[0]) {
+        rows.push(result.rows[0]);
+      }
+    }
+
+    return rows;
+  }
+
+  async listAgentToolApprovals(
+    input: AgentToolApprovalFilter,
+  ): Promise<AgentToolApprovalListResult> {
+    const filter = this.buildApprovalFilter(input);
+    const limit = Math.max(1, Math.min(input.limit || 25, 100));
+    const page = Math.max(1, input.page || 1);
+    const offset = (page - 1) * limit;
+
+    const countResult = await this.pool.query<{ total: string }>(
+      `SELECT COUNT(*)::bigint AS total
+       FROM agent_tool_approvals
+       WHERE ${filter.predicates.join("\n         AND ")}`,
+      filter.values,
+    );
+
+    const values = [...filter.values, limit, offset];
+    const limitPosition = values.length - 1;
+    const offsetPosition = values.length;
+    const rows = await this.pool.query<AgentToolApprovalRecord>(
+      `SELECT *
+       FROM agent_tool_approvals
+       WHERE ${filter.predicates.join("\n         AND ")}
+       ORDER BY requested_at DESC, created_at DESC
+       LIMIT $${limitPosition}
+       OFFSET $${offsetPosition}`,
+      values,
+    );
+
+    const total = Number(countResult.rows[0]?.total || 0);
+    return {
+      approvals: rows.rows,
+      total,
+      page,
+      limit,
+      hasMore: page * limit < total,
+    };
+  }
+
+  async findAgentToolApprovalByIdScoped(input: {
+    approvalId: string;
+    tenantId: string;
+    organizationId: string;
+    workspaceId: string;
+  }): Promise<AgentToolApprovalRecord | null> {
+    const result = await this.pool.query<AgentToolApprovalRecord>(
+      `SELECT *
+       FROM agent_tool_approvals
+       WHERE id = $1
+         AND tenant_id = $2
+         AND organization_id = $3
+         AND workspace_id = $4
+       LIMIT 1`,
+      [
+        input.approvalId,
+        input.tenantId,
+        input.organizationId,
+        input.workspaceId,
+      ],
+    );
+    return result.rows[0] || null;
+  }
+
+  async decideAgentToolApprovalScoped(input: {
+    approvalId: string;
+    tenantId: string;
+    organizationId: string;
+    workspaceId: string;
+    actorUserId: string;
+    decision: Extract<AgentToolApprovalStatus, "approved" | "denied">;
+    note?: string | null;
+  }): Promise<AgentToolApprovalDecisionResult | null> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const existing = await client.query<AgentToolApprovalRecord>(
+        `SELECT *
+         FROM agent_tool_approvals
+         WHERE id = $1
+           AND tenant_id = $2
+           AND organization_id = $3
+           AND workspace_id = $4
+         LIMIT 1
+         FOR UPDATE`,
+        [
+          input.approvalId,
+          input.tenantId,
+          input.organizationId,
+          input.workspaceId,
+        ],
+      );
+
+      const current = existing.rows[0];
+      if (!current) {
+        await client.query("ROLLBACK");
+        return null;
+      }
+      if (current.status !== "pending") {
+        await client.query("COMMIT");
+        return {
+          approval: current,
+          changed: false,
+        };
+      }
+
+      const updated = await client.query<AgentToolApprovalRecord>(
+        `UPDATE agent_tool_approvals
+         SET status = $5,
+             actor_user_id = $6,
+             actor_note = $7,
+             decided_at = NOW(),
+             updated_at = NOW()
+         WHERE id = $1
+           AND tenant_id = $2
+           AND organization_id = $3
+           AND workspace_id = $4
+         RETURNING *`,
+        [
+          input.approvalId,
+          input.tenantId,
+          input.organizationId,
+          input.workspaceId,
+          input.decision,
+          input.actorUserId,
+          input.note ? sanitizeSensitiveMessage(input.note) : null,
+        ],
+      );
+      await client.query("COMMIT");
+      return {
+        approval: updated.rows[0],
+        changed: true,
+      };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async countPendingAgentToolApprovalsByRetryJob(input: {
+    retryJobId: string;
+    tenantId: string;
+    organizationId: string;
+    workspaceId: string;
+  }): Promise<number> {
+    const result = await this.pool.query<{ total: string }>(
+      `SELECT COUNT(*)::bigint AS total
+       FROM agent_tool_approvals
+       WHERE retry_job_id = $1
+         AND tenant_id = $2
+         AND organization_id = $3
+         AND workspace_id = $4
+         AND status = 'pending'`,
+      [
+        input.retryJobId,
+        input.tenantId,
+        input.organizationId,
+        input.workspaceId,
+      ],
+    );
+    return Number(result.rows[0]?.total || 0);
+  }
+
+  async listAgentToolApprovalsByRetryJob(input: {
+    retryJobId: string;
+    tenantId: string;
+    organizationId: string;
+    workspaceId: string;
+    statuses?: AgentToolApprovalStatus[];
+  }): Promise<AgentToolApprovalRecord[]> {
+    const statuses = input.statuses || ["pending", "approved", "denied", "expired"];
+    if (statuses.length === 0) {
+      return [];
+    }
+    const placeholders = statuses.map((_, index) => `$${index + 5}`).join(", ");
+    const result = await this.pool.query<AgentToolApprovalRecord>(
+      `SELECT *
+       FROM agent_tool_approvals
+       WHERE retry_job_id = $1
+         AND tenant_id = $2
+         AND organization_id = $3
+         AND workspace_id = $4
+         AND status IN (${placeholders})
+       ORDER BY requested_at ASC, created_at ASC`,
+      [
+        input.retryJobId,
+        input.tenantId,
+        input.organizationId,
+        input.workspaceId,
+        ...statuses,
+      ],
+    );
+    return result.rows;
+  }
+
+  async upsertAgentMemory(input: {
+    tenantId: string;
+    organizationId: string;
+    workspaceId: string;
+    workflowId: string;
+    runId?: string | null;
+    scope: AgentMemoryScope;
+    key: string;
+    value: unknown;
+    createdByStepId?: string | null;
+    createdByStepPath?: string | null;
+  }): Promise<AgentMemoryRecord> {
+    const normalizedKey = input.key.trim();
+    if (!normalizedKey) {
+      throw new Error("Memory key is required.");
+    }
+
+    const sanitizedValue = redactSensitiveValue(input.value);
+    const createdByStepId = input.createdByStepId
+      ? sanitizeSensitiveMessage(input.createdByStepId).slice(0, 120)
+      : null;
+    const createdByStepPath = input.createdByStepPath
+      ? sanitizeSensitiveMessage(input.createdByStepPath).slice(0, 120)
+      : null;
+
+    if (input.scope === "workflow") {
+      const result = await this.pool.query<AgentMemoryRecord>(
+        `INSERT INTO agent_memories (
+           tenant_id,
+           organization_id,
+           workspace_id,
+           workflow_id,
+           workflow_run_id,
+           scope,
+           memory_key,
+           memory_value_json,
+           created_by_step_id,
+           created_by_step_path,
+           created_at,
+           updated_at
+         )
+         VALUES ($1, $2, $3, $4, NULL, 'workflow', $5, $6, $7, $8, NOW(), NOW())
+         ON CONFLICT ON CONSTRAINT uq_agent_memories_workflow_key
+         DO UPDATE SET
+           memory_value_json = EXCLUDED.memory_value_json,
+           created_by_step_id = EXCLUDED.created_by_step_id,
+           created_by_step_path = EXCLUDED.created_by_step_path,
+           updated_at = NOW()
+         RETURNING *`,
+        [
+          input.tenantId,
+          input.organizationId,
+          input.workspaceId,
+          input.workflowId,
+          normalizedKey,
+          JSON.stringify(sanitizedValue),
+          createdByStepId,
+          createdByStepPath,
+        ],
+      );
+      return {
+        ...result.rows[0],
+        memory_value_json: redactSensitiveValue(result.rows[0].memory_value_json),
+      };
+    }
+
+    if (!input.runId) {
+      throw new Error("Run-scoped memory requires runId.");
+    }
+
+    const result = await this.pool.query<AgentMemoryRecord>(
+      `INSERT INTO agent_memories (
+         tenant_id,
+         organization_id,
+         workspace_id,
+         workflow_id,
+         workflow_run_id,
+         scope,
+         memory_key,
+         memory_value_json,
+         created_by_step_id,
+         created_by_step_path,
+         created_at,
+         updated_at
+       )
+       VALUES ($1, $2, $3, $4, $5, 'run', $6, $7, $8, $9, NOW(), NOW())
+       ON CONFLICT (tenant_id, organization_id, workspace_id, workflow_run_id, memory_key, scope)
+       WHERE workflow_run_id IS NOT NULL
+       DO UPDATE SET
+         memory_value_json = EXCLUDED.memory_value_json,
+         created_by_step_id = EXCLUDED.created_by_step_id,
+         created_by_step_path = EXCLUDED.created_by_step_path,
+         updated_at = NOW()
+       RETURNING *`,
+      [
+        input.tenantId,
+        input.organizationId,
+        input.workspaceId,
+        input.workflowId,
+        input.runId,
+        normalizedKey,
+        JSON.stringify(sanitizedValue),
+        createdByStepId,
+        createdByStepPath,
+      ],
+    );
+    return {
+      ...result.rows[0],
+      memory_value_json: redactSensitiveValue(result.rows[0].memory_value_json),
+    };
+  }
+
+  async listAgentMemories(input: {
+    tenantId: string;
+    organizationId: string;
+    workspaceId: string;
+    workflowId?: string;
+    runId?: string;
+    scope?: AgentMemoryScope;
+    query?: string;
+    limit?: number;
+  }): Promise<AgentMemoryRecord[]> {
+    const predicates = [
+      "tenant_id = $1",
+      "organization_id = $2",
+      "workspace_id = $3",
+    ];
+    const values: unknown[] = [input.tenantId, input.organizationId, input.workspaceId];
+
+    if (input.scope) {
+      values.push(input.scope);
+      predicates.push(`scope = $${values.length}`);
+    }
+    if (input.workflowId) {
+      values.push(input.workflowId);
+      predicates.push(`workflow_id = $${values.length}`);
+    }
+    if (input.runId) {
+      values.push(input.runId);
+      predicates.push(`workflow_run_id = $${values.length}`);
+    }
+    if (input.query && input.query.trim().length > 0) {
+      values.push(`%${input.query.trim().toLowerCase()}%`);
+      predicates.push(`LOWER(memory_key) LIKE $${values.length}`);
+    }
+
+    const limit = Math.max(1, Math.min(input.limit || 100, 250));
+    values.push(limit);
+    const limitPosition = values.length;
+
+    const result = await this.pool.query<AgentMemoryRecord>(
+      `SELECT *
+       FROM agent_memories
+       WHERE ${predicates.join("\n         AND ")}
+       ORDER BY updated_at DESC, memory_key ASC
+       LIMIT $${limitPosition}`,
+      values,
+    );
+
+    return result.rows.map((row) => ({
+      ...row,
+      memory_value_json: redactSensitiveValue(row.memory_value_json),
+    }));
+  }
+
+  async getAgentMemoryMap(input: {
+    tenantId: string;
+    organizationId: string;
+    workspaceId: string;
+    workflowId: string;
+    runId?: string;
+  }): Promise<{
+    workflow: Record<string, unknown>;
+    run: Record<string, unknown>;
+  }> {
+    const workflowEntries = await this.listAgentMemories({
+      tenantId: input.tenantId,
+      organizationId: input.organizationId,
+      workspaceId: input.workspaceId,
+      workflowId: input.workflowId,
+      scope: "workflow",
+      limit: 500,
+    });
+    const runEntries = input.runId
+      ? await this.listAgentMemories({
+          tenantId: input.tenantId,
+          organizationId: input.organizationId,
+          workspaceId: input.workspaceId,
+          workflowId: input.workflowId,
+          runId: input.runId,
+          scope: "run",
+          limit: 500,
+        })
+      : [];
+
+    const workflow = workflowEntries.reduce<Record<string, unknown>>((acc, row) => {
+      acc[row.memory_key] = row.memory_value_json;
+      return acc;
+    }, {});
+    const run = runEntries.reduce<Record<string, unknown>>((acc, row) => {
+      acc[row.memory_key] = row.memory_value_json;
+      return acc;
+    }, {});
+
+    return {
+      workflow,
+      run,
+    };
   }
 
   async listAuditLogs(input: AuditLogFilter): Promise<AuditLogListResult> {

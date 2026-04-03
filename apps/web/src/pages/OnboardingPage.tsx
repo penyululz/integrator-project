@@ -13,8 +13,8 @@ import { PageHeader, ProgressSteps, StatusPill, SurfaceCard } from "../component
 import {
   buildFirstSuccessLinks,
   buildOnboardingSteps,
-  getNextPendingStep,
-  getOnboardingCompletion,
+  getNextRecommendedStep,
+  getOnboardingProgress,
 } from "./onboarding-helpers";
 
 export function OnboardingPage() {
@@ -76,8 +76,9 @@ export function OnboardingPage() {
     [integrationsCount, connectedCredentialProviders, templates.length, workflowsCount, runsCount],
   );
 
-  const completion = useMemo(() => getOnboardingCompletion(onboardingSteps), [onboardingSteps]);
-  const nextStep = useMemo(() => getNextPendingStep(onboardingSteps), [onboardingSteps]);
+  const progress = useMemo(() => getOnboardingProgress(onboardingSteps), [onboardingSteps]);
+  const completion = progress.completionPercent;
+  const nextStep = useMemo(() => getNextRecommendedStep(onboardingSteps), [onboardingSteps]);
   const firstSuccessLinks = useMemo(
     () =>
       buildFirstSuccessLinks({

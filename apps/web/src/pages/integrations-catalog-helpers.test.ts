@@ -52,6 +52,13 @@ const templates: WorkflowTemplateSummary[] = [
 describe("integrations-catalog-helpers", () => {
   it("maps app visuals and setup labels", () => {
     expect(getAppVisual("slack").iconKey).toBe("slack");
+    expect(getAppVisual("ai").iconKey).toBe("ai");
+    expect(getAppVisual("youtube").iconKey).toBe("youtube");
+    expect(getAppVisual("reddit").iconKey).toBe("reddit");
+    expect(getAppVisual("telegram").iconKey).toBe("telegram");
+    expect(getAppVisual("whatsapp").iconKey).toBe("whatsapp");
+    expect(getAppVisual("http-api").iconKey).toBe("http");
+    expect(getAppVisual("graphql").iconKey).toBe("graphql");
     expect(describeSetupMethod("oauth2")).toBe("Secure sign-in");
     expect(describeSetupMethod("form")).toBe("Quick form setup");
   });

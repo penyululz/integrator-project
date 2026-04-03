@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   buildFirstSuccessLinks,
   buildOnboardingSteps,
+  getNextRecommendedStep,
   getNextPendingStep,
   getOnboardingCompletion,
+  getOnboardingProgress,
 } from "./onboarding-helpers";
 
 describe("onboarding-helpers", () => {
@@ -39,6 +41,13 @@ describe("onboarding-helpers", () => {
         { ...steps[3], done: false },
       ]),
     ).toBe(25);
+
+    const progress = getOnboardingProgress(steps);
+    expect(progress).toEqual({
+      completionPercent: 100,
+      completedSteps: 4,
+      totalSteps: 4,
+    });
   });
 
   it("returns first pending step and first-success links", () => {
@@ -51,6 +60,7 @@ describe("onboarding-helpers", () => {
     });
 
     expect(getNextPendingStep(steps)?.id).toBe("template");
+    expect(getNextRecommendedStep(steps)?.id).toBe("template");
 
     const links = buildFirstSuccessLinks({
       steps,

@@ -1,18 +1,17 @@
-{
+﻿{
   "schemaVersion": "1.0",
   "key": "scheduler",
-  "displayName": "Scheduler Adapter",
-  "version": "0.1.0",
-  "description": "TODO placeholder for v1 future adapter.",
+  "displayName": "Schedule / Cron",
+  "version": "1.0.0",
+  "description": "Generic scheduler trigger and scheduling window helper actions.",
   "entry": "./src/index.ts",
-  "exportName": "SchedulerAdapterPlaceholder",
+  "exportName": "SchedulerAdapter",
   "auth": {
-    "type": "custom"
+    "type": "none"
   },
-  "supportedTriggers": [],
-  "supportedActions": [],
-  "defaultEnabled": false,
-  "enabled": false,
+  "supportedTriggers": ["cron_tick"],
+  "supportedActions": ["nextWindow"],
+  "defaultEnabled": true,
   "platform": {
     "apiVersion": "v1",
     "minCoreVersion": "1.0.0"

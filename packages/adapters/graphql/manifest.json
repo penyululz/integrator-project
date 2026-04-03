@@ -1,0 +1,19 @@
+﻿{
+  "schemaVersion": "1.0",
+  "key": "graphql",
+  "displayName": "GraphQL",
+  "version": "1.0.0",
+  "description": "Generic GraphQL connector for query and mutation actions.",
+  "entry": "./src/index.ts",
+  "exportName": "GraphqlAdapter",
+  "auth": {
+    "type": "token"
+  },
+  "supportedTriggers": [],
+  "supportedActions": ["executeQuery"],
+  "defaultEnabled": true,
+  "platform": {
+    "apiVersion": "v1",
+    "minCoreVersion": "1.0.0"
+  }
+}

@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   ALERT_EVENT_GROUPS,
+  formatAlertMessage,
   formatHeadersJson,
   formatRecipientsCsv,
   getAlertCooldownCopy,
   parseHeadersJson,
   parseRecipientsCsv,
+  shouldTriggerAlert,
 } from "./alert-settings-helpers";
 
 describe("alert settings helpers", () => {
@@ -57,5 +59,36 @@ describe("alert settings helpers", () => {
     expect(getAlertCooldownCopy(30)).toBe("30s dedupe window");
     expect(getAlertCooldownCopy(300)).toBe("5m dedupe window");
     expect(getAlertCooldownCopy(7200)).toBe("2h dedupe window");
+  });
+
+  it("determines when alerts should trigger and formats message copy", () => {
+    expect(
+      shouldTriggerAlert({
+        enabled: true,
+        selectedEventTypes: ["workflow.dead_lettered"],
+        selectedSeverities: ["critical"],
+        eventType: "workflow.dead_lettered",
+        severity: "critical",
+      }),
+    ).toBe(true);
+
+    expect(
+      shouldTriggerAlert({
+        enabled: true,
+        selectedEventTypes: ["workflow.dead_lettered"],
+        selectedSeverities: ["critical"],
+        eventType: "workflow.dead_lettered",
+        severity: "warn",
+      }),
+    ).toBe(false);
+
+    expect(
+      formatAlertMessage({
+        eventType: "signal.queue_lag",
+        severity: "warn",
+        workspaceSlug: "demo",
+        details: "lag > 30s",
+      }),
+    ).toContain("[demo] WARN: Queue lag/backlog warning - lag > 30s");
   });
 });

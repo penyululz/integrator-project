@@ -7,7 +7,15 @@ import {
   type AuditLogFilters,
   type AuditLogRecord,
 } from "../api";
-import { Callout, DemoHint, LoadingInline, PageHeader, SurfaceCard } from "../components/ui-kit";
+import {
+  Callout,
+  DemoHint,
+  FilterPills,
+  LoadingInline,
+  PageHeader,
+  StatusPill,
+  SurfaceCard,
+} from "../components/ui-kit";
 import {
   buildAuditTargetLink,
   shortId,
@@ -16,8 +24,20 @@ import {
   toAuditActionLabel,
   toAuditEntryDescription,
 } from "./audit-helpers";
+import {
+  getLiveRefreshIntervalMs,
+  type LiveRefreshMode,
+  type ViewDensity,
+} from "./workspace-view-helpers";
 
 const DEFAULT_PAGE_SIZE = 25;
+const AUDIT_QUICK_ACTIONS = [
+  { id: "", label: "All actions" },
+  { id: "run.cancel", label: "Run cancellations" },
+  { id: "run.replay", label: "Replays" },
+  { id: "wait.reschedule", label: "Wait reschedules" },
+  { id: "wait.release_now", label: "Release now" },
+];
 
 type AuditFilterForm = {
   action: string;
@@ -89,6 +109,9 @@ export function AuditLogsPage() {
   const [selectedLog, setSelectedLog] = useState<AuditLogRecord | null>(null);
   const [loadingList, setLoadingList] = useState(false);
   const [loadingDetail, setLoadingDetail] = useState(false);
+  const [viewDensity, setViewDensity] = useState<ViewDensity>("comfortable");
+  const [liveRefreshMode, setLiveRefreshMode] = useState<LiveRefreshMode>("30s");
+  const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -108,6 +131,7 @@ export function AuditLogsPage() {
       });
       setLogs(result.logs);
       setPagination(result.pagination);
+      setLastSyncedAt(new Date().toISOString());
 
       if (result.logs.length === 0) {
         setSelectedLogId(null);
@@ -173,6 +197,28 @@ export function AuditLogsPage() {
     void loadAuditDetail(selectedLogId);
   }, [isOperator, selectedLogId]);
 
+  useEffect(() => {
+    if (!isOperator) {
+      return;
+    }
+
+    const intervalMs = getLiveRefreshIntervalMs(liveRefreshMode);
+    if (!intervalMs) {
+      return;
+    }
+
+    const intervalHandle = window.setInterval(() => {
+      void loadAuditList(page, appliedFilters);
+      if (selectedLogId) {
+        void loadAuditDetail(selectedLogId);
+      }
+    }, intervalMs);
+
+    return () => {
+      window.clearInterval(intervalHandle);
+    };
+  }, [isOperator, liveRefreshMode, page, appliedFilters, selectedLogId]);
+
   if (!isOperator) {
     return (
       <div className="stack">
@@ -199,6 +245,30 @@ export function AuditLogsPage() {
             <button type="button" onClick={() => void loadAuditList(page, appliedFilters)}>
               Refresh
             </button>
+            <label>
+              View
+              <select
+                value={viewDensity}
+                onChange={(event) => setViewDensity(event.target.value as ViewDensity)}
+                style={{ marginLeft: 8 }}
+              >
+                <option value="comfortable">Comfortable</option>
+                <option value="compact">Compact</option>
+              </select>
+            </label>
+            <label>
+              Live
+              <select
+                value={liveRefreshMode}
+                onChange={(event) => setLiveRefreshMode(event.target.value as LiveRefreshMode)}
+                style={{ marginLeft: 8 }}
+              >
+                <option value="off">Off</option>
+                <option value="15s">15s</option>
+                <option value="30s">30s</option>
+                <option value="60s">60s</option>
+              </select>
+            </label>
             <Link to="/runs">Open runs</Link>
           </>
         }
@@ -224,6 +294,14 @@ export function AuditLogsPage() {
         Tip: use filters to focus one run ID and action type so investigation stays fast.
       </DemoHint>
 
+      <div className="inline-actions">
+        <StatusPill tone={liveRefreshMode === "off" ? "warning" : "success"}>
+          {liveRefreshMode === "off" ? "Live refresh off" : `Auto-refresh ${liveRefreshMode}`}
+        </StatusPill>
+        <span className="tag">View: {viewDensity}</span>
+        <span className="tag">Last synced {lastSyncedAt ? formatDateTime(lastSyncedAt) : "not yet"}</span>
+      </div>
+
       {error ? (
         <Callout tone="danger" title="Unable to load audit data">
           <p>{error}</p>
@@ -232,6 +310,16 @@ export function AuditLogsPage() {
 
       <SurfaceCard title="Filters" subtitle="Narrow results by action, actor, target, or time window.">
         <form onSubmit={onApplyFilters} className="stack-sm">
+          <FilterPills
+            options={AUDIT_QUICK_ACTIONS}
+            value={formFilters.action}
+            onChange={(next) =>
+              setFormFilters((current) => ({
+                ...current,
+                action: next,
+              }))
+            }
+          />
           <div className="form-grid two">
             <label>
               Action
@@ -349,7 +437,7 @@ export function AuditLogsPage() {
 
           {logs.length > 0 ? (
             <div style={{ overflowX: "auto" }}>
-              <table className="table">
+              <table className={`table ${viewDensity === "compact" ? "compact" : ""}`}>
                 <thead>
                   <tr>
                     <th>Timestamp</th>
@@ -366,10 +454,8 @@ export function AuditLogsPage() {
                       <tr
                         key={entry.id}
                         onClick={() => setSelectedLogId(entry.id)}
-                        style={{
-                          cursor: "pointer",
-                          background: selectedLogId === entry.id ? "#f4f8ff" : "transparent",
-                        }}
+                        className={selectedLogId === entry.id ? "table-row-selected" : ""}
+                        style={{ cursor: "pointer" }}
                       >
                         <td>{formatDateTime(entry.timestamp)}</td>
                         <td>{toAuditActionLabel(entry.actionType)}</td>

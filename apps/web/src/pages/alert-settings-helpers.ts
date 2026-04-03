@@ -155,3 +155,33 @@ export function getAlertCooldownCopy(seconds: number): string {
   }
   return `${Math.round(seconds / 3600)}h dedupe window`;
 }
+
+export function shouldTriggerAlert(input: {
+  enabled: boolean;
+  selectedEventTypes: string[];
+  selectedSeverities: AlertSeverity[];
+  eventType: AlertEventType;
+  severity: AlertSeverity;
+}): boolean {
+  if (!input.enabled) {
+    return false;
+  }
+  if (!input.selectedEventTypes.includes(input.eventType)) {
+    return false;
+  }
+  return input.selectedSeverities.includes(input.severity);
+}
+
+export function formatAlertMessage(input: {
+  eventType: AlertEventType;
+  severity: AlertSeverity;
+  workspaceSlug?: string | null;
+  details?: string | null;
+}): string {
+  const eventLabel =
+    ALERT_EVENT_OPTIONS.find((option) => option.key === input.eventType)?.label ||
+    input.eventType;
+  const workspacePrefix = input.workspaceSlug ? `[${input.workspaceSlug}] ` : "";
+  const detailsSuffix = input.details ? ` - ${input.details}` : "";
+  return `${workspacePrefix}${input.severity.toUpperCase()}: ${eventLabel}${detailsSuffix}`;
+}

@@ -76,6 +76,87 @@ export const auditLogsQuerySchema = z
     }
   });
 
+export const agentApprovalsQuerySchema = z
+  .object({
+    runId: z.string().uuid().optional(),
+    actorUserId: z.string().uuid().optional(),
+    toolId: z.string().trim().min(1).max(180).optional(),
+    status: z.enum(["pending", "approved", "denied", "expired"]).optional(),
+    from: isoDateTimeSchema.optional(),
+    to: isoDateTimeSchema.optional(),
+    page: z.coerce.number().int().min(1).max(100000).optional(),
+    limit: z.coerce.number().int().min(1).max(100).optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (!value.from || !value.to) {
+      return;
+    }
+    const from = Date.parse(value.from);
+    const to = Date.parse(value.to);
+    if (Number.isFinite(from) && Number.isFinite(to) && from > to) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["from"],
+        message: "`from` must be less than or equal to `to`.",
+      });
+    }
+  });
+
+const agentMemoryScopeSchema = z.enum(["workflow", "run"]);
+
+export const agentMemoryQuerySchema = z
+  .object({
+    workflowId: z.string().uuid().optional(),
+    runId: z.string().uuid().optional(),
+    scope: agentMemoryScopeSchema.optional(),
+    query: z.string().trim().min(1).max(160).optional(),
+    limit: z.coerce.number().int().min(1).max(250).optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.scope === "workflow" && !value.workflowId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["workflowId"],
+        message: "workflowId is required for workflow memory scope.",
+      });
+    }
+    if (value.scope === "run" && !value.runId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["runId"],
+        message: "runId is required for run memory scope.",
+      });
+    }
+  });
+
+export const upsertAgentMemorySchema = z
+  .object({
+    scope: agentMemoryScopeSchema,
+    workflowId: z.string().uuid().optional(),
+    runId: z.string().uuid().optional(),
+    key: z.string().trim().min(1).max(160),
+    value: z.unknown(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.scope === "workflow" && !value.workflowId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["workflowId"],
+        message: "workflowId is required for workflow memory scope.",
+      });
+    }
+    if (value.scope === "run" && !value.runId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["runId"],
+        message: "runId is required for run memory scope.",
+      });
+    }
+  });
+
 export const loginSchema = z.object({
   email: z.string().email(),
   password: z.string().min(1),
@@ -327,6 +408,12 @@ export const webhookSchema = z.object({
 export const operatorNoteSchema = z.object({
   reason: z.string().trim().min(1).max(500).optional(),
 });
+
+export const approvalDecisionSchema = z
+  .object({
+    note: z.string().trim().min(1).max(500).optional(),
+  })
+  .strict();
 
 export const runReplaySchema = z.object({
   reason: z.string().trim().min(1).max(500).optional(),

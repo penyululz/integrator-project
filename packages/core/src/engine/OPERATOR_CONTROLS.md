@@ -40,12 +40,27 @@ This document describes the conservative v1 operator semantics implemented in th
   - release-now is a specialized reschedule to current time
   - cancelling a wait can also cancel the linked run safely
 
+## Human approvals for agent tools
+
+- Endpoint: `GET /api/v1/approvals`
+- Endpoint: `GET /api/v1/approvals/:approvalId`
+- Endpoint: `POST /api/v1/approvals/:approvalId/approve`
+- Endpoint: `POST /api/v1/approvals/:approvalId/deny`
+- Authorization: `owner` or `admin`
+- Scope: tenant + organization + workspace scoped
+- Behavior:
+  - approval-required agent tool calls create persisted `agent_tool_approvals` records (`pending`)
+  - run execution pauses with run status `waiting`, and retry job status `awaiting_approval`
+  - approving all pending requests for the retry job transitions continuation back to `pending` and resumes from the paused step path
+  - denying a request keeps the blocked tool from running and safely fails the run with `approval_denied` classification
+  - repeated approve/deny calls are idempotent-safe (already-resolved records are not re-applied)
+
 ## Audit trail expectations
 
 Every operator action writes audit metadata:
 
 - actor (`actor_user_id`)
-- action (`run.cancel`, `run.replay`, `run.resume_if_waiting`, `wait.reschedule`, `wait.release_now`, `wait.cancel`)
+- action (`run.cancel`, `run.replay`, `run.resume_if_waiting`, `wait.reschedule`, `wait.release_now`, `wait.cancel`, `approval.approve`, `approval.deny`)
 - target entity
 - previous/new state where applicable
 - optional operator reason

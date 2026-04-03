@@ -1,5 +1,5 @@
 ﻿import { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useLocation, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import {
   completeAdapterAuth,
   disconnectAppConnection,
@@ -9,29 +9,67 @@ import {
   testAppConnection,
   upsertAppConnection,
   type AppConnectionRecord,
+  type AppSetupField,
   type WorkflowTemplateSummary,
 } from "../api";
-import { Callout, DemoHint, LoadingInline, PageHeader, StatusPill, SurfaceCard } from "../components/ui-kit";
+import {
+  ChecklistSteps,
+  Callout,
+  DemoHint,
+  EmptyStatePanel,
+  FilterPills,
+  PageHeader,
+  StatusPill,
+  SurfaceCard,
+} from "../components/ui-kit";
 import { AppIcon } from "../components/AppIcon";
 import {
   buildConnectionPayload,
   buildInitialFormState,
   normalizeTextValue,
   type ConnectionFormState,
-  validateRequiredFields,
 } from "./integration-connection-helpers";
 import {
   describeSetupMethod,
   getAppVisual,
-  getSuggestedTemplatesForApp,
   toConnectionStatusLabel,
 } from "./integrations-catalog-helpers";
+import {
+  getAppReadiness,
+  getSupportModelLabel,
+  getVisibleApps,
+  toPrimaryAppActionLabel,
+  type AppVisibilityMode,
+} from "./app-readiness-helpers";
+import {
+  buildConnectionChecklist,
+  type ConnectionTestState,
+} from "./product-pattern-helpers";
+import {
+  getAppSetupGuideView,
+  getGuideSuggestedTemplates,
+  getRecommendedTemplatePath,
+} from "./app-setup-guide-helpers";
+import { getConnectionTrustState } from "./connection-trust-helpers";
+import {
+  getConnectionStatus,
+  getNextWizardStep,
+  getPreviousWizardStep,
+  getWizardStepOrder,
+  saveConnection,
+  testConnection,
+  validateConnectionInput,
+  type ConnectionWizardStep,
+} from "./integration-setup-flow-helpers";
 import {
   buildOAuthRedirectUri,
   getOAuthPendingStorageKey,
   parseOAuthCallbackInfo,
   stripOAuthParamsFromSearch,
 } from "./integration-oauth-helpers";
+import { redirectAfterConnection } from "./navigation-flow-helpers";
+
+type ReadinessFilter = "all" | "ready" | "advanced" | "coming_soon" | "developer";
 
 type PendingOAuthPayload = {
   integrationId?: string;
@@ -54,16 +92,69 @@ function clearPendingOAuth(appKey: string) {
   window.localStorage.removeItem(getOAuthPendingStorageKey(appKey));
 }
 
+function renderField(props: {
+  appKey: string;
+  field: AppSetupField;
+  formState: ConnectionFormState;
+  onChange: (appKey: string, fieldKey: string, value: string | boolean) => void;
+}) {
+  const value = props.formState[props.field.key];
+  return (
+    <label key={`${props.appKey}-${props.field.key}`}>
+      {props.field.label}
+      {props.field.required ? " *" : ""}
+      {props.field.inputType === "boolean" ? (
+        <div style={{ marginTop: 6 }}>
+          <input
+            type="checkbox"
+            checked={Boolean(value)}
+            onChange={(event) =>
+              props.onChange(props.appKey, props.field.key, event.target.checked)
+            }
+          />
+        </div>
+      ) : (
+        <input
+          type={
+            props.field.inputType === "password"
+              ? "password"
+              : props.field.inputType === "number"
+                ? "number"
+                : "text"
+          }
+          value={normalizeTextValue(value)}
+          placeholder={props.field.placeholder}
+          onChange={(event) =>
+            props.onChange(props.appKey, props.field.key, event.target.value)
+          }
+          style={{ marginTop: 4, width: "100%" }}
+        />
+      )}
+      {props.field.helpText ? <small>{props.field.helpText}</small> : null}
+    </label>
+  );
+}
+
 export function IntegrationsPage() {
   const [searchParams] = useSearchParams();
   const location = useLocation();
+  const navigate = useNavigate();
   const [apps, setApps] = useState<AppConnectionRecord[]>([]);
   const [templates, setTemplates] = useState<WorkflowTemplateSummary[]>([]);
   const [forms, setForms] = useState<Record<string, ConnectionFormState>>({});
+  const [selectedAppKey, setSelectedAppKey] = useState("");
+  const [showAdvancedCatalog, setShowAdvancedCatalog] = useState(false);
+  const [showDeveloperCatalog, setShowDeveloperCatalog] = useState(false);
+  const [catalogMode, setCatalogMode] = useState<AppVisibilityMode>("all");
+  const [showCategoryFiltersExpanded, setShowCategoryFiltersExpanded] = useState(false);
+  const [readinessFilter, setReadinessFilter] = useState<ReadinessFilter>("ready");
+  const [catalogQuery, setCatalogQuery] = useState("");
+  const [activeSetupStep, setActiveSetupStep] = useState<ConnectionWizardStep>("overview");
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [testingByApp, setTestingByApp] = useState<Record<string, boolean>>({});
+  const [testStateByApp, setTestStateByApp] = useState<Record<string, ConnectionTestState>>({});
   const [savingByApp, setSavingByApp] = useState<Record<string, boolean>>({});
   const oauthCompletionKeyRef = useRef<string | null>(null);
 
@@ -76,7 +167,10 @@ export function IntegrationsPage() {
     [location.search],
   );
 
-  async function load() {
+  async function load(): Promise<{
+    appRecords: AppConnectionRecord[];
+    templateRecords: WorkflowTemplateSummary[];
+  }> {
     setLoading(true);
     try {
       const [appRecords, templateRecords] = await Promise.all([
@@ -95,6 +189,31 @@ export function IntegrationsPage() {
         }
         return next;
       });
+
+      setSelectedAppKey((current) => {
+        const allKeys = new Set(appRecords.map((app) => app.key));
+        if (current && allKeys.has(current)) {
+          return current;
+        }
+        if (highlightAppKey && allKeys.has(highlightAppKey)) {
+          return highlightAppKey;
+        }
+        const visible = getVisibleApps("all", appRecords);
+        return (
+          visible.ready[0]?.key ||
+          visible.advanced[0]?.key ||
+          appRecords[0]?.key ||
+          ""
+        );
+      });
+
+      return {
+        appRecords,
+        templateRecords,
+      };
+    } catch (loadError) {
+      setError((loadError as Error).message || "Failed to load app catalog.");
+      throw loadError;
     } finally {
       setLoading(false);
     }
@@ -170,11 +289,28 @@ export function IntegrationsPage() {
 
         clearPendingOAuth(callbackAppKey);
         cleanupOAuthParamsFromUrl();
-        await load();
+        const { appRecords, templateRecords } = await load();
+        const connectedApp =
+          appRecords.find((item) => item.key === callbackAppKey) || null;
+        const postConnectPath =
+          (connectedApp &&
+            getRecommendedTemplatePath(connectedApp, templateRecords)) ||
+          null;
+        const destination = redirectAfterConnection({
+          templateId,
+          returnTo,
+          fallback: postConnectPath || "/first-automation",
+        });
 
+        setSelectedAppKey(callbackAppKey);
+        setActiveSetupStep("success");
         setMessage(
-          `${callbackAppKey} is connected. You can continue creating your automation now.`,
+          `${connectedApp?.name || callbackAppKey} connected. Redirecting to a starter automation...`,
         );
+
+        window.setTimeout(() => {
+          navigate(destination);
+        }, 800);
       } catch (authError) {
         setError(
           (authError as Error).message ||
@@ -182,19 +318,185 @@ export function IntegrationsPage() {
         );
       }
     })();
-  }, [oauthCallbackInfo, highlightAppKey, returnTo, templateId]);
+  }, [oauthCallbackInfo, highlightAppKey, returnTo, templateId, navigate]);
+
+  useEffect(() => {
+    setActiveSetupStep("overview");
+  }, [selectedAppKey]);
 
   const appCounts = useMemo(() => {
     const connected = apps.filter((app) => app.status === "connected").length;
-    const needsAttention = apps.filter(
-      (app) => app.status === "expired" || app.status === "invalid",
-    ).length;
+    const readyNow = apps.filter((app) => getAppReadiness(app).tier === "ready").length;
     return {
       total: apps.length,
       connected,
-      needsAttention,
+      readyNow,
     };
   }, [apps]);
+
+  const visibleCatalog = useMemo(() => getVisibleApps(catalogMode, apps), [catalogMode, apps]);
+
+  const readinessCounts = useMemo(() => {
+    const counts: Record<ReadinessFilter, number> = {
+      all: apps.length,
+      ready: 0,
+      advanced: 0,
+      coming_soon: 0,
+      developer: 0,
+    };
+    for (const app of apps) {
+      const readiness = getAppReadiness(app);
+      counts[readiness.tier] += 1;
+    }
+    return counts;
+  }, [apps]);
+
+  const readinessFilterOptions = useMemo(
+    () => [
+      { id: "ready", label: "Ready", count: readinessCounts.ready },
+      { id: "advanced", label: "Advanced", count: readinessCounts.advanced },
+      { id: "coming_soon", label: "Coming soon", count: readinessCounts.coming_soon },
+      { id: "developer", label: "Developer", count: readinessCounts.developer },
+      { id: "all", label: "All apps", count: readinessCounts.all },
+    ],
+    [readinessCounts],
+  );
+
+  function matchesCatalogFilters(app: AppConnectionRecord): boolean {
+    const readiness = getAppReadiness(app);
+    if (readinessFilter !== "all" && readiness.tier !== readinessFilter) {
+      return false;
+    }
+    const query = catalogQuery.trim().toLowerCase();
+    if (!query) {
+      return true;
+    }
+    const haystack = [
+      app.name,
+      app.description,
+      readiness.summary,
+      readiness.guidance,
+      app.key,
+      ...app.supportedActions,
+      ...app.supportedTriggers,
+    ]
+      .join(" ")
+      .toLowerCase();
+    return haystack.includes(query);
+  }
+
+  const readyApps = useMemo(
+    () => visibleCatalog.ready.filter((app) => matchesCatalogFilters(app)),
+    [visibleCatalog.ready, readinessFilter, catalogQuery],
+  );
+  const advancedApps = useMemo(
+    () => visibleCatalog.advanced.filter((app) => matchesCatalogFilters(app)),
+    [visibleCatalog.advanced, readinessFilter, catalogQuery],
+  );
+  const comingSoonApps = useMemo(
+    () => visibleCatalog.comingSoon.filter((app) => matchesCatalogFilters(app)),
+    [visibleCatalog.comingSoon, readinessFilter, catalogQuery],
+  );
+  const developerApps = useMemo(
+    () => visibleCatalog.developer.filter((app) => matchesCatalogFilters(app)),
+    [visibleCatalog.developer, readinessFilter, catalogQuery],
+  );
+
+  const selectedApp = useMemo(
+    () => apps.find((app) => app.key === selectedAppKey) || null,
+    [apps, selectedAppKey],
+  );
+
+  const selectedReadiness = useMemo(
+    () => (selectedApp ? getAppReadiness(selectedApp) : null),
+    [selectedApp],
+  );
+
+  const selectedTrustState = useMemo(
+    () => (selectedApp ? getConnectionTrustState(selectedApp) : null),
+    [selectedApp],
+  );
+
+  const selectedFormState = useMemo(() => {
+    if (!selectedApp) {
+      return null;
+    }
+    return forms[selectedApp.key] || buildInitialFormState(selectedApp);
+  }, [forms, selectedApp]);
+
+  const selectedSetupGuide = useMemo(() => {
+    if (!selectedApp) {
+      return null;
+    }
+    return getAppSetupGuideView(selectedApp);
+  }, [selectedApp]);
+
+  const selectedSuggestions = useMemo(() => {
+    if (!selectedApp) {
+      return [] as WorkflowTemplateSummary[];
+    }
+    return getGuideSuggestedTemplates(selectedApp, templates, 3);
+  }, [selectedApp, templates]);
+
+  const selectedRecommendedTemplatePath = useMemo(() => {
+    if (!selectedApp) {
+      return null;
+    }
+    return getRecommendedTemplatePath(selectedApp, templates);
+  }, [selectedApp, templates]);
+
+  const selectedValidation = useMemo(() => {
+    if (!selectedApp || !selectedFormState) {
+      return {
+        valid: false,
+        missingFields: [],
+      };
+    }
+    return validateConnectionInput(selectedApp, selectedFormState);
+  }, [selectedApp, selectedFormState]);
+
+  const selectedMissingRequiredFields = !selectedValidation.valid;
+
+  const selectedConnectionStatus = useMemo(() => {
+    if (!selectedApp) {
+      return "needs_setup";
+    }
+    return getConnectionStatus({
+      app: selectedApp,
+      hasValidInput: selectedValidation.valid,
+      lastTestState: testStateByApp[selectedApp.key] || "unknown",
+    });
+  }, [selectedApp, selectedValidation.valid, testStateByApp]);
+
+  const selectedChecklist = useMemo(() => {
+    if (!selectedApp || !selectedReadiness) {
+      return [];
+    }
+    return buildConnectionChecklist({
+      app: selectedApp,
+      readiness: selectedReadiness,
+      hasMissingRequiredFields: selectedMissingRequiredFields,
+      testState: testStateByApp[selectedApp.key] || "unknown",
+    });
+  }, [selectedApp, selectedReadiness, selectedMissingRequiredFields, testStateByApp]);
+
+  const setupWizardSteps = getWizardStepOrder();
+
+  function canMoveSetupForward(): boolean {
+    if (!selectedApp) {
+      return false;
+    }
+    if (activeSetupStep === "overview" || activeSetupStep === "requirements") {
+      return true;
+    }
+    if (activeSetupStep === "input") {
+      return selectedValidation.valid;
+    }
+    if (activeSetupStep === "test") {
+      return selectedConnectionStatus === "connected";
+    }
+    return false;
+  }
 
   function updateFormValue(appKey: string, fieldKey: string, value: string | boolean) {
     setForms((current) => ({
@@ -208,10 +510,13 @@ export function IntegrationsPage() {
 
   async function onSaveConnection(app: AppConnectionRecord) {
     const formState = forms[app.key] || buildInitialFormState(app);
-    const missingRequired = validateRequiredFields(app, formState);
-    if (missingRequired.length > 0) {
-      setError(`Missing required setup fields for ${app.name}: ${missingRequired.join(", ")}.`);
+    const validation = validateConnectionInput(app, formState);
+    if (!validation.valid) {
+      setError(
+        `Missing required setup fields for ${app.name}: ${validation.missingFields.join(", ")}.`,
+      );
       setMessage(null);
+      setActiveSetupStep("input");
       return;
     }
 
@@ -236,14 +541,17 @@ export function IntegrationsPage() {
             }
           : undefined;
 
-      await upsertAppConnection({
-        appKey: app.key,
-        integrationName: payload.integrationName,
-        integrationConfig: payload.integrationConfig,
-        credential: credentialPayload,
-      });
+      await saveConnection(async () =>
+        upsertAppConnection({
+          appKey: app.key,
+          integrationName: payload.integrationName,
+          integrationConfig: payload.integrationConfig,
+          credential: credentialPayload,
+        }),
+      );
 
       setMessage(`${app.name} connection saved.`);
+      setActiveSetupStep("test");
       await load();
     } catch (saveError) {
       setError((saveError as Error).message || `Failed to save ${app.name} connection.`);
@@ -319,20 +627,42 @@ export function IntegrationsPage() {
     setMessage(null);
 
     try {
-      const result = await testAppConnection({
-        appKey: app.key,
-        integrationConfig: forms[app.key]
-          ? buildConnectionPayload(app, forms[app.key]).integrationConfig
-          : undefined,
-      });
+      const result = await testConnection(() =>
+        testAppConnection({
+          appKey: app.key,
+          integrationConfig: forms[app.key]
+            ? buildConnectionPayload(app, forms[app.key]).integrationConfig
+            : undefined,
+        }),
+      );
+      setTestStateByApp((current) => ({
+        ...current,
+        [app.key]: result.status === "valid" ? "valid" : "invalid",
+      }));
       if (result.status === "valid") {
-        setMessage(`${app.name} test passed.`);
+        const { appRecords, templateRecords } = await load();
+        const refreshedApp = appRecords.find((item) => item.key === app.key) || app;
+        const recommendedPath = getRecommendedTemplatePath(refreshedApp, templateRecords);
+        const destination = redirectAfterConnection({
+          templateId,
+          returnTo,
+          fallback: recommendedPath || "/first-automation",
+        });
+
+        setMessage(
+          `${app.name} test passed. Redirecting to a starter automation so you can run your first workflow.`,
+        );
+        setActiveSetupStep("success");
+        window.setTimeout(() => {
+          navigate(destination);
+        }, 900);
       } else {
         setMessage(
           `${app.name} test returned ${result.status}: ${result.reason || "check settings"}.`,
         );
+        setActiveSetupStep("test");
+        await load();
       }
-      await load();
     } catch (testError) {
       setError((testError as Error).message || `Failed to test ${app.name} connection.`);
     } finally {
@@ -340,21 +670,102 @@ export function IntegrationsPage() {
     }
   }
 
+  function renderCatalogCard(app: AppConnectionRecord) {
+    const readiness = getAppReadiness(app);
+    const status = toConnectionStatusLabel(app.status);
+    const trust = getConnectionTrustState(app);
+    const visual = getAppVisual(app.key);
+    const primaryLabel = toPrimaryAppActionLabel(app, readiness);
+    const isSelected = selectedAppKey === app.key;
+    const formState = forms[app.key] || buildInitialFormState(app);
+    const validation = validateConnectionInput(app, formState);
+    const connectionStatus = getConnectionStatus({
+      app,
+      hasValidInput: validation.valid,
+      lastTestState: testStateByApp[app.key] || "unknown",
+    });
+
+    return (
+      <article
+        key={app.key}
+        className={`app-card app-primary-card ${isSelected ? "highlight" : ""}`}
+      >
+        <div className="app-header-row">
+          <div>
+            <div className="app-title">
+              <AppIcon iconKey={visual.iconKey} accent={visual.accent} />
+              {app.name}
+            </div>
+            <p>{readiness.summary}</p>
+          </div>
+          <div className="stack-sm" style={{ alignItems: "flex-end" }}>
+            <StatusPill tone={readiness.tone}>{readiness.label}</StatusPill>
+            <StatusPill tone={trust.tone}>{trust.label}</StatusPill>
+            <StatusPill tone={status.tone}>{status.label}</StatusPill>
+            <span className="tag">Setup: {connectionStatus.replace(/_/g, " ")}</span>
+          </div>
+        </div>
+
+        <p>{trust.summary}</p>
+        <div className="tag-row">
+          <span className="tag">{getSupportModelLabel(readiness.supportModel)}</span>
+          <span className="tag">{describeSetupMethod(app.setupMethod)}</span>
+          <span className="tag">{app.setupMethod === "oauth2" ? "Guided connect" : "Manual fields"}</span>
+          {app.catalogCategory ? <span className="tag">Category: {app.catalogCategory}</span> : null}
+          {(app.platformSetupMissingFields || []).length > 0 ? (
+            <span className="tag">
+              Missing platform config: {(app.platformSetupMissingFields || []).join(", ")}
+            </span>
+          ) : null}
+          <span className="tag">
+            Actions: {app.supportedActions.length ? app.supportedActions.join(", ") : "none"}
+          </span>
+        </div>
+
+        <div className="inline-actions">
+          <button
+            type="button"
+            className="button-primary"
+            onClick={() => setSelectedAppKey(app.key)}
+            disabled={readiness.tier === "coming_soon"}
+          >
+            {primaryLabel}
+          </button>
+          {app.actions.canTestConnection && app.connected ? (
+            <button
+              type="button"
+              onClick={() => void onTestConnection(app)}
+              disabled={testingByApp[app.key]}
+            >
+              {testingByApp[app.key] ? "Testing..." : "Test"}
+            </button>
+          ) : null}
+        </div>
+      </article>
+    );
+  }
+
+  const requiredFields = selectedApp
+    ? selectedApp.setupFields.filter((field) => field.required)
+    : [];
+  const optionalFields = selectedApp
+    ? selectedApp.setupFields.filter((field) => !field.required)
+    : [];
+  const guideRequiredFields = selectedSetupGuide?.requiredFields || requiredFields;
+  const selectedPlatformMissingFields = selectedApp?.platformSetupMissingFields || [];
+
   return (
     <div className="stack">
       <PageHeader
         eyebrow="Apps"
-        title="Connect Your Apps"
-        subtitle="Set up connections once, then reuse them across templates and automations. OAuth connections complete automatically when you return from the provider."
+        title="Connect your apps"
+        subtitle="Start with ready apps first. Open advanced apps only when you need extra setup."
         actions={
           <>
-            <StatusPill tone="info">{appCounts.total} apps</StatusPill>
-            <StatusPill tone="success">{appCounts.connected} connected</StatusPill>
-            <StatusPill tone={appCounts.needsAttention > 0 ? "warning" : "info"}>
-              {appCounts.needsAttention} need attention
-            </StatusPill>
-            <Link to="/first-automation">Open First Automation</Link>
-            <Link to="/workflows">Browse Templates</Link>
+            <StatusPill tone="success">{appCounts.readyNow} ready now</StatusPill>
+            <StatusPill tone="info">{appCounts.connected} connected</StatusPill>
+            <Link to="/first-automation">First automation</Link>
+            <Link to="/workflows">Starter automations</Link>
           </>
         }
       />
@@ -366,13 +777,11 @@ export function IntegrationsPage() {
           actions={
             <>
               <Link to={`/workflows?templateId=${encodeURIComponent(templateId)}`}>Return to template</Link>
-              <Link to="/first-automation">Open wizard</Link>
+              <Link to="/first-automation">Open first automation</Link>
             </>
           }
         >
-          <p>
-            Connect the required apps here, then return and continue your automation setup.
-          </p>
+          <p>Connect the required app, then continue your automation setup.</p>
         </Callout>
       ) : null}
 
@@ -381,7 +790,7 @@ export function IntegrationsPage() {
           <p>{message}</p>
           <div className="inline-actions">
             <Link to="/first-automation">Continue to first automation</Link>
-            <Link to="/runs">View test runs</Link>
+            <Link to="/runs">View runs</Link>
           </div>
         </Callout>
       ) : null}
@@ -392,185 +801,482 @@ export function IntegrationsPage() {
       ) : null}
 
       <DemoHint>
-        Demo flow: connect one app here, open <Link to="/workflows">Automations</Link> to create a
-        template, then run a test from <Link to="/runs">Runs</Link>.
+        Start here: connect one ready app, use a starter automation, then run a live test.
       </DemoHint>
 
-      <SurfaceCard
-        title="App Catalog"
-        subtitle="Choose an app, connect it, and test it before using templates."
-      >
-        {loading ? <LoadingInline label="Loading apps..." /> : null}
-        <div className="app-catalog-grid">
-          {apps.map((app) => {
-            const formState = forms[app.key] || buildInitialFormState(app);
-            const isHighlighted = highlightAppKey === app.key;
-            const saveDisabled = savingByApp[app.key] || !app.actions.canEdit;
-            const testDisabled = testingByApp[app.key] || !app.actions.canTestConnection;
-            const status = toConnectionStatusLabel(app.status);
-            const visual = getAppVisual(app.key);
-            const suggestions = getSuggestedTemplatesForApp(app.key, templates, 2);
-
-            return (
-              <article
-                key={app.key}
-                className={`app-card ${isHighlighted ? "highlight" : ""}`}
+      <div className="template-grid">
+        <SurfaceCard
+          title="App catalog"
+          subtitle="Pick an app category, connect it with guided setup, then launch a starter automation."
+          highlight
+        >
+          <div className="stack-sm">
+            <label>
+              Search apps
+              <input
+                type="search"
+                value={catalogQuery}
+                placeholder="Find by app name or use case"
+                onChange={(event) => setCatalogQuery(event.target.value)}
+                style={{ marginTop: 4, width: "100%" }}
+              />
+            </label>
+            <FilterPills
+              options={
+                showCategoryFiltersExpanded
+                  ? readinessFilterOptions
+                  : readinessFilterOptions.slice(0, 3)
+              }
+              value={readinessFilter}
+              onChange={(next) => setReadinessFilter(next as ReadinessFilter)}
+            />
+            <div className="inline-actions">
+              <button type="button" onClick={() => setShowCategoryFiltersExpanded((current) => !current)}>
+                {showCategoryFiltersExpanded ? "Show fewer filters" : "Show all filters"}
+              </button>
+            </div>
+            <div className="inline-actions">
+              <span className="tag">View mode</span>
+              <button
+                type="button"
+                onClick={() => setCatalogMode("starter")}
+                className={catalogMode === "starter" ? "button-primary" : ""}
               >
-                <div className="app-header-row">
-                  <div>
-                    <div className="app-title">
-                      <AppIcon iconKey={visual.iconKey} accent={visual.accent} />
-                      {app.name}
+                Starter
+              </button>
+              <button
+                type="button"
+                onClick={() => setCatalogMode("all")}
+                className={catalogMode === "all" ? "button-primary" : ""}
+              >
+                Full catalog
+              </button>
+              <button
+                type="button"
+                onClick={() => setCatalogMode("developer")}
+                className={catalogMode === "developer" ? "button-primary" : ""}
+              >
+                Developer
+              </button>
+            </div>
+          </div>
+
+          {loading ? (
+            <div className="app-catalog-grid">
+              {Array.from({ length: 3 }).map((_, index) => (
+                <article key={`skeleton-${index}`} className="app-card app-card-skeleton" />
+              ))}
+            </div>
+          ) : null}
+          {!loading ? (
+            <div className="stack">
+              <div className="section-divider stack-sm">
+                <strong>Ready apps</strong>
+                <p>Fastest options for first-time success.</p>
+                {readyApps.length === 0 ? (
+                  <EmptyStatePanel
+                    title="No ready apps in this filter"
+                    description="Try resetting search/filters or switch to advanced apps."
+                    primaryAction={
+                      <button
+                        type="button"
+                        className="button-primary"
+                        onClick={() => {
+                          setCatalogQuery("");
+                          setReadinessFilter("ready");
+                        }}
+                      >
+                        Reset filters
+                      </button>
+                    }
+                  />
+                ) : (
+                  <div className="app-catalog-grid">{readyApps.map((app) => renderCatalogCard(app))}</div>
+                )}
+              </div>
+
+              <div className="section-divider stack-sm">
+                <div className="inline-actions" style={{ justifyContent: "space-between" }}>
+                  <strong>Advanced apps</strong>
+                  <button type="button" onClick={() => setShowAdvancedCatalog((current) => !current)}>
+                    {showAdvancedCatalog ? "Hide" : "Show"}
+                  </button>
+                </div>
+                <p>Require additional provider setup or platform configuration.</p>
+                {showAdvancedCatalog ? (
+                  advancedApps.length === 0 ? (
+                    <EmptyStatePanel
+                      title="No advanced apps matched"
+                      description="Change search terms or pick another readiness filter."
+                      primaryAction={
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setCatalogQuery("");
+                            setReadinessFilter("all");
+                          }}
+                        >
+                          Clear filters
+                        </button>
+                      }
+                    />
+                  ) : (
+                    <div className="app-catalog-grid">
+                      {advancedApps.map((app) => renderCatalogCard(app))}
                     </div>
-                    <p>{app.description}</p>
-                  </div>
-                  <div className="stack-sm" style={{ alignItems: "flex-end" }}>
-                    <StatusPill tone={status.tone}>{status.label}</StatusPill>
-                    <span className="tag">{describeSetupMethod(app.setupMethod)}</span>
-                  </div>
-                </div>
+                  )
+                ) : null}
+              </div>
 
-                <div className="tag-row">
-                  <span className="tag">
-                    Triggers: {app.supportedTriggers.length ? app.supportedTriggers.join(", ") : "none"}
-                  </span>
-                  <span className="tag">
-                    Actions: {app.supportedActions.length ? app.supportedActions.join(", ") : "none"}
-                  </span>
-                </div>
+              <div className="section-divider stack-sm">
+                <strong>Coming soon</strong>
+                <p>Planned integrations that are not production-ready yet.</p>
+                {comingSoonApps.length === 0 ? (
+                  <p>No coming-soon apps in this workspace catalog right now.</p>
+                ) : (
+                  <div className="app-catalog-grid">
+                    {comingSoonApps.map((app) => renderCatalogCard(app))}
+                  </div>
+                )}
+              </div>
 
-                <div className="stack-sm">
-                  {app.setupNotes.map((note) => (
-                    <p key={note}>• {note}</p>
+              <div className="section-divider stack-sm">
+                <div className="inline-actions" style={{ justifyContent: "space-between" }}>
+                  <strong>Developer adapters</strong>
+                  <button type="button" onClick={() => setShowDeveloperCatalog((current) => !current)}>
+                    {showDeveloperCatalog ? "Hide" : "Show"}
+                  </button>
+                </div>
+                <p>Internal/testing adapters. Hidden by default for regular users.</p>
+                {showDeveloperCatalog ? (
+                  developerApps.length === 0 ? (
+                    <p>No developer adapters available in this workspace.</p>
+                  ) : (
+                    <div className="app-catalog-grid">
+                      {developerApps.map((app) => renderCatalogCard(app))}
+                    </div>
+                  )
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+        </SurfaceCard>
+
+        <SurfaceCard
+          title={selectedApp ? `Setup: ${selectedApp.name}` : "Setup panel"}
+          subtitle={
+            selectedReadiness
+              ? selectedReadiness.guidance
+              : "Select an app card to start setup."
+          }
+        >
+          {!selectedApp || !selectedReadiness || !selectedFormState ? (
+            <div className="empty-state">
+              <p>Select an app from the catalog to see guided setup.</p>
+            </div>
+          ) : (
+            <div className="stack-sm">
+              <div className="inline-actions">
+                <StatusPill tone={selectedReadiness.tone}>{selectedReadiness.label}</StatusPill>
+                {selectedTrustState ? (
+                  <StatusPill tone={selectedTrustState.tone}>{selectedTrustState.label}</StatusPill>
+                ) : null}
+                <StatusPill tone={toConnectionStatusLabel(selectedApp.status).tone}>
+                  {toConnectionStatusLabel(selectedApp.status).label}
+                </StatusPill>
+                <span className="tag">Flow status: {selectedConnectionStatus.replace(/_/g, " ")}</span>
+              </div>
+
+              {selectedTrustState && selectedTrustState.key !== "connected" ? (
+                <Callout tone={selectedTrustState.tone} title={selectedTrustState.label}>
+                  <p>{selectedTrustState.summary}</p>
+                </Callout>
+              ) : null}
+
+              <div className="card-muted" style={{ borderRadius: 10, padding: 10 }}>
+                <strong>Connection flow</strong>
+                <div className="inline-actions" style={{ marginTop: 8 }}>
+                  {setupWizardSteps.map((step, index) => (
+                    <button
+                      key={step}
+                      type="button"
+                      className={activeSetupStep === step ? "button-primary" : ""}
+                      onClick={() => setActiveSetupStep(step)}
+                    >
+                      {index + 1}. {step}
+                    </button>
                   ))}
                 </div>
+              </div>
 
-                {!app.connected ? (
-                  <div className="callout info">
-                    <strong>Quick start</strong>
-                    <p>Connect this app, run a simulator test, then check Runs for results.</p>
-                  </div>
-                ) : null}
+              {selectedReadiness.tier === "coming_soon" ? (
+                <Callout tone="info" title="Not yet ready for standard setup">
+                  <p>
+                    This app is not exposed as a normal end-user connection yet. Use ready apps for
+                    launch workflows.
+                  </p>
+                </Callout>
+              ) : null}
 
-                {app.platformManagedFields.length > 0 ? (
-                  <div className="callout warning">
-                    <strong>Platform-level settings</strong>
-                    <p>Keep these in <code>.env</code>: {app.platformManagedFields.join(", ")}</p>
-                  </div>
-                ) : null}
+              {activeSetupStep === "overview" ? (
+                <div className="card-muted" style={{ borderRadius: 10, padding: 10 }}>
+                  <strong>1) Overview</strong>
+                  <p>{selectedSetupGuide?.purpose || selectedReadiness.summary}</p>
+                  <p>{selectedReadiness.guidance}</p>
+                  {selectedSetupGuide?.steps?.length ? (
+                    <div className="stack-sm">
+                      <strong>Setup at a glance</strong>
+                      <ol className="setup-guide-list">
+                        {selectedSetupGuide.steps.slice(0, 3).map((step) => (
+                          <li key={`${selectedApp.key}-overview-step-${step}`}>{step}</li>
+                        ))}
+                      </ol>
+                    </div>
+                  ) : null}
+                  <ChecklistSteps steps={selectedChecklist} />
+                </div>
+              ) : null}
 
-                <div className="form-grid two section-divider">
+              {activeSetupStep === "requirements" ? (
+                <div className="card-muted" style={{ borderRadius: 10, padding: 10 }}>
+                  <strong>2) Requirements</strong>
+                  <ul className="setup-guide-list">
+                    {(selectedSetupGuide?.beforeYouStart || selectedReadiness.prerequisites).map((item) => (
+                      <li key={item}>{item}</li>
+                    ))}
+                  </ul>
+                  {guideRequiredFields.length > 0 ? (
+                    <div className="stack-sm">
+                      <strong>Required fields</strong>
+                      <div className="tag-row">
+                        {guideRequiredFields.map((field) => (
+                          <span key={`${selectedApp.key}-required-${field.key}`} className="tag">
+                            {field.label}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+                  {selectedPlatformMissingFields.length > 0 ? (
+                    <Callout tone="warning" title="Missing platform setup">
+                      <p>
+                        An operator must configure these runtime values before connect can complete:{" "}
+                        {selectedPlatformMissingFields.join(", ")}
+                      </p>
+                    </Callout>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {activeSetupStep === "input" ? (
+                <div className="stack-sm">
+                  <strong>3) Input</strong>
                   <label>
                     Connection name
                     <input
-                      value={normalizeTextValue(formState.integrationName)}
+                      value={normalizeTextValue(selectedFormState.integrationName)}
                       onChange={(event) =>
-                        updateFormValue(app.key, "integrationName", event.target.value)
+                        updateFormValue(selectedApp.key, "integrationName", event.target.value)
                       }
+                      style={{ marginTop: 4, width: "100%" }}
                     />
                   </label>
 
-                  {app.setupFields.map((field) => (
-                    <label key={`${app.key}-${field.key}`}>
-                      {field.label}
-                      {field.required ? " *" : ""}
-                      {field.inputType === "boolean" ? (
-                        <div>
-                          <input
-                            type="checkbox"
-                            checked={Boolean(formState[field.key])}
-                            onChange={(event) =>
-                              updateFormValue(app.key, field.key, event.target.checked)
-                            }
-                          />
-                        </div>
-                      ) : (
-                        <input
-                          type={
-                            field.inputType === "password"
-                              ? "password"
-                              : field.inputType === "number"
-                                ? "number"
-                                : "text"
-                          }
-                          value={normalizeTextValue(formState[field.key])}
-                          placeholder={field.placeholder}
-                          onChange={(event) =>
-                            updateFormValue(app.key, field.key, event.target.value)
-                          }
-                        />
-                      )}
-                      {field.helpText ? <small>{field.helpText}</small> : null}
-                    </label>
-                  ))}
-                </div>
+                  {selectedApp.setupMethod === "oauth2" ? (
+                    <Callout
+                      tone="info"
+                      title={`Secure sign-in for ${selectedApp.name}`}
+                      actions={
+                        <button
+                          type="button"
+                          className="button-primary"
+                          onClick={() => void onStartOAuth(selectedApp)}
+                          disabled={!selectedApp.actions.canConnect}
+                        >
+                          {selectedApp.connected
+                            ? `Reconnect ${selectedApp.name}`
+                            : `Connect ${selectedApp.name}`}
+                        </button>
+                      }
+                    >
+                      <p>
+                        We’ll redirect you to {selectedApp.name}, then bring you back automatically to
+                        complete setup.
+                      </p>
+                    </Callout>
+                  ) : null}
 
-                <div className="inline-actions section-divider">
-                  {app.setupMethod === "oauth2" ? (
+                  {selectedSetupGuide?.steps?.length ? (
+                    <div className="card-muted" style={{ borderRadius: 10, padding: 10 }}>
+                      <strong>Exact setup steps</strong>
+                      <ol className="setup-guide-list">
+                        {selectedSetupGuide.steps.map((step) => (
+                          <li key={`${selectedApp.key}-step-${step}`}>{step}</li>
+                        ))}
+                      </ol>
+                    </div>
+                  ) : null}
+
+                  {requiredFields.length > 0 ? (
+                    <div className="form-grid two">
+                      {requiredFields.map((field) =>
+                        renderField({
+                          appKey: selectedApp.key,
+                          field,
+                          formState: selectedFormState,
+                          onChange: updateFormValue,
+                        }),
+                      )}
+                    </div>
+                  ) : null}
+
+                  {optionalFields.length > 0 ? (
+                    <details>
+                      <summary>Advanced fields</summary>
+                      <div className="form-grid two" style={{ marginTop: 8 }}>
+                        {optionalFields.map((field) =>
+                          renderField({
+                            appKey: selectedApp.key,
+                            field,
+                            formState: selectedFormState,
+                            onChange: updateFormValue,
+                          }),
+                        )}
+                      </div>
+                    </details>
+                  ) : null}
+
+                  {!selectedValidation.valid ? (
+                    <Callout tone="warning" title="Missing required inputs">
+                      <p>{selectedValidation.missingFields.join(", ")}</p>
+                    </Callout>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {activeSetupStep === "test" ? (
+                <div className="stack-sm">
+                  <strong>4) Test</strong>
+                  <p>Run a connection test before activating templates that depend on this app.</p>
+                  {selectedSetupGuide?.testChecklist?.length ? (
+                    <div className="card-muted" style={{ borderRadius: 10, padding: 10 }}>
+                      <strong>How to test</strong>
+                      <ul className="setup-guide-list">
+                        {selectedSetupGuide.testChecklist.map((item) => (
+                          <li key={`${selectedApp.key}-test-${item}`}>{item}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
+                  <div className="inline-actions">
                     <button
                       type="button"
                       className="button-primary"
-                      disabled={!app.actions.canConnect}
-                      onClick={() => void onStartOAuth(app)}
+                      onClick={() => void onSaveConnection(selectedApp)}
+                      disabled={savingByApp[selectedApp.key] || !selectedApp.actions.canEdit}
                     >
-                      {app.connected ? "Reconnect" : "Connect"}
+                      {savingByApp[selectedApp.key] ? "Saving..." : "Save connection"}
                     </button>
-                  ) : null}
-
-                  <button
-                    type="button"
-                    disabled={saveDisabled}
-                    onClick={() => void onSaveConnection(app)}
-                  >
-                    {savingByApp[app.key]
-                      ? "Saving..."
-                      : app.connected
-                        ? "Save changes"
-                        : "Save connection"}
-                  </button>
-
-                  <button
-                    type="button"
-                    disabled={testDisabled}
-                    onClick={() => void onTestConnection(app)}
-                  >
-                    {testingByApp[app.key] ? "Testing..." : "Test connection"}
-                  </button>
-
-                  {app.actions.canDisconnect ? (
-                    <button type="button" onClick={() => void onDisconnect(app)}>
-                      Disconnect
-                    </button>
+                    {selectedApp.actions.canTestConnection ? (
+                      <button
+                        type="button"
+                        onClick={() => void onTestConnection(selectedApp)}
+                        disabled={testingByApp[selectedApp.key]}
+                      >
+                        {testingByApp[selectedApp.key] ? "Testing..." : "Test connection"}
+                      </button>
+                    ) : null}
+                    {selectedApp.actions.canDisconnect ? (
+                      <button type="button" onClick={() => void onDisconnect(selectedApp)}>
+                        Disconnect
+                      </button>
+                    ) : null}
+                  </div>
+                  {selectedSetupGuide?.troubleshooting?.length ? (
+                    <details>
+                      <summary>Troubleshooting tips</summary>
+                      <ul className="setup-guide-list" style={{ marginTop: 8 }}>
+                        {selectedSetupGuide.troubleshooting.map((tip) => (
+                          <li key={`${selectedApp.key}-troubleshoot-${tip}`}>{tip}</li>
+                        ))}
+                      </ul>
+                    </details>
                   ) : null}
                 </div>
+              ) : null}
 
-                {app.connection.validationError ? (
-                  <div className="callout danger">
-                    <strong>Connection validation failed</strong>
-                    <p>{app.connection.validationError}</p>
+              {activeSetupStep === "success" ? (
+                <div className="stack-sm">
+                  <strong>5) Success</strong>
+                  <p>
+                    Your app connection is ready. Next, create a starter automation and trigger a test
+                    run.
+                  </p>
+                  {selectedTrustState ? (
+                    <Callout tone="success" title={selectedTrustState.label}>
+                      <p>{selectedTrustState.summary}</p>
+                    </Callout>
+                  ) : null}
+                  <div className="inline-actions">
+                    <Link
+                      to={redirectAfterConnection({
+                        templateId,
+                        returnTo,
+                        fallback: selectedRecommendedTemplatePath || "/first-automation",
+                      })}
+                    >
+                      Continue with starter automation
+                    </Link>
+                    <Link to="/runs">Open runs</Link>
                   </div>
-                ) : null}
+                </div>
+              ) : null}
 
-                {suggestions.length > 0 ? (
-                  <div className="section-divider stack-sm">
-                    <strong>Suggested templates</strong>
-                    <div className="inline-actions">
-                      {suggestions.map((template) => (
-                        <Link
-                          key={template.id}
-                          to={`/workflows?templateId=${encodeURIComponent(template.id)}`}
-                        >
-                          {template.title}
-                        </Link>
-                      ))}
-                    </div>
+              <div className="inline-actions">
+                <button
+                  type="button"
+                  onClick={() => setActiveSetupStep(getPreviousWizardStep(activeSetupStep))}
+                  disabled={activeSetupStep === "overview"}
+                >
+                  Back
+                </button>
+                <button
+                  type="button"
+                  className="button-primary"
+                  onClick={() =>
+                    setActiveSetupStep(getNextWizardStep(activeSetupStep, canMoveSetupForward()))
+                  }
+                  disabled={activeSetupStep === "success" || !canMoveSetupForward()}
+                >
+                  Next
+                </button>
+              </div>
+
+              {selectedApp.connection.validationError ? (
+                <Callout tone="danger" title="Connection check failed">
+                  <p>{selectedApp.connection.validationError}</p>
+                </Callout>
+              ) : null}
+
+              {selectedSuggestions.length > 0 ? (
+                <div className="section-divider stack-sm">
+                  <strong>Try this next</strong>
+                  <div className="inline-actions">
+                    {selectedSuggestions.map((template) => (
+                      <Link
+                        key={template.id}
+                        to={`/workflows?templateId=${encodeURIComponent(template.id)}`}
+                      >
+                        {template.title}
+                      </Link>
+                    ))}
                   </div>
-                ) : null}
-              </article>
-            );
-          })}
-        </div>
-      </SurfaceCard>
+                </div>
+              ) : null}
+            </div>
+          )}
+        </SurfaceCard>
+      </div>
 
       {returnTo ? (
         <SurfaceCard title="Continue where you left off" muted>

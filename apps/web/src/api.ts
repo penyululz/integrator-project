@@ -35,14 +35,68 @@ export type AdapterMetadata = {
   displayName: string;
   description: string;
   authType: string;
+  supportModel?: "native" | "generic" | "community";
+  readinessTier?: "ready" | "advanced" | "coming_soon" | "developer";
+  catalogCategory?: string;
   supportedTriggers: string[];
   supportedActions: string[];
+};
+
+export type AgentToolSafetyLevel = "low" | "guarded" | "high";
+
+export type AgentToolCategory =
+  | "ai"
+  | "research"
+  | "content"
+  | "support"
+  | "communication"
+  | "integration"
+  | "developer"
+  | "operations"
+  | "custom";
+
+export type AgentToolRecord = {
+  id: string;
+  title: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+  category: AgentToolCategory;
+  safetyLevel: AgentToolSafetyLevel;
+  requiresApproval?: boolean;
+  adapterKey?: string;
+  actionKey?: string;
+  enabled?: boolean;
+  tags?: string[];
+};
+
+export type McpToolRecord = {
+  id: string;
+  title: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+  category: AgentToolCategory;
+  safetyLevel: AgentToolSafetyLevel;
+  requiresApproval?: boolean;
+  source: "adapter_action" | "agent_builtin";
+  adapterKey?: string;
+  actionKey?: string;
+  enabled: boolean;
+};
+
+export type McpContextRecord = {
+  id: string;
+  title: string;
+  description: string;
+  source: "workflow" | "run" | "workspace";
 };
 
 export type InstalledAdapter = {
   key: string;
   enabled: boolean;
   manifestPath: string;
+  supportModel?: "native" | "generic" | "community";
+  readinessTier?: "ready" | "advanced" | "coming_soon" | "developer";
+  catalogCategory?: string;
   manifest: {
     schemaVersion: string;
     displayName: string;
@@ -77,18 +131,33 @@ export type AppSetupField = {
   helpText?: string;
 };
 
+export type AppSetupGuide = {
+  purpose: string;
+  beforeYouStart: string[];
+  steps: string[];
+  requiredFieldKeys: string[];
+  troubleshooting: string[];
+  testChecklist: string[];
+  nextTemplateIds: string[];
+};
+
 export type AppConnectionRecord = {
   key: string;
   name: string;
   description: string;
+  supportModel?: "native" | "generic" | "community";
+  readinessTier?: "ready" | "advanced" | "coming_soon" | "developer";
+  catalogCategory?: string;
   enabled: boolean;
   authType: string;
   setupMethod: "oauth2" | "form" | "none";
   setupLabel: string;
   setupNotes: string[];
+  setupGuide?: AppSetupGuide;
   oauthScopes: string[];
   setupFields: AppSetupField[];
   platformManagedFields: string[];
+  platformSetupMissingFields?: string[];
   supportedTriggers: string[];
   supportedActions: string[];
   status: "connected" | "not_connected" | "expired" | "invalid";
@@ -265,6 +334,63 @@ export type AuditLogListResponse = {
     total: number;
     hasMore: boolean;
   };
+};
+
+export type AgentApprovalStatus =
+  | "pending"
+  | "approved"
+  | "denied"
+  | "expired";
+
+export type AgentApprovalRecord = {
+  id: string;
+  organizationId: string;
+  workspaceId: string;
+  workflowId: string;
+  workflowRunId: string;
+  retryJobId: string | null;
+  stepId: string;
+  stepPath: string;
+  toolId: string;
+  toolTitle: string;
+  toolSafetyLevel: string;
+  reason: string | null;
+  inputPreview: string | null;
+  status: AgentApprovalStatus;
+  requestedAt: string;
+  decidedAt: string | null;
+  expiresAt: string | null;
+  actorUserId: string | null;
+  actorNote: string | null;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type AgentMemoryScope = "run" | "workflow";
+
+export type AgentMemoryRecord = {
+  id: string;
+  scope: AgentMemoryScope;
+  workflowId: string;
+  runId: string | null;
+  key: string;
+  value: unknown;
+  createdByStepId: string | null;
+  createdByStepPath: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type AgentApprovalFilters = {
+  runId?: string;
+  actorUserId?: string;
+  toolId?: string;
+  status?: AgentApprovalStatus | "all";
+  from?: string;
+  to?: string;
+  page?: number;
+  limit?: number;
 };
 
 export type AnalyticsAlertSignal = {
@@ -618,6 +744,49 @@ export async function listApps(): Promise<AppConnectionRecord[]> {
   return response.data.apps || [];
 }
 
+export async function listAgentTools(): Promise<{
+  tools: AgentToolRecord[];
+  topTools: AgentToolRecord[];
+  mcp: {
+    tools: McpToolRecord[];
+    contexts: McpContextRecord[];
+  };
+}> {
+  const response = await apiClient().get("/agent/tools");
+  return {
+    tools: response.data.tools || [],
+    topTools: response.data.topTools || [],
+    mcp: {
+      tools: response.data.mcp?.tools || [],
+      contexts: response.data.mcp?.contexts || [],
+    },
+  };
+}
+
+export async function listAgentMemory(input: {
+  workflowId?: string;
+  runId?: string;
+  scope?: AgentMemoryScope;
+  query?: string;
+  limit?: number;
+} = {}): Promise<AgentMemoryRecord[]> {
+  const response = await apiClient().get("/agent/memory", {
+    params: input,
+  });
+  return response.data.memories || [];
+}
+
+export async function upsertAgentMemory(input: {
+  scope: AgentMemoryScope;
+  workflowId?: string;
+  runId?: string;
+  key: string;
+  value: unknown;
+}): Promise<AgentMemoryRecord> {
+  const response = await apiClient().put("/agent/memory", input);
+  return response.data.memory as AgentMemoryRecord;
+}
+
 export async function upsertAppConnection(input: {
   appKey: string;
   integrationName?: string;
@@ -888,6 +1057,69 @@ export async function listAuditLogs(
 export async function getAuditLog(auditLogId: string): Promise<AuditLogRecord> {
   const response = await apiClient().get(`/audit-logs/${auditLogId}`);
   return response.data.log;
+}
+
+export async function listAgentApprovals(
+  input: AgentApprovalFilters = {},
+): Promise<{
+  approvals: AgentApprovalRecord[];
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    hasMore: boolean;
+  };
+}> {
+  const params: Record<string, unknown> = { ...input };
+  if (!input.status || input.status === "all") {
+    delete params.status;
+  }
+  const response = await apiClient().get("/approvals", {
+    params,
+  });
+  return {
+    approvals: response.data.approvals || [],
+    pagination: response.data.pagination || {
+      page: input.page || 1,
+      limit: input.limit || 25,
+      total: 0,
+      hasMore: false,
+    },
+  };
+}
+
+export async function getAgentApproval(approvalId: string): Promise<AgentApprovalRecord> {
+  const response = await apiClient().get(`/approvals/${approvalId}`);
+  return response.data.approval;
+}
+
+export async function approveAgentApproval(
+  approvalId: string,
+  input: { note?: string } = {},
+): Promise<{
+  approval: AgentApprovalRecord;
+  changed: boolean;
+  continuation: {
+    queued: boolean;
+    approvedToolIds?: string[];
+  };
+}> {
+  const response = await apiClient().post(`/approvals/${approvalId}/approve`, input);
+  return response.data;
+}
+
+export async function denyAgentApproval(
+  approvalId: string,
+  input: { note?: string } = {},
+): Promise<{
+  approval: AgentApprovalRecord;
+  changed: boolean;
+  continuation: {
+    queued: boolean;
+  };
+}> {
+  const response = await apiClient().post(`/approvals/${approvalId}/deny`, input);
+  return response.data;
 }
 
 export async function getAnalyticsOverview(input: AnalyticsFilters = {}): Promise<{

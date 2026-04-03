@@ -6,6 +6,12 @@ For product overview, quick start, and launch docs, start at:
 
 Adapters are loaded dynamically from manifest metadata in `packages/adapters/*/manifest.json`.
 
+## Current Adapter Ecosystem Model
+
+- `native`: Slack, Telegram, WhatsApp Cloud API, Webhook, Email, Google Sheets, Shopify, YouTube, Reddit
+- `generic` power connectors: HTTP Request, Schedule/Cron, GraphQL, Code (JavaScript), Database (foundation), AI Studio
+- `community/developer`: generated/sample adapters and custom local adapters
+
 ## Quick Start
 
 Generate a new adapter scaffold from the core workspace:

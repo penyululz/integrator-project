@@ -1,0 +1,29 @@
+{
+  "schemaVersion": "1.0",
+  "key": "ai",
+  "displayName": "AI Studio",
+  "version": "1.0.0",
+  "description": "AI content, summarization, transformation, and lightweight agent actions.",
+  "entry": "./src/index.ts",
+  "exportName": "AiAdapter",
+  "auth": {
+    "type": "api_key"
+  },
+  "supportedTriggers": [],
+  "supportedActions": [
+    "generateContent",
+    "rewriteContent",
+    "summarizeText",
+    "summarizeUrl",
+    "transformContent",
+    "extractKeyPoints",
+    "classifyText",
+    "runAgent",
+    "listAgentTools"
+  ],
+  "defaultEnabled": true,
+  "platform": {
+    "apiVersion": "v1",
+    "minCoreVersion": "1.0.0"
+  }
+}

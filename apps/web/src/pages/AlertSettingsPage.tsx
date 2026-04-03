@@ -7,19 +7,27 @@ import {
   type AlertConfigInput,
   type AlertConfigPublicView,
   type AlertDeliveryLogRecord,
+  type AlertEventType,
   type AlertSeverity,
 } from "../api";
 import { Callout, DemoHint, LoadingInline, PageHeader, StatusPill, SurfaceCard } from "../components/ui-kit";
 import {
   ALERT_EVENT_GROUPS,
   ALERT_SEVERITY_OPTIONS,
+  formatAlertMessage,
   formatHeadersJson,
   formatRecipientsCsv,
   getAlertCooldownCopy,
   parseHeadersJson,
   parseRecipientsCsv,
+  shouldTriggerAlert,
   toBoolString,
 } from "./alert-settings-helpers";
+import {
+  getLiveRefreshIntervalMs,
+  type LiveRefreshMode,
+  type ViewDensity,
+} from "./workspace-view-helpers";
 
 type AlertSettingsFormState = {
   enabled: boolean;
@@ -83,6 +91,9 @@ export function AlertSettingsPage() {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
+  const [viewDensity, setViewDensity] = useState<ViewDensity>("comfortable");
+  const [liveRefreshMode, setLiveRefreshMode] = useState<LiveRefreshMode>("30s");
+  const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -91,6 +102,8 @@ export function AlertSettingsPage() {
     () => new Set(formState?.severities || []),
     [formState],
   );
+  const previewEventType = (formState?.eventTypes[0] || "alert.test") as AlertEventType;
+  const previewSeverity = formState?.severities[0] || "warn";
 
   async function load() {
     setLoading(true);
@@ -100,6 +113,7 @@ export function AlertSettingsPage() {
       setConfig(payload.config);
       setLogs(payload.deliveryLogs);
       setFormState(toFormState(payload.config));
+      setLastSyncedAt(new Date().toISOString());
     } catch (loadError) {
       setError((loadError as Error).message || "Failed to load alert settings.");
     } finally {
@@ -110,6 +124,21 @@ export function AlertSettingsPage() {
   useEffect(() => {
     void load();
   }, []);
+
+  useEffect(() => {
+    const intervalMs = getLiveRefreshIntervalMs(liveRefreshMode);
+    if (!intervalMs) {
+      return;
+    }
+
+    const intervalHandle = window.setInterval(() => {
+      void load();
+    }, intervalMs);
+
+    return () => {
+      window.clearInterval(intervalHandle);
+    };
+  }, [liveRefreshMode]);
 
   function updateForm(patch: Partial<AlertSettingsFormState>) {
     setFormState((current) => {
@@ -240,6 +269,30 @@ export function AlertSettingsPage() {
         actions={
           <>
             <button type="button" onClick={() => void load()}>Refresh</button>
+            <label>
+              View
+              <select
+                value={viewDensity}
+                onChange={(event) => setViewDensity(event.target.value as ViewDensity)}
+                style={{ marginLeft: 8 }}
+              >
+                <option value="comfortable">Comfortable</option>
+                <option value="compact">Compact</option>
+              </select>
+            </label>
+            <label>
+              Live
+              <select
+                value={liveRefreshMode}
+                onChange={(event) => setLiveRefreshMode(event.target.value as LiveRefreshMode)}
+                style={{ marginLeft: 8 }}
+              >
+                <option value="off">Off</option>
+                <option value="15s">15s</option>
+                <option value="30s">30s</option>
+                <option value="60s">60s</option>
+              </select>
+            </label>
             <Link to="/runs">Runs</Link>
             <Link to="/audit-logs">Audit</Link>
           </>
@@ -267,6 +320,14 @@ export function AlertSettingsPage() {
       <DemoHint>
         Keep alert scope small at first: enable workflow failures + dead-letter events, then expand.
       </DemoHint>
+
+      <div className="inline-actions">
+        <StatusPill tone={liveRefreshMode === "off" ? "warning" : "success"}>
+          {liveRefreshMode === "off" ? "Live refresh off" : `Auto-refresh ${liveRefreshMode}`}
+        </StatusPill>
+        <span className="tag">View: {viewDensity}</span>
+        <span className="tag">Last synced {lastSyncedAt ? formatDateTime(lastSyncedAt) : "not yet"}</span>
+      </div>
 
       {loading ? <LoadingInline label="Loading alert settings..." /> : null}
       {error ? (
@@ -320,6 +381,26 @@ export function AlertSettingsPage() {
                   {saving ? "Saving..." : "Save settings"}
                 </button>
               </div>
+              <Callout
+                tone="info"
+                title="Alert preview"
+              >
+                <p>
+                  {formatAlertMessage({
+                    eventType: previewEventType,
+                    severity: previewSeverity as AlertSeverity,
+                    details: shouldTriggerAlert({
+                      enabled: formState.enabled,
+                      selectedEventTypes: formState.eventTypes,
+                      selectedSeverities: formState.severities,
+                      eventType: previewEventType,
+                      severity: previewSeverity as AlertSeverity,
+                    })
+                      ? "would trigger with current settings"
+                      : "currently suppressed by settings",
+                  })}
+                </p>
+              </Callout>
             </SurfaceCard>
 
             <SurfaceCard title="Event types and severity" subtitle="Choose which events should trigger notifications.">
@@ -577,7 +658,7 @@ export function AlertSettingsPage() {
               ) : null}
               {logs.length > 0 ? (
                 <div style={{ overflowX: "auto" }}>
-                  <table className="table">
+                  <table className={`table ${viewDensity === "compact" ? "compact" : ""}`}>
                     <thead>
                       <tr>
                         <th>When</th>

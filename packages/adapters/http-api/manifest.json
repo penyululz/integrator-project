@@ -1,18 +1,17 @@
-{
+﻿{
   "schemaVersion": "1.0",
   "key": "http-api",
-  "displayName": "HTTP API Adapter",
-  "version": "0.1.0",
-  "description": "TODO placeholder for v1 future adapter.",
+  "displayName": "HTTP Request",
+  "version": "1.0.0",
+  "description": "Generic HTTP request connector for REST APIs.",
   "entry": "./src/index.ts",
-  "exportName": "HttpApiAdapterPlaceholder",
+  "exportName": "HttpApiAdapter",
   "auth": {
-    "type": "custom"
+    "type": "token"
   },
   "supportedTriggers": [],
-  "supportedActions": [],
-  "defaultEnabled": false,
-  "enabled": false,
+  "supportedActions": ["httpRequest"],
+  "defaultEnabled": true,
   "platform": {
     "apiVersion": "v1",
     "minCoreVersion": "1.0.0"

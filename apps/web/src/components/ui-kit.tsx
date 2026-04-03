@@ -2,6 +2,8 @@ import type { ReactNode } from "react";
 
 type Tone = "info" | "success" | "warning" | "danger";
 
+export type StatusTone = Tone;
+
 export function PageHeader(props: {
   eyebrow?: string;
   title: string;
@@ -103,7 +105,7 @@ export function ProgressSteps(props: {
     <div className="steps-progress">
       {props.steps.map((step, index) => (
         <div className={`step-row ${step.done ? "done" : ""}`} key={step.id}>
-          <span className="step-index">{step.done ? "?" : index + 1}</span>
+          <span className="step-index">{step.done ? "OK" : index + 1}</span>
           <div className="stack-sm" style={{ width: "100%" }}>
             <strong>{step.title}</strong>
             {step.description ? <p>{step.description}</p> : null}
@@ -112,5 +114,165 @@ export function ProgressSteps(props: {
         </div>
       ))}
     </div>
+  );
+}
+
+export function EmptyStatePanel(props: {
+  title: string;
+  description: string;
+  primaryAction?: ReactNode;
+  secondaryAction?: ReactNode;
+}) {
+  return (
+    <div className="empty-state-panel">
+      <h4 className="empty-state-title">{props.title}</h4>
+      <p className="empty-state-description">{props.description}</p>
+      {props.primaryAction || props.secondaryAction ? (
+        <div className="inline-actions">
+          {props.primaryAction}
+          {props.secondaryAction}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+export function CardSection(props: {
+  title?: string;
+  subtitle?: string;
+  children: ReactNode;
+  highlight?: boolean;
+  muted?: boolean;
+}) {
+  return (
+    <SurfaceCard
+      title={props.title}
+      subtitle={props.subtitle}
+      highlight={props.highlight}
+      muted={props.muted}
+    >
+      {props.children}
+    </SurfaceCard>
+  );
+}
+
+export function StepCard(props: {
+  title: string;
+  subtitle?: string;
+  status?: ReactNode;
+  children?: ReactNode;
+}) {
+  return (
+    <article className="step-card">
+      <div className="step-header">
+        <div className="stack-sm">
+          <strong>{props.title}</strong>
+          {props.subtitle ? <span className="step-summary">{props.subtitle}</span> : null}
+        </div>
+        {props.status}
+      </div>
+      {props.children}
+    </article>
+  );
+}
+
+export function StatusBadge(props: {
+  tone: StatusTone;
+  children: ReactNode;
+}) {
+  return <StatusPill tone={props.tone}>{props.children}</StatusPill>;
+}
+
+export function PrimaryCTA(props: {
+  children: ReactNode;
+  onClick?: () => void;
+  disabled?: boolean;
+  type?: "button" | "submit";
+}) {
+  return (
+    <button
+      type={props.type || "button"}
+      className="button-primary"
+      onClick={props.onClick}
+      disabled={props.disabled}
+    >
+      {props.children}
+    </button>
+  );
+}
+
+export function EmptyState(props: {
+  title: string;
+  description: string;
+  primaryAction?: ReactNode;
+  secondaryAction?: ReactNode;
+}) {
+  return (
+    <EmptyStatePanel
+      title={props.title}
+      description={props.description}
+      primaryAction={props.primaryAction}
+      secondaryAction={props.secondaryAction}
+    />
+  );
+}
+
+export function FilterPills(props: {
+  options: Array<{
+    id: string;
+    label: string;
+    count?: number;
+  }>;
+  value: string;
+  onChange: (next: string) => void;
+}) {
+  return (
+    <div className="filter-pill-row">
+      {props.options.map((option) => {
+        const active = option.id === props.value;
+        return (
+          <button
+            key={option.id}
+            type="button"
+            className={`filter-pill ${active ? "active" : ""}`}
+            onClick={() => props.onChange(option.id)}
+          >
+            <span>{option.label}</span>
+            {typeof option.count === "number" ? (
+              <span className="filter-pill-count">{option.count}</span>
+            ) : null}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+export function ChecklistSteps(props: {
+  steps: Array<{
+    id: string;
+    title: string;
+    description: string;
+    done?: boolean;
+    active?: boolean;
+    actions?: ReactNode;
+  }>;
+}) {
+  return (
+    <ol className="setup-checklist">
+      {props.steps.map((step, index) => (
+        <li
+          key={step.id}
+          className={`setup-checklist-item ${step.done ? "done" : ""} ${step.active ? "active" : ""}`}
+        >
+          <div className="setup-checklist-index">{step.done ? "OK" : index + 1}</div>
+          <div className="stack-sm" style={{ width: "100%" }}>
+            <strong>{step.title}</strong>
+            <p>{step.description}</p>
+            {step.actions ? <div className="inline-actions">{step.actions}</div> : null}
+          </div>
+        </li>
+      ))}
+    </ol>
   );
 }

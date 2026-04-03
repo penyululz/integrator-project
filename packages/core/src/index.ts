@@ -20,6 +20,8 @@ import { getCoreEnv } from "./db/env";
 import { parseEnabledAdapterSetFromEnv } from "./engine/plugin-loader";
 import { AlertDeliveryService } from "./alerts/alert-delivery-service";
 import { RetentionCleanupService } from "./retention/cleanup-service";
+import { AgentToolRegistry } from "./agents/tool-registry";
+import { InternalMcpFoundation } from "./agents/mcp-foundation";
 import {
   createObservabilityRuntime,
   type ObservabilityRuntime,
@@ -33,6 +35,8 @@ export type CoreRuntime = {
   observability: ObservabilityRuntime;
   alertDeliveryService?: AlertDeliveryService;
   retentionCleanupService?: RetentionCleanupService;
+  agentToolRegistry: AgentToolRegistry;
+  mcpFoundation: InternalMcpFoundation;
   oauthService: OAuthService;
   authService: AuthService;
   credentialResolver: CredentialResolver;
@@ -64,6 +68,13 @@ export {
 } from "./observability/alerting";
 export { AlertDeliveryService } from "./alerts/alert-delivery-service";
 export { RetentionCleanupService } from "./retention/cleanup-service";
+export { AgentToolRegistry } from "./agents/tool-registry";
+export { InternalMcpFoundation } from "./agents/mcp-foundation";
+export {
+  saveMemory,
+  getMemory,
+  injectMemoryIntoAgentContext,
+} from "./agents/memory";
 export { getRetentionConfigFromEnv } from "./retention/config";
 export type {
   AlertConfigInput,
@@ -127,6 +138,10 @@ export {
 } from "./integrations/catalog";
 export type {
   AppConnectionDefinition,
+  AppSetupGuide,
+  AppSupportModel,
+  AppReadinessTier,
+  AppCatalogCategory,
   AppSetupField,
   AppSetupFieldInputType,
   AppSetupFieldTarget,
@@ -177,6 +192,34 @@ export async function createCoreRuntime(): Promise<CoreRuntime> {
     webhook: {
       signingSecret: process.env.WEBHOOK_SIGNING_SECRET || "",
     },
+    "http-api": {
+      baseUrl: process.env.HTTP_CONNECTOR_BASE_URL || "",
+      apiKey: process.env.HTTP_CONNECTOR_API_KEY || "",
+      timeoutMs: process.env.HTTP_CONNECTOR_TIMEOUT_MS
+        ? Number(process.env.HTTP_CONNECTOR_TIMEOUT_MS)
+        : undefined,
+    },
+    scheduler: {
+      timezone: process.env.SCHEDULER_DEFAULT_TIMEZONE || "UTC",
+    },
+    graphql: {
+      endpoint: process.env.GRAPHQL_CONNECTOR_ENDPOINT || "",
+      authToken: process.env.GRAPHQL_CONNECTOR_AUTH_TOKEN || "",
+      timeoutMs: process.env.GRAPHQL_CONNECTOR_TIMEOUT_MS
+        ? Number(process.env.GRAPHQL_CONNECTOR_TIMEOUT_MS)
+        : undefined,
+    },
+    code: {
+      timeoutMs: process.env.CODE_CONNECTOR_TIMEOUT_MS
+        ? Number(process.env.CODE_CONNECTOR_TIMEOUT_MS)
+        : undefined,
+    },
+    database: {
+      supportedDialects: (process.env.DATABASE_CONNECTOR_DIALECTS || "postgres,mysql")
+        .split(",")
+        .map((value) => value.trim())
+        .filter(Boolean),
+    },
     sheets: {
       clientId: process.env.GOOGLE_CLIENT_ID || "",
       clientSecret: process.env.GOOGLE_CLIENT_SECRET || "",
@@ -193,6 +236,35 @@ export async function createCoreRuntime(): Promise<CoreRuntime> {
       redirectUri: process.env.SLACK_REDIRECT_URI || "",
       botToken: process.env.SLACK_BOT_TOKEN || "",
     },
+    telegram: {
+      botToken: process.env.TELEGRAM_BOT_TOKEN || "",
+      defaultChatId: process.env.TELEGRAM_DEFAULT_CHAT_ID || "",
+      apiBaseUrl: process.env.TELEGRAM_API_BASE_URL || "",
+    },
+    whatsapp: {
+      accessToken: process.env.WHATSAPP_ACCESS_TOKEN || "",
+      phoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID || "",
+      apiVersion: process.env.WHATSAPP_API_VERSION || "v20.0",
+      baseUrl: process.env.WHATSAPP_API_BASE_URL || "",
+    },
+    ai: {
+      apiKey: process.env.AI_API_KEY || process.env.OPENAI_API_KEY || "",
+      baseUrl: process.env.AI_BASE_URL || process.env.OPENAI_BASE_URL || "",
+      model: process.env.AI_MODEL || process.env.OPENAI_MODEL || "gpt-4o-mini",
+      timeoutMs: process.env.AI_TIMEOUT_MS
+        ? Number(process.env.AI_TIMEOUT_MS)
+        : undefined,
+    },
+    youtube: {
+      apiKey: process.env.YOUTUBE_API_KEY || "",
+      defaultChannelId: process.env.YOUTUBE_DEFAULT_CHANNEL_ID || "",
+      baseUrl: process.env.YOUTUBE_API_BASE_URL || "",
+    },
+    reddit: {
+      baseUrl: process.env.REDDIT_API_BASE_URL || "",
+      userAgent: process.env.REDDIT_USER_AGENT || "",
+      defaultSubreddit: process.env.REDDIT_DEFAULT_SUBREDDIT || "",
+    },
   });
 
   const eventQueue = new EventQueue(redis, "integration:events", observability);
@@ -207,6 +279,8 @@ export async function createCoreRuntime(): Promise<CoreRuntime> {
     retentionRepository,
     observability,
   );
+  const agentToolRegistry = new AgentToolRegistry(pluginLoader);
+  const mcpFoundation = new InternalMcpFoundation(agentToolRegistry);
   const workflowEngine = new WorkflowEngine(
     pluginLoader,
     eventQueue,
@@ -228,6 +302,8 @@ export async function createCoreRuntime(): Promise<CoreRuntime> {
     observability,
     alertDeliveryService,
     retentionCleanupService,
+    agentToolRegistry,
+    mcpFoundation,
     oauthService,
     authService,
     credentialResolver,
@@ -247,3 +323,4 @@ export async function createCoreRuntime(): Promise<CoreRuntime> {
     },
   };
 }
+

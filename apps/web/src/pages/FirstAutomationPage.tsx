@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+﻿import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   createWorkflow,
@@ -17,7 +17,15 @@ import {
   type WorkflowTemplateSummary,
 } from "../api";
 import { RunStatusBadge } from "../components/RunStatusBadge";
-import { Callout, PageHeader, ProgressSteps, StatusPill, SurfaceCard } from "../components/ui-kit";
+import {
+  Callout,
+  DemoHint,
+  LoadingInline,
+  PageHeader,
+  ProgressSteps,
+  StatusPill,
+  SurfaceCard,
+} from "../components/ui-kit";
 import {
   FIRST_AUTOMATION_TEMPLATE_ID,
   buildFirstAutomationPayload,
@@ -45,6 +53,7 @@ export function FirstAutomationPage() {
   const [testing, setTesting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [showManualTestTools, setShowManualTestTools] = useState(false);
 
   const [apps, setApps] = useState<AppConnectionRecord[]>([]);
   const [templates, setTemplates] = useState<WorkflowTemplateSummary[]>([]);
@@ -214,7 +223,7 @@ export function FirstAutomationPage() {
       <PageHeader
         eyebrow="First-Time Success"
         title="Build Your First Automation"
-        subtitle="Follow this guided flow to connect Slack, create a webhook-to-Slack automation, run a test, and verify success in minutes."
+        subtitle="Connect Slack, create a starter automation, send a test run, and confirm results in minutes."
         actions={
           <>
             <StatusPill tone={stepStatus.connectedSlack ? "success" : "info"}>
@@ -230,7 +239,11 @@ export function FirstAutomationPage() {
         }
       />
 
-      {loading ? <p>Loading wizard status...</p> : null}
+      <DemoHint>
+        Beginner flow: Connect Slack → Create starter automation → Send test run → Check results.
+      </DemoHint>
+
+      {loading ? <LoadingInline label="Loading first automation status..." /> : null}
 
       {message ? (
         <Callout tone="success" title="Great progress">
@@ -269,7 +282,7 @@ export function FirstAutomationPage() {
               done: stepStatus.hasWorkflow,
               title: "Create from template",
               description:
-                "Use the starter template so you don�t need to configure every workflow detail manually.",
+                "Use the starter template so you don’t need to configure every workflow detail manually.",
               actions: (
                 <>
                   <button
@@ -327,43 +340,58 @@ export function FirstAutomationPage() {
 
       <div className="template-grid">
         <SurfaceCard
-          title="Built-in test options"
-          subtitle="Use one-click test first. If needed, trigger manually with webhook + cURL."
+          title="Test options"
+          subtitle="Use one-click test first. Manual tools are available if needed."
         >
           <div className="stack-sm">
             <p>
               <strong>Webhook URL:</strong> <code>{webhookUrl}</code>
             </p>
-            <p>
-              <strong>Sample payload</strong>
-            </p>
-            <pre
-              style={{
-                background: "#f8fbff",
-                border: "1px solid #d2def1",
-                borderRadius: 10,
-                padding: 10,
-                overflowX: "auto",
-                margin: 0,
-              }}
-            >
+            <div className="inline-actions">
+              <button
+                type="button"
+                onClick={() => setShowManualTestTools((current) => !current)}
+              >
+                {showManualTestTools ? "Hide manual tools" : "Show manual payload/cURL"}
+              </button>
+            </div>
+
+            {showManualTestTools ? (
+              <>
+                <p>
+                  <strong>Sample payload</strong>
+                </p>
+                <pre
+                  style={{
+                    background: "#f8fbff",
+                    border: "1px solid #d2def1",
+                    borderRadius: 10,
+                    padding: 10,
+                    overflowX: "auto",
+                    margin: 0,
+                  }}
+                >
 {JSON.stringify(lastTestPayload, null, 2)}
-            </pre>
-            <p>
-              <strong>Sample cURL</strong>
-            </p>
-            <pre
-              style={{
-                background: "#f8fbff",
-                border: "1px solid #d2def1",
-                borderRadius: 10,
-                padding: 10,
-                overflowX: "auto",
-                margin: 0,
-              }}
-            >
+                </pre>
+                <p>
+                  <strong>Sample cURL</strong>
+                </p>
+                <pre
+                  style={{
+                    background: "#f8fbff",
+                    border: "1px solid #d2def1",
+                    borderRadius: 10,
+                    padding: 10,
+                    overflowX: "auto",
+                    margin: 0,
+                  }}
+                >
 {webhookCurl}
-            </pre>
+                </pre>
+              </>
+            ) : (
+              <p>Manual test helpers are available when you need custom payloads.</p>
+            )}
           </div>
         </SurfaceCard>
 
@@ -428,3 +456,4 @@ export function FirstAutomationPage() {
     </div>
   );
 }
+
