@@ -29,8 +29,12 @@ import { IntegrationsPage } from "./pages/IntegrationsPage";
 import { LoginPage } from "./pages/LoginPage";
 import { getDefaultWorkspaceRoute } from "./pages/navigation-flow-helpers";
 import { OnboardingPage } from "./pages/OnboardingPage";
+import { OrganizationPage } from "./pages/OrganizationPage";
+import { ProfilePage } from "./pages/ProfilePage";
 import { RunsPage } from "./pages/RunsPage";
 import { SettingsPage } from "./pages/SettingsPage";
+import { DocsHubPage } from "./pages/DocsHubPage";
+import { FilesPage } from "./pages/FilesPage";
 import { WorkflowsPage } from "./pages/WorkflowsPage";
 import {
   getQuickSwitchEntries,
@@ -81,6 +85,14 @@ function ShellNavIcon(props: {
       <path d="M6.4 12.2l3.2 3.2 8-8M4.8 4.8h14.4v14.4H4.8z" />
     ) : props.iconKey === "audit" ? (
       <path d="M6 5.4h12v13.2H6zM8.3 8h7.4M8.3 11h7.4M8.3 14h4.4" />
+    ) : props.iconKey === "profile" ? (
+      <path d="M12 12.1a3.4 3.4 0 1 0 0-6.8 3.4 3.4 0 0 0 0 6.8zM6.1 18.4a5.9 5.9 0 0 1 11.8 0" />
+    ) : props.iconKey === "team" ? (
+      <path d="M8.4 11.2a2.2 2.2 0 1 0 0-4.4 2.2 2.2 0 0 0 0 4.4zM15.6 11.2a2.2 2.2 0 1 0 0-4.4 2.2 2.2 0 0 0 0 4.4zM4.8 18.4a4.1 4.1 0 0 1 7.2-2.7M12 15.7a4.1 4.1 0 0 1 7.2 2.7" />
+    ) : props.iconKey === "docs" ? (
+      <path d="M7 5.6h10v12.8H7zM9.1 8.2h5.8M9.1 11h5.8M9.1 13.8h4" />
+    ) : props.iconKey === "files" ? (
+      <path d="M5.4 8.2h13.2v10.2H5.4zM5.4 8.2l2.6-2.8h4.2l2.2 2.8" />
     ) : (
       <path d="M12 5.2l1.1 2.2 2.5.4-1.8 1.7.4 2.5-2.2-1.2-2.2 1.2.4-2.5-1.8-1.7 2.5-.4zM5.6 13.4h12.8v4.6H5.6z" />
     );
@@ -403,6 +415,10 @@ function WorkspaceShell(props: {
                 <Route path="/approvals" element={<ApprovalsPage />} />
                 <Route path="/alerts" element={<AlertSettingsPage />} />
                 <Route path="/settings" element={<SettingsPage />} />
+                <Route path="/profile" element={<ProfilePage />} />
+                <Route path="/organization" element={<OrganizationPage />} />
+                <Route path="/docs" element={<DocsHubPage />} />
+                <Route path="/files" element={<FilesPage />} />
                 <Route path="*" element={<Navigate to={getDefaultWorkspaceRoute()} replace />} />
               </Routes>
             </div>

@@ -26,6 +26,18 @@ React operational UI for:
   - `apps/web` keeps locked stack runtime (`@xyflow/react`, TanStack Query, React Router)
   - visual patterns are adopted; API/runtime contracts remain monorepo-owned
 
+### Canonical Surface Coverage (current)
+
+- core runtime-integrated surfaces:
+  - `/dashboard`, `/onboarding`, `/first-automation`
+  - `/integrations`, `/workflows`
+  - `/runs`, `/alerts`, `/audit-logs`, `/approvals`
+- absorbed future-facing workspace surfaces (UI-ready, runtime-light):
+  - `/settings`, `/profile`, `/organization`, `/docs`, `/files`
+- source-of-truth:
+  - `apps/web` is the active frontend working area
+  - `integrator-platform` is retained as absorbed reference history
+
 ## Phase 2 Experience Layer
 
 Current UX direction in web app:

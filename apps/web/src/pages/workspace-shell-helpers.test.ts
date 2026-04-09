@@ -41,6 +41,8 @@ describe("workspace-shell-helpers", () => {
     expect(flattenedMember).not.toContain("/approvals");
     expect(flattenedMember).not.toContain("/audit-logs");
     expect(flattenedMember).toContain("/settings");
+    expect(flattenedMember).toContain("/profile");
+    expect(flattenedMember).toContain("/docs");
 
     const operatorGroups = getVisibleWorkspaceNavGroups({ isOperator: true });
     const flattenedOperator = operatorGroups.flatMap((group) => group.items.map((item) => item.to));
@@ -72,6 +74,7 @@ describe("workspace-shell-helpers", () => {
 
   it("provides route context and quick switch entries", () => {
     expect(getWorkspaceRouteContext("/runs").title).toBe("Runs");
+    expect(getWorkspaceRouteContext("/docs").section).toBe("settings");
     expect(getWorkspaceRouteContext("/unknown").title).toBe("Dashboard");
 
     const entries = getQuickSwitchEntries({ isOperator: false });

@@ -7,6 +7,10 @@ export const STABLE_WORKSPACE_ROUTES = {
   audit: "/audit-logs",
   approvals: "/approvals",
   settings: "/settings",
+  profile: "/profile",
+  organization: "/organization",
+  docs: "/docs",
+  files: "/files",
 } as const;
 
 export function getDefaultWorkspaceRoute(): string {

@@ -55,6 +55,38 @@ Compatibility classification:
   - catalog/list/detail visual treatment
   - builder palette/canvas/inspector interaction cues
 
+### Full UI-System Adoption Progress (latest migration pass)
+
+- already migrated (kept and refined in `apps/web`):
+  - persistent shell + grouped navigation + quick switch
+  - dashboard + onboarding + first automation flow
+  - workflows list + visual builder shell
+  - integrations catalog and setup flow
+  - runs, alerts, audit, approvals consoles
+- newly migrated in this pass:
+  - settings console expansion (`/settings`)
+  - profile surface (`/profile`)
+  - organization surface (`/organization`)
+  - docs hub (`/docs`)
+  - files surface (`/files`)
+  - unified nav/context metadata for these routes
+  - shared future-workspace helpers with mode-aware fixture data
+- preserved from existing `apps/web` runtime:
+  - React Router route structure
+  - TanStack Query server-state boundaries
+  - Zustand local UI state boundaries
+  - `@xyflow/react` builder runtime
+  - Prototype Mode and Live Mode contract-aware API integration
+- adapted from `integrator-platform`:
+  - list/detail knowledge and asset UX patterns
+  - profile/organization workspace framing
+  - future-facing collaboration-style surfaces as runtime-light pages
+- deferred for later phases:
+  - full rich editors/collaboration stack from `integrator-platform` (docs/files/chat realtime internals)
+  - deep storage and document backend services (UI is ready, runtime intentionally light)
+
+`apps/web` is now the canonical frontend implementation path. `integrator-platform` remains in-repo as absorbed reference history and can be removed after final cleanup verification.
+
 ## Development Modes
 
 - `Prototype Mode`: fake seeded data and simulated flows for local testing, UI review, and demos without real external setup.

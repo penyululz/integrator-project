@@ -12,7 +12,11 @@ export type WorkspaceNavIconKey =
   | "alerts"
   | "approvals"
   | "audit"
-  | "settings";
+  | "settings"
+  | "profile"
+  | "team"
+  | "docs"
+  | "files";
 
 export type WorkspaceNavItem = {
   key: string;
@@ -133,6 +137,38 @@ const NAV_ITEMS: WorkspaceNavItem[] = [
     hint: "Workspace and profile",
     group: "settings",
     iconKey: "settings",
+  },
+  {
+    key: "profile",
+    to: "/profile",
+    label: "Profile",
+    hint: "Personal account",
+    group: "settings",
+    iconKey: "profile",
+  },
+  {
+    key: "organization",
+    to: "/organization",
+    label: "Organization",
+    hint: "Members and teams",
+    group: "settings",
+    iconKey: "team",
+  },
+  {
+    key: "docs",
+    to: "/docs",
+    label: "Docs",
+    hint: "Runbooks and notes",
+    group: "settings",
+    iconKey: "docs",
+  },
+  {
+    key: "files",
+    to: "/files",
+    label: "Files",
+    hint: "Shared assets",
+    group: "settings",
+    iconKey: "files",
   },
 ];
 
@@ -305,6 +341,50 @@ export function getWorkspaceRouteContext(pathname: string): WorkspaceRouteContex
         "Manage workspace preferences, profile context, and environment guidance without leaving the product shell.",
       primaryActionLabel: "Review settings",
       primaryActionTo: "/settings",
+    };
+  }
+
+  if (pathname.startsWith("/profile")) {
+    return {
+      section: "settings",
+      title: "Profile",
+      description:
+        "Manage personal account details, session trust posture, and profile-level collaboration defaults.",
+      primaryActionLabel: "Update profile",
+      primaryActionTo: "/profile",
+    };
+  }
+
+  if (pathname.startsWith("/organization")) {
+    return {
+      section: "settings",
+      title: "Organization",
+      description:
+        "Review workspace members, teams, and access readiness across governance and approval flows.",
+      primaryActionLabel: "Open organization",
+      primaryActionTo: "/organization",
+    };
+  }
+
+  if (pathname.startsWith("/docs")) {
+    return {
+      section: "settings",
+      title: "Docs",
+      description:
+        "Browse workspace runbooks, playbooks, and notes that support setup, operations, and governance continuity.",
+      primaryActionLabel: "Open docs",
+      primaryActionTo: "/docs",
+    };
+  }
+
+  if (pathname.startsWith("/files")) {
+    return {
+      section: "settings",
+      title: "Files",
+      description:
+        "Access shared payload assets, exports, and operational files with dense list/table and card views.",
+      primaryActionLabel: "Open files",
+      primaryActionTo: "/files",
     };
   }
 

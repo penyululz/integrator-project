@@ -11,7 +11,9 @@ describe("navigation-flow-helpers", () => {
   it("exposes stable route constants for shell navigation", () => {
     expect(getDefaultWorkspaceRoute()).toBe("/dashboard");
     expect(STABLE_WORKSPACE_ROUTES.workflows).toBe("/workflows");
+    expect(STABLE_WORKSPACE_ROUTES.docs).toBe("/docs");
     expect(isKnownWorkspaceRoute("/runs")).toBe(true);
+    expect(isKnownWorkspaceRoute("/files")).toBe(true);
     expect(isKnownWorkspaceRoute("/runs/abc")).toBe(true);
     expect(isKnownWorkspaceRoute("/external")).toBe(false);
   });
