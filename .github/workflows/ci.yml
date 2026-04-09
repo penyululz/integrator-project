@@ -1,4 +1,7 @@
 name: CI
+# CI/CD: GitHub Actions
+# STACK LOCK: repository CI remains GitHub Actions while runtime stack transitions to locked targets.
+# DEPLOY: Docker Compose + Traefik deployment flow is documented in README and validated manually for OSS self-host.
 
 on:
   push:
