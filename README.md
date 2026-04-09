@@ -416,6 +416,19 @@ npm run dev:local
 - API health: `http://localhost:4000/api/v1/health`
 - Metrics: `http://localhost:4000/metrics`
 
+### Local Testing Commands (Phase 3C)
+
+- `Prototype Mode` runtime checks:
+  - `npm run test:local:prototype`
+  - validates env + DB/Redis connectivity + contract smoke checks (`/health`, `/auth/me`, `/workflows`, `/integrations`, `/runs`, `/alerts/config`, `/audit-logs`)
+- `Live Mode` runtime checks:
+  1. set `INTEGRATOR_MODE="Live Mode"` and `VITE_INTEGRATOR_MODE="Live Mode"` in root `.env`
+  2. keep API/worker/web running (`npm run dev:live` or compose stack)
+  3. run `npm run test:local:live`
+- direct smoke commands:
+  - `npm run smoke:prototype`
+  - `npm run smoke:live`
+
 ### Compose-Only Startup (local or VPS-friendly)
 
 Without Traefik:
@@ -441,6 +454,17 @@ Routing with Traefik profile:
 When using Traefik routing in containers, set:
 
 - `VITE_API_BASE_URL=http://localhost/api/v1`
+
+Quick local deployment commands:
+
+- start stack without domain/proxy first:
+  - `npm run stack:up`
+- inspect running containers:
+  - `npm run stack:ps`
+- stream API/worker/web logs:
+  - `npm run stack:logs`
+- stop stack:
+  - `npm run stack:down`
 
 VPS baseline expectations for Live Mode:
 
@@ -476,6 +500,19 @@ VPS baseline expectations for Live Mode:
    - `SHOPIFY_CLIENT_ID` / `SHOPIFY_CLIENT_SECRET`
    - `SLACK_CLIENT_ID` / `SLACK_CLIENT_SECRET`
 5. Start PostgreSQL + Redis, run migrations, then start API + worker + web.
+
+### What Can Be Tested Locally (No Public Domain Required)
+
+- end-to-end product UX in `Prototype Mode` (onboarding, first-success, builder, runs, alerts, audit, approvals)
+- local `Live Mode` auth + API contracts + queue/worker behavior
+- local app setup flows for API-key/token based integrations
+- workflow execution using local/webhook-triggered test runs from UI and API
+
+### What Still Requires External/Public Setup
+
+- OAuth provider callbacks that require a publicly reachable callback URL and registered app config (for example Slack/Google/Shopify in strict provider environments)
+- inbound webhooks from third-party SaaS systems that cannot reach `localhost`
+- production-grade TLS, public DNS, and internet-facing reverse proxy hardening
 
 ### Environment Variable Groups
 

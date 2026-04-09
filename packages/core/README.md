@@ -51,9 +51,26 @@ Phase 2 adds usability and guided flows in `apps/web` while preserving core runt
 npm run migrate -w @integration/core
 npm run seed -w @integration/core
 npm run verify:setup -w @integration/core
+npm run smoke:prototype -w @integration/core
+npm run smoke:live -w @integration/core
 npm run create:adapter -w @integration/core -- --name my-adapter
 npm run reencrypt:credentials -w @integration/core
 ```
+
+### Local Smoke Notes
+
+- `smoke:prototype` checks local API contract readiness in `Prototype Mode`.
+- `smoke:live` checks local API contract readiness in `Live Mode` using login credentials.
+- Default credentials/scope for local live smoke:
+  - `admin@example.com` / `dev-password`
+  - `organizationSlug=prototype-org`
+  - `workspaceSlug=default`
+- Override with env vars:
+  - `LOCAL_API_BASE_URL`
+  - `LOCAL_LOGIN_EMAIL`
+  - `LOCAL_LOGIN_PASSWORD`
+  - `LOCAL_ORG_SLUG`
+  - `LOCAL_WORKSPACE_SLUG`
 
 ## Environment Reference
 

@@ -21,6 +21,7 @@
     "dev": "concurrently \"npm run dev -w @integration/api\" \"npm run dev -w @integration/web\"",
     "dev:local": "concurrently \"npm run dev -w @integration/api\" \"npm run worker -w @integration/api\" \"npm run dev -w @integration/web\"",
     "dev:prototype": "npm run dev:local",
+    "dev:live": "npm run dev:local",
     "lint": "npm run --workspaces lint",
     "test": "npm run --workspaces test",
     "verify:setup": "npm run verify:setup -w @integration/core",
@@ -28,7 +29,14 @@
     "seed": "npm run seed -w @integration/core",
     "start:api": "npm run start -w @integration/api",
     "start:web": "npm run start -w @integration/web",
-    "start:worker": "npm run worker -w @integration/api"
+    "start:worker": "npm run worker -w @integration/api",
+    "smoke:prototype": "npm run smoke:prototype -w @integration/core",
+    "smoke:live": "npm run smoke:live -w @integration/core",
+    "test:local:prototype": "npm run verify:setup && npm run smoke:prototype",
+    "test:local:live": "npm run verify:setup && npm run smoke:live",
+    "stack:ps": "docker compose ps",
+    "stack:logs": "docker compose logs -f api worker web",
+    "stack:down": "docker compose down"
   },
   "engines": {
     "node": ">=20.0.0"

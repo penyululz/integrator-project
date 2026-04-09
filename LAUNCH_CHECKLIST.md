@@ -6,12 +6,15 @@ Use this before tagging a public release.
 
 - [ ] `npm install`
 - [ ] `npm run setup:local` completes
+- [ ] `npm run test:local:prototype` passes
+- [ ] `npm run test:local:live` passes (with `INTEGRATOR_MODE="Live Mode"`)
 
 ## Service Health
 
 - [ ] services running (`npm run dev:local`)
 - [ ] `GET /api/v1/health` works
 - [ ] `GET /metrics` works
+- [ ] `npm run stack:up` works without domain/proxy setup first
 
 ## Product Smoke Path
 
