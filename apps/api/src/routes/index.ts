@@ -10,14 +10,23 @@ import {
   validateWorkflowDefinition,
   type CoreRuntime,
 } from "@integration/core";
-import { redactSensitiveRecord } from "@integration/shared";
+import {
+  PLATFORM_MODES,
+  redactSensitiveRecord,
+  resolvePlatformModeFromEnv,
+  type PlatformMode,
+  type PlatformModeSource,
+  type StandardListResult,
+} from "@integration/shared";
 import { requireAuth, requireRole } from "../middleware/auth";
 import {
   buildApprovalDeniedRunResult,
   canQueueApprovalContinuation,
   mergeApprovedToolIdsIntoRetryPayload,
 } from "./approval-workflow";
+import { createPrototypeModeApi } from "./prototype-mode";
 import {
+  alertDeliveryLogsQuerySchema,
   agentApprovalsQuerySchema,
   agentMemoryQuerySchema,
   approvalDecisionSchema,
@@ -28,6 +37,7 @@ import {
   analyticsQuerySchema,
   auditLogsQuerySchema,
   createIntegrationSchema,
+  integrationsListQuerySchema,
   createWorkspaceSchema,
   createWorkflowSchema,
   devLoginSchema,
@@ -35,15 +45,22 @@ import {
   oauthCallbackSchema,
   oauthStartSchema,
   operatorNoteSchema,
+  normalizeListQueryParams,
   runReplaySchema,
+  runsListQuerySchema,
   upsertCredentialSchema,
   upsertAgentMemorySchema,
   validateWorkflowSchema,
+  workflowsListQuerySchema,
   workflowTestRunSchema,
   waitRescheduleSchema,
   webhookSchema,
 } from "../schemas";
 
+// MODE: Prototype Mode | Live Mode
+// SHARED BETWEEN PROTOTYPE AND LIVE
+// KEEP CONTRACT SHAPE IN SYNC
+// USED FOR LOCAL DEMO / UI ITERATION
 function resolveRouteParam(value: string | string[]): string {
   return Array.isArray(value) ? value[0] : value;
 }
@@ -63,11 +80,46 @@ function createHttpError(statusCode: number, message: string): Error & { statusC
   return error;
 }
 
+type ApiRouterOptions = {
+  platformMode?: PlatformMode;
+  platformModeSource?: PlatformModeSource;
+};
+
+function normalizeListQueryRecord(
+  query: Record<string, unknown>,
+): Record<string, unknown> {
+  return normalizeListQueryParams(query);
+}
+
+function toStandardListEnvelope<Row>(result: StandardListResult<Row>) {
+  return {
+    rows: result.rows,
+    nextCursor: result.nextCursor,
+    totalApprox: result.totalApprox,
+    appliedFilters: result.appliedFilters,
+    appliedSorts: result.appliedSorts,
+    pagination: {
+      page: result.page,
+      limit: result.limit,
+      total: result.totalApprox,
+      hasMore: result.hasMore,
+      nextCursor: result.nextCursor,
+    },
+  };
+}
+
 function requireAlertService(runtime: CoreRuntime) {
   if (!runtime.alertDeliveryService) {
     throw createHttpError(503, "Alert delivery service is unavailable.");
   }
   return runtime.alertDeliveryService;
+}
+
+function requireAlertRepository(runtime: CoreRuntime) {
+  if (!runtime.repositories.alertRepository) {
+    throw createHttpError(503, "Alert repository is unavailable.");
+  }
+  return runtime.repositories.alertRepository;
 }
 
 function requireRetentionCleanupService(runtime: CoreRuntime) {
@@ -295,8 +347,30 @@ function mapAppConnectionStatus(input: {
   return "not_connected";
 }
 
-export function createApiRouter(runtime: CoreRuntime): Router {
+export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions = {}): Router {
+  const modeResolution = resolvePlatformModeFromEnv(
+    process.env as Record<string, string | undefined>,
+  );
+  const platformMode =
+    options.platformMode ||
+    (modeResolution.source === "default"
+      ? PLATFORM_MODES.LIVE
+      : modeResolution.mode);
+  const platformModeSource = options.platformModeSource || modeResolution.source;
   const router = Router();
+  // PROTOTYPE MODE ONLY
+  // CONTRACT-COMPATIBLE fallback for local UI iteration while preserving Live route shape.
+  const prototypeApi =
+    platformMode === PLATFORM_MODES.PROTOTYPE ? createPrototypeModeApi() : null;
+
+  if (prototypeApi) {
+    // PROTOTYPE MODE ONLY
+    // SHARED route guards still execute; auth context is seeded for local demo.
+    router.use((req, _res, next) => {
+      req.auth = prototypeApi.getAuthContext(req.auth?.token);
+      next();
+    });
+  }
 
   async function listAppsForScope(scope: {
     tenantId: string;
@@ -403,12 +477,36 @@ export function createApiRouter(runtime: CoreRuntime): Router {
   }
 
   router.get("/health", (_req, res) => {
-    res.json({ status: "ok" });
+    const queueRuntime = runtime.eventQueue.getRuntimeState();
+    // MODE: Prototype Mode | Live Mode
+    // DO NOT MIX PROTOTYPE STATUS WITH LIVE RUNTIME STATUS
+    res.json({
+      status: "ok",
+      mode: platformMode,
+      modeSource: platformModeSource,
+      queue: {
+        activeDriver: queueRuntime.activeDriver,
+        configuredDriver: queueRuntime.configuredDriver,
+        usingFallback: queueRuntime.usingFallback,
+        queueKey: queueRuntime.queueKey,
+      },
+    });
   });
 
   router.post("/auth/login", async (req, res, next) => {
     try {
       const body = loginSchema.parse(req.body);
+      if (prototypeApi) {
+        // PROTOTYPE MODE API RESPONSE
+        // CONTRACT-COMPATIBLE PROTOTYPE DATA
+        // LIVE ROUTE SHAPE PRESERVED
+        const session = prototypeApi.login({
+          organizationSlug: body.organizationSlug,
+          workspaceSlug: body.workspaceSlug,
+        });
+        res.status(200).json(session);
+        return;
+      }
       const session = await runtime.authService.login(body);
       res.status(200).json(session);
     } catch (error) {
@@ -418,6 +516,16 @@ export function createApiRouter(runtime: CoreRuntime): Router {
 
   router.post("/auth/dev-login", async (req, res, next) => {
     try {
+      if (prototypeApi) {
+        const body = devLoginSchema.parse(req.body || {});
+        const session = prototypeApi.devLogin({
+          organizationSlug: body.organizationSlug,
+          workspaceSlug: body.workspaceSlug,
+        });
+        res.status(200).json(session);
+        return;
+      }
+
       if (!runtime.authService.isDevLoginEnabled()) {
         res.status(404).json({ error: "Not found." });
         return;
@@ -433,6 +541,10 @@ export function createApiRouter(runtime: CoreRuntime): Router {
 
   router.get("/auth/me", requireAuth, async (req, res, next) => {
     try {
+      if (prototypeApi) {
+        res.json(prototypeApi.me());
+        return;
+      }
       const workspaces = await runtime.authService.listAccessibleWorkspaces({
         userId: req.auth!.user.id,
         organizationId: req.auth!.scope.organizationId,
@@ -453,6 +565,12 @@ export function createApiRouter(runtime: CoreRuntime): Router {
 
   router.get("/workspaces", requireAuth, async (req, res, next) => {
     try {
+      if (prototypeApi) {
+        res.json({
+          workspaces: prototypeApi.workspaces(),
+        });
+        return;
+      }
       const workspaces = await runtime.authService.listAccessibleWorkspaces({
         userId: req.auth!.user.id,
         organizationId: req.auth!.scope.organizationId,
@@ -497,6 +615,12 @@ export function createApiRouter(runtime: CoreRuntime): Router {
 
   router.get("/apps", requireAuth, async (req, res, next) => {
     try {
+      if (prototypeApi) {
+        res.json({
+          apps: prototypeApi.apps(),
+        });
+        return;
+      }
       const scope = req.auth!.scope;
       const apps = await listAppsForScope({
         tenantId: scope.tenantId,
@@ -511,12 +635,31 @@ export function createApiRouter(runtime: CoreRuntime): Router {
 
   router.get("/integrations", requireAuth, async (req, res, next) => {
     try {
+      const query = integrationsListQuerySchema.parse({
+        ...normalizeListQueryRecord(req.query as Record<string, unknown>),
+        adapterKey: resolveOptionalQueryParam(
+          req.query.adapterKey as string | string[] | undefined,
+        ),
+        status: resolveOptionalQueryParam(req.query.status as string | string[] | undefined),
+      });
+      if (prototypeApi) {
+        const result = prototypeApi.integrations(query);
+        res.json({
+          ...toStandardListEnvelope(result.result),
+          integrations: result.result.rows,
+          adapters: result.adapters,
+          credentialStatusByProvider: result.credentialStatusByProvider,
+        });
+        return;
+      }
       const scope = req.auth!.scope;
-      const [integrations, credentials] = await Promise.all([
-        runtime.repositories.integrationRepository.list({
+
+      const [integrationResult, credentials] = await Promise.all([
+        runtime.repositories.integrationRepository.listWithQuery({
           tenantId: scope.tenantId,
           organizationId: scope.organizationId,
           workspaceId: scope.workspaceId,
+          query,
         }),
         runtime.repositories.credentialRepository.list({
           tenantId: scope.tenantId,
@@ -534,7 +677,8 @@ export function createApiRouter(runtime: CoreRuntime): Router {
       );
 
       res.json({
-        integrations,
+        ...toStandardListEnvelope(integrationResult),
+        integrations: integrationResult.rows,
         adapters: adapterMetadata.map((adapter) => adapter.key),
         credentialStatusByProvider,
       });
@@ -1083,12 +1227,23 @@ export function createApiRouter(runtime: CoreRuntime): Router {
   router.get("/workflows", requireAuth, async (req, res, next) => {
     try {
       const scope = req.auth!.scope;
-      const workflows = await runtime.repositories.workflowRepository.list({
+      const query = workflowsListQuerySchema.parse({
+        ...normalizeListQueryRecord(req.query as Record<string, unknown>),
+        status: resolveOptionalQueryParam(req.query.status as string | string[] | undefined),
+        triggerAdapter: resolveOptionalQueryParam(
+          req.query.triggerAdapter as string | string[] | undefined,
+        ),
+      });
+      const result = await runtime.repositories.workflowRepository.listWithQuery({
         tenantId: scope.tenantId,
         organizationId: scope.organizationId,
         workspaceId: scope.workspaceId,
+        query,
       });
-      res.json({ workflows });
+      res.json({
+        ...toStandardListEnvelope(result),
+        workflows: result.rows,
+      });
     } catch (error) {
       next(error);
     }
@@ -1260,24 +1415,96 @@ export function createApiRouter(runtime: CoreRuntime): Router {
     requireRole(["owner", "admin"]),
     async (req, res, next) => {
       try {
+        const query = alertDeliveryLogsQuerySchema.parse({
+          ...normalizeListQueryRecord(req.query as Record<string, unknown>),
+          eventType: resolveOptionalQueryParam(
+            req.query.eventType as string | string[] | undefined,
+          ),
+          severity: resolveOptionalQueryParam(
+            req.query.severity as string | string[] | undefined,
+          ),
+          status: resolveOptionalQueryParam(req.query.status as string | string[] | undefined),
+          channel: resolveOptionalQueryParam(req.query.channel as string | string[] | undefined),
+          from: resolveOptionalQueryParam(req.query.from as string | string[] | undefined),
+          to: resolveOptionalQueryParam(req.query.to as string | string[] | undefined),
+        });
+        if (prototypeApi) {
+          const payload = prototypeApi.alertsConfig(query);
+          res.json({
+            config: payload.config,
+            ...toStandardListEnvelope(payload.listResult),
+            deliveryLogs: payload.listResult.rows,
+          });
+          return;
+        }
         const scope = req.auth!.scope;
         const alertService = requireAlertService(runtime);
-        const [config, deliveryLogs] = await Promise.all([
+        const alertRepository = requireAlertRepository(runtime);
+
+        const [config, deliveryLogResult] = await Promise.all([
           alertService.getConfig({
             tenantId: scope.tenantId,
             organizationId: scope.organizationId,
             workspaceId: scope.workspaceId,
           }),
-          alertService.getRecentDeliveryLogs({
+          alertRepository.listDeliveryLogs({
             tenantId: scope.tenantId,
             organizationId: scope.organizationId,
             workspaceId: scope.workspaceId,
+            query,
           }),
         ]);
 
         res.json({
           config,
-          deliveryLogs,
+          ...toStandardListEnvelope(deliveryLogResult),
+          deliveryLogs: deliveryLogResult.rows,
+        });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.get(
+    "/alerts/delivery-logs",
+    requireRole(["owner", "admin"]),
+    async (req, res, next) => {
+      try {
+        const query = alertDeliveryLogsQuerySchema.parse({
+          ...normalizeListQueryRecord(req.query as Record<string, unknown>),
+          eventType: resolveOptionalQueryParam(
+            req.query.eventType as string | string[] | undefined,
+          ),
+          severity: resolveOptionalQueryParam(
+            req.query.severity as string | string[] | undefined,
+          ),
+          status: resolveOptionalQueryParam(req.query.status as string | string[] | undefined),
+          channel: resolveOptionalQueryParam(req.query.channel as string | string[] | undefined),
+          from: resolveOptionalQueryParam(req.query.from as string | string[] | undefined),
+          to: resolveOptionalQueryParam(req.query.to as string | string[] | undefined),
+        });
+        if (prototypeApi) {
+          const result = prototypeApi.alertDeliveryLogs(query);
+          res.json({
+            ...toStandardListEnvelope(result),
+            deliveryLogs: result.rows,
+          });
+          return;
+        }
+        const scope = req.auth!.scope;
+        const alertRepository = requireAlertRepository(runtime);
+
+        const result = await alertRepository.listDeliveryLogs({
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+          query,
+        });
+
+        res.json({
+          ...toStandardListEnvelope(result),
+          deliveryLogs: result.rows,
         });
       } catch (error) {
         next(error);
@@ -1291,6 +1518,11 @@ export function createApiRouter(runtime: CoreRuntime): Router {
     async (req, res, next) => {
       try {
         const body = alertConfigSchema.parse(req.body || {});
+        if (prototypeApi) {
+          const config = prototypeApi.updateAlertsConfig(body, req.auth!.user.id);
+          res.status(200).json({ config });
+          return;
+        }
         const scope = req.auth!.scope;
         const actor = req.auth!.user;
         const alertService = requireAlertService(runtime);
@@ -1334,6 +1566,17 @@ export function createApiRouter(runtime: CoreRuntime): Router {
     async (req, res, next) => {
       try {
         const body = alertTestSchema.parse(req.body || {});
+        if (prototypeApi) {
+          const result = prototypeApi.sendTestAlert(
+            {
+              message: body.message,
+              severity: body.severity,
+            },
+            req.auth!.user.id,
+          );
+          res.status(202).json(result);
+          return;
+        }
         const scope = req.auth!.scope;
         const actor = req.auth!.user;
         const alertService = requireAlertService(runtime);
@@ -1506,13 +1749,35 @@ export function createApiRouter(runtime: CoreRuntime): Router {
 
   router.get("/runs", requireAuth, async (req, res, next) => {
     try {
+      const query = runsListQuerySchema.parse({
+        ...normalizeListQueryRecord(req.query as Record<string, unknown>),
+        workflowId: resolveOptionalQueryParam(
+          req.query.workflowId as string | string[] | undefined,
+        ),
+        status: resolveOptionalQueryParam(req.query.status as string | string[] | undefined),
+        from: resolveOptionalQueryParam(req.query.from as string | string[] | undefined),
+        to: resolveOptionalQueryParam(req.query.to as string | string[] | undefined),
+      });
+      if (prototypeApi) {
+        const result = prototypeApi.runs(query);
+        res.json({
+          ...toStandardListEnvelope(result),
+          runs: result.rows,
+        });
+        return;
+      }
       const scope = req.auth!.scope;
-      const runs = await runtime.repositories.runRepository.listRuns({
+
+      const result = await runtime.repositories.runRepository.listRunsWithQuery({
         tenantId: scope.tenantId,
         organizationId: scope.organizationId,
         workspaceId: scope.workspaceId,
+        query,
       });
-      res.json({ runs });
+      res.json({
+        ...toStandardListEnvelope(result),
+        runs: result.rows,
+      });
     } catch (error) {
       next(error);
     }
@@ -1521,6 +1786,18 @@ export function createApiRouter(runtime: CoreRuntime): Router {
   router.get("/runs/:runId", requireAuth, async (req, res, next) => {
     try {
       const runId = resolveRouteParam(req.params.runId);
+      if (prototypeApi) {
+        const run = prototypeApi.run(runId);
+        if (!run) {
+          res.status(404).json({ error: "Not found." });
+          return;
+        }
+        res.json({
+          run,
+          timeline: prototypeApi.runTimeline(run.id),
+        });
+        return;
+      }
       const scope = req.auth!.scope;
       const run = await runtime.repositories.runRepository.findRunByIdScoped({
         runId,
@@ -1532,7 +1809,17 @@ export function createApiRouter(runtime: CoreRuntime): Router {
         res.status(404).json({ error: "Not found." });
         return;
       }
-      res.json({ run });
+
+      const timeline = await runtime.repositories.runRepository.listRunTimeline({
+        tenantId: scope.tenantId,
+        organizationId: scope.organizationId,
+        workspaceId: scope.workspaceId,
+        runId: run.id,
+      });
+      res.json({
+        run,
+        timeline,
+      });
     } catch (error) {
       next(error);
     }
@@ -1843,8 +2130,8 @@ export function createApiRouter(runtime: CoreRuntime): Router {
     requireRole(["owner", "admin"]),
     async (req, res, next) => {
       try {
-        const scope = req.auth!.scope;
         const query = agentApprovalsQuerySchema.parse({
+          ...normalizeListQueryRecord(req.query as Record<string, unknown>),
           runId: resolveOptionalQueryParam(
             req.query.runId as string | string[] | undefined,
           ),
@@ -1859,32 +2146,43 @@ export function createApiRouter(runtime: CoreRuntime): Router {
           ),
           from: resolveOptionalQueryParam(req.query.from as string | string[] | undefined),
           to: resolveOptionalQueryParam(req.query.to as string | string[] | undefined),
-          page: resolveOptionalQueryParam(req.query.page as string | string[] | undefined),
-          limit: resolveOptionalQueryParam(req.query.limit as string | string[] | undefined),
         });
+        if (prototypeApi) {
+          const result = prototypeApi.approvals(query);
+          res.json({
+            ...toStandardListEnvelope(result),
+            approvals: result.rows,
+          });
+          return;
+        }
+        const scope = req.auth!.scope;
 
-        const result = await runtime.repositories.runRepository.listAgentToolApprovals({
+        const result = await runtime.repositories.runRepository.listAgentToolApprovalsWithQuery({
           tenantId: scope.tenantId,
           organizationId: scope.organizationId,
           workspaceId: scope.workspaceId,
-          runId: query.runId,
-          actorUserId: query.actorUserId,
-          toolId: query.toolId,
-          status: query.status,
-          from: query.from,
-          to: query.to,
-          page: query.page,
-          limit: query.limit,
+          query: {
+            runId: query.runId,
+            actorUserId: query.actorUserId,
+            toolId: query.toolId,
+            status: query.status,
+            from: query.from,
+            to: query.to,
+            cursor: query.cursor,
+            page: query.page,
+            limit: query.limit,
+            search: query.search,
+            sort: query.sort,
+            filterGroup: query.filterGroup,
+          },
         });
 
         res.json({
-          approvals: result.approvals.map((entry) => mapAgentApprovalForResponse(entry)),
-          pagination: {
-            page: result.page,
-            limit: result.limit,
-            total: result.total,
-            hasMore: result.hasMore,
-          },
+          ...toStandardListEnvelope({
+            ...result,
+            rows: result.rows.map((entry) => mapAgentApprovalForResponse(entry)),
+          }),
+          approvals: result.rows.map((entry) => mapAgentApprovalForResponse(entry)),
         });
       } catch (error) {
         next(error);
@@ -1897,8 +2195,17 @@ export function createApiRouter(runtime: CoreRuntime): Router {
     requireRole(["owner", "admin"]),
     async (req, res, next) => {
       try {
-        const scope = req.auth!.scope;
         const approvalId = resolveRouteParam(req.params.approvalId);
+        if (prototypeApi) {
+          const approval = prototypeApi.approval(approvalId);
+          if (!approval) {
+            res.status(404).json({ error: "Not found." });
+            return;
+          }
+          res.json({ approval });
+          return;
+        }
+        const scope = req.auth!.scope;
         const approval =
           await runtime.repositories.runRepository.findAgentToolApprovalByIdScoped({
             approvalId,
@@ -1927,6 +2234,19 @@ export function createApiRouter(runtime: CoreRuntime): Router {
       try {
         const approvalId = resolveRouteParam(req.params.approvalId);
         const body = approvalDecisionSchema.parse(req.body || {});
+        if (prototypeApi) {
+          const outcome = prototypeApi.approveApproval({
+            approvalId,
+            actorUserId: req.auth!.user.id,
+            note: body.note,
+          });
+          if (!outcome) {
+            res.status(404).json({ error: "Not found." });
+            return;
+          }
+          res.status(outcome.changed ? 200 : 202).json(outcome);
+          return;
+        }
         const scope = req.auth!.scope;
         const user = req.auth!.user;
         const decision =
@@ -2104,6 +2424,19 @@ export function createApiRouter(runtime: CoreRuntime): Router {
       try {
         const approvalId = resolveRouteParam(req.params.approvalId);
         const body = approvalDecisionSchema.parse(req.body || {});
+        if (prototypeApi) {
+          const outcome = prototypeApi.denyApproval({
+            approvalId,
+            actorUserId: req.auth!.user.id,
+            note: body.note,
+          });
+          if (!outcome) {
+            res.status(404).json({ error: "Not found." });
+            return;
+          }
+          res.status(outcome.changed ? 200 : 202).json(outcome);
+          return;
+        }
         const scope = req.auth!.scope;
         const user = req.auth!.user;
         const decision =
@@ -2492,6 +2825,10 @@ export function createApiRouter(runtime: CoreRuntime): Router {
 
   router.get("/retries", requireAuth, async (req, res, next) => {
     try {
+      if (prototypeApi) {
+        res.json({ retries: prototypeApi.retries() });
+        return;
+      }
       const scope = req.auth!.scope;
       const retries = await runtime.repositories.runRepository.listRetryJobs({
         tenantId: scope.tenantId,
@@ -2506,10 +2843,16 @@ export function createApiRouter(runtime: CoreRuntime): Router {
 
   router.get("/delays", requireAuth, async (req, res, next) => {
     try {
-      const scope = req.auth!.scope;
       const runId = resolveOptionalQueryParam(
         req.query.runId as string | string[] | undefined,
       );
+      if (prototypeApi) {
+        res.json({
+          delays: prototypeApi.waits({ runId }),
+        });
+        return;
+      }
+      const scope = req.auth!.scope;
       const delays = await runtime.repositories.runRepository.listScheduledWaits({
         tenantId: scope.tenantId,
         organizationId: scope.organizationId,
@@ -2524,13 +2867,22 @@ export function createApiRouter(runtime: CoreRuntime): Router {
 
   router.get("/logs", requireAuth, async (req, res, next) => {
     try {
-      const scope = req.auth!.scope;
       const runId = resolveOptionalQueryParam(
         req.query.runId as string | string[] | undefined,
       );
       const eventType = resolveOptionalQueryParam(
         req.query.eventType as string | string[] | undefined,
       );
+      if (prototypeApi) {
+        res.json({
+          logs: prototypeApi.logs({
+            runId,
+            eventType,
+          }),
+        });
+        return;
+      }
+      const scope = req.auth!.scope;
       const logs = await runtime.repositories.runRepository.listLogs({
         tenantId: scope.tenantId,
         organizationId: scope.organizationId,
@@ -2549,8 +2901,8 @@ export function createApiRouter(runtime: CoreRuntime): Router {
     requireRole(["owner", "admin"]),
     async (req, res, next) => {
       try {
-        const scope = req.auth!.scope;
         const query = auditLogsQuerySchema.parse({
+          ...normalizeListQueryRecord(req.query as Record<string, unknown>),
           workspaceId: resolveOptionalQueryParam(
             req.query.workspaceId as string | string[] | undefined,
           ),
@@ -2571,9 +2923,16 @@ export function createApiRouter(runtime: CoreRuntime): Router {
           ),
           from: resolveOptionalQueryParam(req.query.from as string | string[] | undefined),
           to: resolveOptionalQueryParam(req.query.to as string | string[] | undefined),
-          page: resolveOptionalQueryParam(req.query.page as string | string[] | undefined),
-          limit: resolveOptionalQueryParam(req.query.limit as string | string[] | undefined),
         });
+        if (prototypeApi) {
+          const result = prototypeApi.auditLogs(query);
+          res.json({
+            ...toStandardListEnvelope(result),
+            logs: result.rows,
+          });
+          return;
+        }
+        const scope = req.auth!.scope;
 
         if (query.organizationId && query.organizationId !== scope.organizationId) {
           throw createHttpError(403, "Unauthorized.");
@@ -2582,28 +2941,33 @@ export function createApiRouter(runtime: CoreRuntime): Router {
           throw createHttpError(403, "Unauthorized.");
         }
 
-        const result = await runtime.repositories.runRepository.listAuditLogs({
+        const result = await runtime.repositories.runRepository.listAuditLogsWithQuery({
           tenantId: scope.tenantId,
           organizationId: scope.organizationId,
           workspaceId: scope.workspaceId,
-          actorUserId: query.actorUserId,
-          action: query.action,
-          targetType: query.targetType,
-          targetId: query.targetId,
-          from: query.from,
-          to: query.to,
-          page: query.page,
-          limit: query.limit,
+          query: {
+            actorUserId: query.actorUserId,
+            action: query.action,
+            targetType: query.targetType,
+            targetId: query.targetId,
+            from: query.from,
+            to: query.to,
+            cursor: query.cursor,
+            page: query.page,
+            limit: query.limit,
+            search: query.search,
+            sort: query.sort,
+            filterGroup: query.filterGroup,
+          },
         });
+        const mappedRows = result.rows.map((entry) => mapAuditLogForResponse(entry));
 
         res.json({
-          logs: result.logs.map((entry) => mapAuditLogForResponse(entry)),
-          pagination: {
-            page: result.page,
-            limit: result.limit,
-            total: result.total,
-            hasMore: result.hasMore,
-          },
+          ...toStandardListEnvelope({
+            ...result,
+            rows: mappedRows,
+          }),
+          logs: mappedRows,
         });
       } catch (error) {
         next(error);
@@ -2616,8 +2980,20 @@ export function createApiRouter(runtime: CoreRuntime): Router {
     requireRole(["owner", "admin"]),
     async (req, res, next) => {
       try {
-        const scope = req.auth!.scope;
         const auditLogId = resolveRouteParam(req.params.id);
+        if (prototypeApi) {
+          const entry = prototypeApi.auditLog(auditLogId);
+          if (!entry) {
+            res.status(404).json({ error: "Not found." });
+            return;
+          }
+
+          res.json({
+            log: entry,
+          });
+          return;
+        }
+        const scope = req.auth!.scope;
         const entry = await runtime.repositories.runRepository.findAuditLogByIdScoped({
           auditLogId,
           tenantId: scope.tenantId,

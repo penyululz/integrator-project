@@ -5,7 +5,12 @@ import type {
   SessionScope,
   SessionUser,
 } from "@integration/core";
+import { PLATFORM_MODES, type PlatformMode } from "@integration/shared";
+import { getPrototypeAuthContext } from "../routes/prototype-mode";
 
+// API: Fastify + Zod
+// SHARED BETWEEN PROTOTYPE AND LIVE
+// Express-compatible auth middleware is intentionally retained for route-surface stability during migration.
 type AuthContext = {
   user: SessionUser;
   scope: SessionScope;
@@ -59,6 +64,51 @@ export function withAuth(runtime: CoreRuntime) {
   ): Promise<void> {
     try {
       const token = extractBearerToken(req);
+      if (!token) {
+        next();
+        return;
+      }
+
+      const session = await runtime.authService.authenticateToken(token);
+      req.auth = {
+        token,
+        user: session.user,
+        scope: session.scope,
+      };
+      next();
+    } catch {
+      res.status(401).json({
+        error: "Unauthenticated.",
+      });
+    }
+  };
+}
+
+type AuthMiddlewareOptions = {
+  // MODE: Prototype Mode | Live Mode
+  platformMode?: PlatformMode;
+};
+
+export function withAuthMode(runtime: CoreRuntime, options: AuthMiddlewareOptions = {}) {
+  const isPrototypeMode = options.platformMode === PLATFORM_MODES.PROTOTYPE;
+
+  return async function attachAuth(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
+    try {
+      const token = extractBearerToken(req);
+      if (isPrototypeMode) {
+        // PROTOTYPE MODE ONLY
+        // LIVE ROUTE SHAPE PRESERVED
+        // USED FOR LOCAL DEMO / UI ITERATION
+        req.auth = getPrototypeAuthContext(token || "prototype-api-token");
+        next();
+        return;
+      }
+
+      // LIVE MODE ONLY
       if (!token) {
         next();
         return;
