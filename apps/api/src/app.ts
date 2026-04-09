@@ -1,27 +1,91 @@
 import express from "express";
-import cors from "cors";
+import Fastify, { type FastifyInstance } from "fastify";
+import fastifyCors from "@fastify/cors";
+import fastifyExpress from "@fastify/express";
 import { ZodError } from "zod";
-import { sanitizeSensitiveMessage } from "@integration/shared";
+import {
+  PLATFORM_MODES,
+  resolvePlatformModeFromEnv,
+  sanitizeSensitiveMessage,
+  type PlatformMode,
+  type PlatformModeSource,
+} from "@integration/shared";
 import {
   getGlobalObservabilityRuntime,
   type CoreRuntime,
 } from "@integration/core";
-import { withAuth } from "./middleware/auth";
+import { withAuthMode } from "./middleware/auth";
 import { createApiRouter } from "./routes";
 
-export function createApp(runtime: CoreRuntime) {
-  const app = express();
+// API: Fastify + Zod (official locked stack)
+// SHARED BETWEEN PROTOTYPE AND LIVE
+// Fastify owns runtime, hooks, and top-level routes.
+// Existing /api/v1 route behavior is preserved through compatibility middleware reuse.
+// MODE: Prototype Mode | Live Mode
+type CreateAppOptions = {
+  // SHARED BETWEEN PROTOTYPE AND LIVE
+  // DO NOT MIX PROTOTYPE STATUS WITH LIVE RUNTIME STATUS
+  platformMode?: PlatformMode;
+  platformModeSource?: PlatformModeSource;
+};
+
+export async function createApp(
+  runtime: CoreRuntime,
+  options: CreateAppOptions = {},
+): Promise<FastifyInstance> {
+  const modeResolution = resolvePlatformModeFromEnv(
+    process.env as Record<string, string | undefined>,
+  );
+  const platformMode =
+    options.platformMode ||
+    (modeResolution.source === "default"
+      ? PLATFORM_MODES.LIVE
+      : modeResolution.mode);
+  const platformModeSource = options.platformModeSource || modeResolution.source;
+  const app = Fastify({
+    logger: false,
+  });
   const observability = runtime.observability || getGlobalObservabilityRuntime();
 
-  app.use(cors());
-  app.use(express.json({ limit: "2mb" }));
-  app.get("/metrics", (_req, res) => {
-    res.setHeader("Content-Type", observability.metrics.contentType);
-    res.status(200).send(observability.metrics.render());
+  await app.register(fastifyCors, {
+    origin: true,
+    credentials: true,
   });
-  app.use(withAuth(runtime));
-  app.use("/api/v1", createApiRouter(runtime));
+  await app.register(fastifyExpress);
 
+  app.addHook("onRequest", async (_req, reply) => {
+    // MODE: Prototype Mode | Live Mode
+    // KEEP CONTRACT SHAPE IN SYNC
+    reply.header("x-integrator-mode", platformMode);
+  });
+
+  // SHARED BETWEEN PROTOTYPE AND LIVE
+  app.get("/metrics", async (_req, reply) => {
+    reply.header("Content-Type", observability.metrics.contentType);
+    return observability.metrics.render();
+  });
+
+  // SHARED BETWEEN PROTOTYPE AND LIVE
+  // Express-compatible middleware stack is mounted inside Fastify to preserve route surface.
+  app.use(express.json({ limit: "2mb" }));
+  app.use(
+    withAuthMode(runtime, {
+      platformMode,
+    }),
+  );
+  app.use(
+    "/api/v1",
+    // SHARED BETWEEN PROTOTYPE AND LIVE
+    // LIVE ROUTE SHAPE PRESERVED
+    // Router internally switches Prototype Mode behavior while preserving Live route shapes.
+    createApiRouter(runtime, {
+      platformMode,
+      platformModeSource,
+    }),
+  );
+
+  // SHARED BETWEEN PROTOTYPE AND LIVE
+  // Compatibility error bridge while route handlers are still Express-style middleware.
   app.use(
     (
       error: Error & { statusCode?: number },
@@ -53,5 +117,8 @@ export function createApp(runtime: CoreRuntime) {
     },
   );
 
+  // SHARED BETWEEN PROTOTYPE AND LIVE
+  // Ensure Fastify is fully bootstrapped before callers begin serving or testing.
+  await app.ready();
   return app;
 }

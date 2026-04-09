@@ -26,12 +26,21 @@ npm run worker -w @integration/api
 
 ## Environment Reference
 
+- Root `.env` is the source of truth for API + worker startup in both `Prototype Mode` and `Live Mode`.
+- Initialize root `.env` with `npm run env:init` from repository root.
 - [`apps/api/.env.example`](./.env.example)
 
 ### Config Split (v1)
 
 - `.env` is for platform runtime only: database, Redis, JWT/encryption keys, and OAuth app registration secrets.
 - Workspace/user app connection settings (API keys, SMTP settings, webhook signing secret, shop domain, tokens) are configured in the web UI and stored via encrypted credentials.
+
+### Queue Runtime
+
+- `QUEUE: Redis + BullMQ` is the official queue direction.
+- Incoming trigger events use BullMQ-first transport.
+- `INTEGRATOR_QUEUE_DRIVER=legacy` keeps Redis-list compatibility while migrating.
+- Worker still processes durable retries and waits from DB-backed records.
 
 ## Useful Endpoints
 
