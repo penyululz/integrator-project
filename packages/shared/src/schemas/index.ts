@@ -11,6 +11,17 @@ import type {
   WorkspaceProfileView,
   WorkspaceSettingsOverview,
 } from "../types/workspace";
+import type {
+  CalendarEventRecord,
+  CommunicationMessageRecord,
+  CommunicationThreadRecord,
+  FacilityBookingRecord,
+  FacilityRecord,
+  MaintenanceCommentRecord,
+  MaintenanceTicketRecord,
+  WorkspaceFileEntityRecord,
+  WorkspaceKnowledgeDocContentRecord,
+} from "../types/collaboration";
 
 // CONTRACT-COMPATIBLE PROTOTYPE DATA
 // LIVE ROUTE SHAPE PRESERVED
@@ -319,5 +330,139 @@ export const workspaceProfileViewSchema: z.ZodType<WorkspaceProfileView> = z
         passwordRotationRecommended: z.boolean(),
       })
       .strict(),
+  })
+  .strict();
+
+export const communicationThreadRecordSchema: z.ZodType<CommunicationThreadRecord> = z
+  .object({
+    id: z.string().trim().min(1).max(120),
+    title: z.string().trim().min(1).max(240),
+    channelType: z.enum(["channel", "team", "direct", "incident"]),
+    topic: z.string().trim().max(500).nullable(),
+    archived: z.boolean(),
+    participantsCount: z.number().int().nonnegative(),
+    unreadCount: z.number().int().nonnegative(),
+    lastMessagePreview: z.string().nullable(),
+    lastMessageAt: z.string().datetime().nullable(),
+    status: z.enum(["online", "away", "offline"]),
+    updatedAt: z.string().datetime(),
+    updatedAtLabel: z.string().trim().min(1).max(120),
+  })
+  .strict();
+
+export const communicationMessageRecordSchema: z.ZodType<CommunicationMessageRecord> = z
+  .object({
+    id: z.string().trim().min(1).max(120),
+    threadId: z.string().trim().min(1).max(120),
+    authorUserId: z.string().trim().min(1).max(120).nullable(),
+    authorName: z.string().trim().min(1).max(240),
+    body: z.string().trim().min(1).max(5000),
+    createdAt: z.string().datetime(),
+    createdAtLabel: z.string().trim().min(1).max(120),
+  })
+  .strict();
+
+export const facilityRecordSchema: z.ZodType<FacilityRecord> = z
+  .object({
+    id: z.string().trim().min(1).max(120),
+    name: z.string().trim().min(1).max(240),
+    category: z.string().trim().min(1).max(120),
+    status: z.enum(["available", "limited", "maintenance"]),
+    location: z.string().trim().max(240).nullable(),
+    capacity: z.number().int().nonnegative().nullable(),
+    metadata: z.record(z.unknown()),
+    createdAt: z.string().datetime(),
+    updatedAt: z.string().datetime(),
+  })
+  .strict();
+
+export const facilityBookingRecordSchema: z.ZodType<FacilityBookingRecord> = z
+  .object({
+    id: z.string().trim().min(1).max(120),
+    facilityId: z.string().trim().min(1).max(120),
+    title: z.string().trim().min(1).max(240),
+    requestedByUserId: z.string().trim().min(1).max(120).nullable(),
+    requestedByName: z.string().trim().min(1).max(240),
+    startsAt: z.string().datetime(),
+    endsAt: z.string().datetime(),
+    status: z.enum(["pending", "approved", "rejected", "cancelled"]),
+    notes: z.string().trim().max(1000).nullable(),
+    metadata: z.record(z.unknown()),
+    createdAt: z.string().datetime(),
+    updatedAt: z.string().datetime(),
+  })
+  .strict();
+
+export const maintenanceTicketRecordSchema: z.ZodType<MaintenanceTicketRecord> = z
+  .object({
+    id: z.string().trim().min(1).max(120),
+    title: z.string().trim().min(1).max(240),
+    summary: z.string().trim().min(1).max(2000),
+    category: z.string().trim().min(1).max(120),
+    priority: z.enum(["low", "medium", "high"]),
+    status: z.enum(["open", "in_progress", "resolved", "closed"]),
+    assigneeUserId: z.string().trim().min(1).max(120).nullable(),
+    assigneeName: z.string().trim().max(240).nullable(),
+    dueAt: z.string().datetime().nullable(),
+    metadata: z.record(z.unknown()),
+    createdAt: z.string().datetime(),
+    updatedAt: z.string().datetime(),
+  })
+  .strict();
+
+export const maintenanceCommentRecordSchema: z.ZodType<MaintenanceCommentRecord> = z
+  .object({
+    id: z.string().trim().min(1).max(120),
+    ticketId: z.string().trim().min(1).max(120),
+    authorUserId: z.string().trim().min(1).max(120).nullable(),
+    authorName: z.string().trim().min(1).max(240),
+    body: z.string().trim().min(1).max(5000),
+    createdAt: z.string().datetime(),
+  })
+  .strict();
+
+export const calendarEventRecordSchema: z.ZodType<CalendarEventRecord> = z
+  .object({
+    id: z.string().trim().min(1).max(120),
+    source: z.enum(["custom", "facility", "maintenance"]),
+    sourceId: z.string().trim().min(1).max(120).nullable(),
+    title: z.string().trim().min(1).max(240),
+    startsAt: z.string().datetime(),
+    endsAt: z.string().datetime().nullable(),
+    status: z.enum(["scheduled", "in_progress", "completed", "cancelled"]),
+    description: z.string().trim().max(5000).nullable(),
+    metadata: z.record(z.unknown()),
+    createdAt: z.string().datetime(),
+    updatedAt: z.string().datetime(),
+  })
+  .strict();
+
+export const workspaceKnowledgeDocContentRecordSchema: z.ZodType<WorkspaceKnowledgeDocContentRecord> = z
+  .object({
+    id: z.string().trim().min(1).max(120),
+    title: z.string().trim().min(1).max(240),
+    category: z.enum(["runbooks", "playbooks", "specs", "notes"]),
+    owner: z.string().trim().min(1).max(240),
+    summary: z.string().trim().min(1).max(2000),
+    contentMarkdown: z.string(),
+    tags: z.array(z.string().trim().min(1).max(80)).max(50),
+    createdAt: z.string().datetime(),
+    updatedAt: z.string().datetime(),
+  })
+  .strict();
+
+export const workspaceFileEntityRecordSchema: z.ZodType<WorkspaceFileEntityRecord> = z
+  .object({
+    id: z.string().trim().min(1).max(120),
+    parentId: z.string().trim().min(1).max(120).nullable(),
+    name: z.string().trim().min(1).max(240),
+    kind: z.enum(["folder", "file"]),
+    extension: z.string().trim().max(40).nullable(),
+    owner: z.string().trim().min(1).max(240),
+    sizeBytes: z.number().int().nonnegative().nullable(),
+    shared: z.boolean(),
+    metadata: z.record(z.unknown()),
+    createdAt: z.string().datetime(),
+    updatedAt: z.string().datetime(),
   })
   .strict();

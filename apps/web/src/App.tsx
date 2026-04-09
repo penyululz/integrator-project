@@ -15,167 +15,91 @@ import {
   logout,
   setApiRuntimeMode,
 } from "./api";
-import { ShellContextStrip, StatusPill } from "./components/ui-kit";
+import { StatusPill } from "./components/ui-kit";
 import {
   PLATFORM_MODES,
   type PlatformModeResolution,
 } from "./platform-mode";
+import {
+  getDefaultWorkspaceRoute,
+  getPlatformRouteMeta,
+  getPlatformSearchItems,
+  getPlatformShellLayoutMode,
+  getVisiblePlatformNavGroups,
+  isPlatformNavItemActive,
+  type PlatformNavIconKey,
+} from "./platform/navigation";
+import { ActivityPage } from "./pages/ActivityPage";
 import { AlertSettingsPage } from "./pages/AlertSettingsPage";
 import { ApprovalsPage } from "./pages/ApprovalsPage";
 import { AuditLogsPage } from "./pages/AuditLogsPage";
 import { CalendarSystemPage } from "./pages/CalendarSystemPage";
 import { CommunicationPage } from "./pages/CommunicationPage";
 import { DashboardPage } from "./pages/DashboardPage";
+import { DocsHubPage } from "./pages/DocsHubPage";
 import { FacilityManagementPage } from "./pages/FacilityManagementPage";
+import { FilesPage } from "./pages/FilesPage";
 import { FirstAutomationPage } from "./pages/FirstAutomationPage";
 import { IntegrationsPage } from "./pages/IntegrationsPage";
 import { LoginPage } from "./pages/LoginPage";
 import { MaintenanceSystemPage } from "./pages/MaintenanceSystemPage";
-import { getDefaultWorkspaceRoute } from "./pages/navigation-flow-helpers";
 import { OnboardingPage } from "./pages/OnboardingPage";
 import { OrganizationPage } from "./pages/OrganizationPage";
 import { ProfilePage } from "./pages/ProfilePage";
-import { RunsPage } from "./pages/RunsPage";
 import { SettingsPage } from "./pages/SettingsPage";
-import { DocsHubPage } from "./pages/DocsHubPage";
-import { FilesPage } from "./pages/FilesPage";
 import { WorkflowsPage } from "./pages/WorkflowsPage";
-import {
-  getQuickSwitchEntries,
-  getVisibleWorkspaceNavGroups,
-  getWorkspaceContextTitle,
-  getWorkspaceHomePath,
-  getWorkspaceRoleLabel,
-  getWorkspaceRouteContext,
-  getWorkspaceShellLayoutMode,
-  isWorkspaceNavItemActive,
-  type WorkspaceNavIconKey,
-} from "./pages/workspace-shell-helpers";
-import { useUiStore } from "./state/ui-store";
-
-// STACK: React + TypeScript + Vite
-// STATE: TanStack Query for server state, Zustand for local UI state
-// BUILDER: React Flow / XYFlow
-// MODE: Prototype Mode | Live Mode
-// NOTE: locked stack markers are documented in README; runtime migration can be phased.
-type WorkspaceRoute = {
-  to: string;
-  label: string;
-  hint: string;
-  groupLabel: string;
-  lifecycle?: "active" | "deferred";
-};
+import { WorkflowListPage } from "./pages/WorkflowListPage";
 
 type AppModeState = PlatformModeResolution;
 
-function ShellNavIcon(props: {
-  iconKey: WorkspaceNavIconKey;
+function PlatformNavIcon(props: {
+  iconKey: PlatformNavIconKey;
 }) {
   const glyph =
-    props.iconKey === "spark" ? (
-      <path d="M12 4.5l1.7 3.8 4.1.4-3.1 2.8.9 4.2-3.6-2.2-3.6 2.2.9-4.2-3.1-2.8 4.1-.4z" />
-    ) : props.iconKey === "home" ? (
-      <path d="M4.5 10.8L12 4.8l7.5 6v8.4H4.5z M9.2 19.2v-4.6h5.6v4.6" />
+    props.iconKey === "dashboard" ? (
+      <path d="M5.5 6.5h5.8v5.8H5.5zM12.7 6.5h5.8v3.4h-5.8zM12.7 11.3h5.8v7h-5.8zM5.5 13.1h5.8v5.2H5.5z" />
     ) : props.iconKey === "checklist" ? (
-      <path d="M6.2 7.2h11.6M6.2 12h11.6M6.2 16.8h11.6M4.8 7.2h0M4.8 12h0M4.8 16.8h0" />
-    ) : props.iconKey === "apps" ? (
-      <path d="M5.6 5.6h5.7v5.7H5.6zM12.7 5.6h5.7v5.7h-5.7zM5.6 12.7h5.7v5.7H5.6zM12.7 12.7h5.7v5.7h-5.7z" />
-    ) : props.iconKey === "builder" ? (
-      <path d="M6 6.2h4.8V11H6zM13.2 6.2H18v4.8h-4.8zM9.6 13.2h4.8V18H9.6zM10.8 8.6h2.4M8.4 11v2.2M15.6 11v2.2" />
-    ) : props.iconKey === "runs" ? (
-      <path d="M6.2 6.5h11.6v11H6.2zM8.5 9.2h7M8.5 12h5.1M8.5 14.8h3.6" />
+      <path d="M7.4 8.1h9.8M7.4 12h9.8M7.4 15.9h9.8M5.1 8.1h0M5.1 12h0M5.1 15.9h0" />
+    ) : props.iconKey === "workflows" ? (
+      <path d="M6.2 6.4h4.6V11H6.2zM13.2 6.4h4.6V11h-4.6zM9.7 13h4.6v4.6H9.7zM8.4 11.3v1.7M15.5 11.3v1.7M11.9 8.7h1.9" />
+    ) : props.iconKey === "integrations" ? (
+      <path d="M6 9h5V4H6zM13 9h5V4h-5zM6 20h5v-5H6zM13 20h5v-5h-5z" />
+    ) : props.iconKey === "activity" ? (
+      <path d="M5.2 13h3l2.1-4.1 3.2 6.6 2.1-3.9h3.2M6.2 6.3h11.6v11.5H6.2z" />
+    ) : props.iconKey === "alerts" ? (
+      <path d="M12 5.1a4.3 4.3 0 0 1 4.3 4.3v2.2l1.2 2.2H6.5l1.2-2.2V9.4A4.3 4.3 0 0 1 12 5.1zM10.3 16.2a1.7 1.7 0 0 0 3.4 0" />
+    ) : props.iconKey === "audit" ? (
+      <path d="M6.1 5.5h11.8v13H6.1zM8.3 8.5h7.4M8.3 11.6h7.4M8.3 14.7h4.2" />
+    ) : props.iconKey === "approvals" ? (
+      <path d="M6.3 12.1l3.1 3.1 8-8M4.7 4.7h14.6v14.6H4.7z" />
     ) : props.iconKey === "communication" ? (
-      <path d="M5.4 6.6h13.2v8.4H11.8L8.4 18v-3H5.4zM8 9.5h8M8 12h5.2" />
+      <path d="M5.2 6.5h13.6v8.6h-6.6L8.6 18v-2.9H5.2zM8 9.4h8M8 11.9h4.9" />
     ) : props.iconKey === "facility" ? (
-      <path d="M6 18.4V6.2h12v12.2M9 18.4v-3.2M12 9h0M12 12h0M15 9h0M15 12h0" />
+      <path d="M6 18.6V6.2h12v12.4M9 18.6v-3.4M12 9.2h0M12 12.4h0M15 9.2h0M15 12.4h0" />
     ) : props.iconKey === "maintenance" ? (
-      <path d="M7.8 7.8l8.4 8.4M15.2 8.8l-1.4-1.4-2.7 2.7 1.4 1.4zM8.8 15.2l1.4 1.4 2.7-2.7-1.4-1.4zM5.4 18.6l2.3-.5-.9-.9z" />
+      <path d="M7.6 7.8l8.6 8.6M15.1 8.8l-1.4-1.4-2.8 2.8 1.4 1.4zM8.9 15.1l1.4 1.4 2.8-2.8-1.4-1.4zM5.4 18.6l2.4-.5-.9-.9z" />
     ) : props.iconKey === "calendar" ? (
       <path d="M6.2 7.2h11.6v11.2H6.2zM9 5.8v2.1M15 5.8v2.1M6.2 10h11.6M9 13h2.2M12.8 13H15M9 15.7h2.2" />
-    ) : props.iconKey === "alerts" ? (
-      <path d="M12 5.2a4.4 4.4 0 0 1 4.4 4.4v2.3l1.2 2.2H6.4l1.2-2.2V9.6A4.4 4.4 0 0 1 12 5.2zM10.2 16.4a1.8 1.8 0 0 0 3.6 0" />
-    ) : props.iconKey === "approvals" ? (
-      <path d="M6.4 12.2l3.2 3.2 8-8M4.8 4.8h14.4v14.4H4.8z" />
-    ) : props.iconKey === "audit" ? (
-      <path d="M6 5.4h12v13.2H6zM8.3 8h7.4M8.3 11h7.4M8.3 14h4.4" />
-    ) : props.iconKey === "profile" ? (
-      <path d="M12 12.1a3.4 3.4 0 1 0 0-6.8 3.4 3.4 0 0 0 0 6.8zM6.1 18.4a5.9 5.9 0 0 1 11.8 0" />
-    ) : props.iconKey === "team" ? (
-      <path d="M8.4 11.2a2.2 2.2 0 1 0 0-4.4 2.2 2.2 0 0 0 0 4.4zM15.6 11.2a2.2 2.2 0 1 0 0-4.4 2.2 2.2 0 0 0 0 4.4zM4.8 18.4a4.1 4.1 0 0 1 7.2-2.7M12 15.7a4.1 4.1 0 0 1 7.2 2.7" />
+    ) : props.iconKey === "organization" ? (
+      <path d="M8.3 11.1a2.2 2.2 0 1 0 0-4.4 2.2 2.2 0 0 0 0 4.4zM15.7 11.1a2.2 2.2 0 1 0 0-4.4 2.2 2.2 0 0 0 0 4.4zM4.9 18.4a4.1 4.1 0 0 1 7.1-2.7M12 15.7a4.1 4.1 0 0 1 7.1 2.7" />
     ) : props.iconKey === "docs" ? (
       <path d="M7 5.6h10v12.8H7zM9.1 8.2h5.8M9.1 11h5.8M9.1 13.8h4" />
     ) : props.iconKey === "files" ? (
       <path d="M5.4 8.2h13.2v10.2H5.4zM5.4 8.2l2.6-2.8h4.2l2.2 2.8" />
+    ) : props.iconKey === "settings" ? (
+      <path d="M12 8.7a3.3 3.3 0 1 1 0 6.6 3.3 3.3 0 0 1 0-6.6zM4.8 12h2.1M17.1 12h2.1M12 4.8v2.1M12 17.1v2.1M6.9 6.9l1.5 1.5M15.6 15.6l1.5 1.5M17.1 6.9l-1.5 1.5M8.4 15.6l-1.5 1.5" />
     ) : (
-      <path d="M12 5.2l1.1 2.2 2.5.4-1.8 1.7.4 2.5-2.2-1.2-2.2 1.2.4-2.5-1.8-1.7 2.5-.4zM5.6 13.4h12.8v4.6H5.6z" />
+      <path d="M12 12a3.4 3.4 0 1 0 0-6.8 3.4 3.4 0 0 0 0 6.8zM6.1 18.4a5.9 5.9 0 0 1 11.8 0" />
     );
 
   return (
-    <span className="shell-nav-icon" aria-hidden="true">
+    <span className="platform-nav-icon" aria-hidden="true">
       <svg viewBox="0 0 24 24" role="img">
         <g fill="none" stroke="currentColor" strokeLinecap="round" strokeWidth="1.8">
           {glyph}
         </g>
       </svg>
     </span>
-  );
-}
-
-function QuickSwitchModal(props: {
-  open: boolean;
-  query: string;
-  entries: WorkspaceRoute[];
-  onQueryChange: (next: string) => void;
-  onClose: () => void;
-}) {
-  if (!props.open) {
-    return null;
-  }
-
-  return (
-    <div className="quick-switch-backdrop" role="presentation" onClick={props.onClose}>
-      <section
-        className="quick-switch-dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-label="Quick switch"
-        onClick={(event) => event.stopPropagation()}
-      >
-        <header className="quick-switch-header">
-          <strong>Quick Switch</strong>
-          <span className="tag">Ctrl+K</span>
-        </header>
-        <input
-          autoFocus
-          placeholder="Jump to page..."
-          value={props.query}
-          onChange={(event) => props.onQueryChange(event.target.value)}
-        />
-        <div className="quick-switch-results">
-          {props.entries.length ? (
-            props.entries.map((entry) => (
-              <Link
-                key={`${entry.groupLabel}-${entry.to}`}
-                className="quick-switch-link"
-                to={entry.to}
-                onClick={props.onClose}
-              >
-                <div className="stack-sm">
-                  <strong>{entry.label}</strong>
-                  <p>{entry.hint}</p>
-                </div>
-                <span className="tag">{entry.groupLabel}</span>
-                {entry.lifecycle === "deferred" ? (
-                  <StatusPill tone="warning">Deferred</StatusPill>
-                ) : null}
-              </Link>
-            ))
-          ) : (
-            <p>No routes match your search.</p>
-          )}
-        </div>
-      </section>
-    </div>
   );
 }
 
@@ -186,6 +110,8 @@ function WorkspaceShell(props: {
   const location = useLocation();
   const navigate = useNavigate();
   const session = getAuthSession();
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
 
   if (!session?.accessToken) {
     return <Navigate to="/login" replace />;
@@ -196,93 +122,54 @@ function WorkspaceShell(props: {
     session.scope.orgRole === "admin" ||
     session.scope.workspaceRole === "owner" ||
     session.scope.workspaceRole === "admin";
+
+  const workspaceTitle = `${session.scope.organizationSlug}/${session.scope.workspaceSlug}`;
   const navGroups = useMemo(
-    () => getVisibleWorkspaceNavGroups({ isOperator: Boolean(isOperator) }),
+    () => getVisiblePlatformNavGroups({ isOperator: Boolean(isOperator) }),
     [isOperator],
   );
-  const workspaceTitle = getWorkspaceContextTitle(session);
-  const workspaceRole = getWorkspaceRoleLabel(session);
-  const workspaceHomePath = getWorkspaceHomePath(session);
-  const routeContext = getWorkspaceRouteContext(location.pathname);
-
-  const quickSwitchEntries = useMemo(
-    () => getQuickSwitchEntries({ isOperator: Boolean(isOperator) }),
+  const searchItems = useMemo(
+    () => getPlatformSearchItems({ isOperator: Boolean(isOperator) }),
     [isOperator],
   );
-  const quickSwitchOpen = useUiStore((state) => state.quickSwitchOpen);
-  const quickSwitchQuery = useUiStore((state) => state.quickSwitchQuery);
-  const setQuickSwitchOpen = useUiStore((state) => state.setQuickSwitchOpen);
-  const setQuickSwitchQuery = useUiStore((state) => state.setQuickSwitchQuery);
-  const [globalSearchQuery, setGlobalSearchQuery] = useState("");
-  const [globalSearchOpen, setGlobalSearchOpen] = useState(false);
+  const searchResults = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    if (!query) {
+      return [];
+    }
 
-  const filteredQuickSwitchEntries = useMemo(() => {
-    const query = quickSwitchQuery.trim().toLowerCase();
-    if (!query) {
-      return quickSwitchEntries;
-    }
-    return quickSwitchEntries.filter((entry) =>
-      [entry.label, entry.hint, entry.groupLabel].some((value) =>
-        value.toLowerCase().includes(query),
-      ),
-    );
-  }, [quickSwitchEntries, quickSwitchQuery]);
-  const globalSearchResults = useMemo(() => {
-    const query = globalSearchQuery.trim().toLowerCase();
-    if (!query) {
-      return [] as WorkspaceRoute[];
-    }
-    return quickSwitchEntries
-      .filter((entry) =>
-        [entry.label, entry.hint, entry.groupLabel].some((value) =>
+    return searchItems
+      .filter((item) =>
+        [item.label, item.hint, item.groupLabel].some((value) =>
           value.toLowerCase().includes(query),
         ),
       )
       .slice(0, 6);
-  }, [quickSwitchEntries, globalSearchQuery]);
-
-  useEffect(() => {
-    function onKeydown(event: KeyboardEvent) {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
-        event.preventDefault();
-        setQuickSwitchOpen(!useUiStore.getState().quickSwitchOpen);
-        return;
-      }
-      if (event.key === "Escape") {
-        setQuickSwitchOpen(false);
-      }
-    }
-
-    window.addEventListener("keydown", onKeydown);
-    return () => window.removeEventListener("keydown", onKeydown);
-  }, []);
-  useEffect(() => {
-    setGlobalSearchOpen(false);
-  }, [location.pathname]);
+  }, [searchItems, searchQuery]);
+  const routeMeta = getPlatformRouteMeta(location.pathname);
 
   async function onLogout() {
     await logout();
     props.onSessionRefresh();
   }
 
-  function onGlobalSearchSubmit(event: FormEvent<HTMLFormElement>) {
+  function onSearchSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const target = globalSearchResults[0];
-    if (!target) {
+    const next = searchResults[0];
+    if (!next) {
       return;
     }
-    setGlobalSearchOpen(false);
-    setGlobalSearchQuery("");
-    void navigate(target.to);
+    setSearchQuery("");
+    void navigate(next.to);
   }
 
   return (
-    <div className="app-root workspace-mode">
-      <div className="workspace-layout">
-        <aside className="workspace-sidebar">
-          <div className="workspace-sidebar-top">
-            <Link to={workspaceHomePath} className="workspace-brand-link">
-              <span className="brand-mark" aria-hidden="true">
+    <div className="app-root platform-shell-app">
+      <div className="platform-shell-layout">
+        <aside className={`platform-sidebar ${sidebarCollapsed ? "collapsed" : ""}`}>
+          <div className="platform-sidebar-brand">
+            <Link className="platform-brand-link" to={getDefaultWorkspaceRoute()}>
+              <span className="platform-brand-mark" aria-hidden="true">
                 <svg viewBox="0 0 24 24" role="img">
                   <g fill="none" stroke="currentColor" strokeLinecap="round" strokeWidth="2">
                     <path d="M5 8.5h8.5a3 3 0 0 1 0 6H10" />
@@ -291,180 +178,160 @@ function WorkspaceShell(props: {
                   </g>
                 </svg>
               </span>
-              <div className="stack-sm">
-                <strong>Integrator</strong>
-                <span className="workspace-sidebar-subtitle">{workspaceTitle}</span>
-              </div>
+              {!sidebarCollapsed ? (
+                <span className="platform-brand-copy">
+                  <strong>Integrator</strong>
+                  <small>{workspaceTitle}</small>
+                </span>
+              ) : null}
             </Link>
             <button
               type="button"
-              className="workspace-quick-switch-button"
-              onClick={() => setQuickSwitchOpen(true)}
+              className="platform-sidebar-toggle"
+              onClick={() => setSidebarCollapsed((current) => !current)}
+              aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
             >
-              Quick switch
-              <span className="tag">Ctrl+K</span>
+              {sidebarCollapsed ? ">" : "<"}
             </button>
           </div>
 
-          <div className="workspace-sidebar-scroll">
+          <nav className="platform-sidebar-nav">
             {navGroups.map((group) => (
-              <section key={group.key} className="workspace-sidebar-group">
-                <h3 className="workspace-sidebar-group-title">{group.label}</h3>
-                <nav className="workspace-sidebar-nav">
-                  {group.items.map((item) => (
-                    <NavLink
-                      key={item.to}
-                      to={item.to}
-                      className={() =>
-                        `workspace-sidebar-link ${
-                          isWorkspaceNavItemActive(location.pathname, item.to) ? "active" : ""
-                        }`
-                      }
-                    >
-                      <ShellNavIcon iconKey={item.iconKey} />
-                      <div className="workspace-sidebar-link-body">
-                        <span className="workspace-sidebar-link-title">{item.label}</span>
-                        <span className="workspace-sidebar-link-hint">
+              <section key={group.key} className="platform-nav-group">
+                {!sidebarCollapsed ? (
+                  <span className="platform-nav-group-label">{group.label}</span>
+                ) : null}
+                {group.items.map((item) => (
+                  <NavLink
+                    key={item.to}
+                    to={item.to}
+                    className={() =>
+                      `platform-nav-link ${
+                        isPlatformNavItemActive(location.pathname, item.to) ? "active" : ""
+                      }`
+                    }
+                    title={sidebarCollapsed ? item.label : undefined}
+                  >
+                    <PlatformNavIcon iconKey={item.iconKey} />
+                    {!sidebarCollapsed ? (
+                      <span className="platform-nav-copy">
+                        <strong>{item.label}</strong>
+                        <small>
                           {item.hint}
-                          {item.lifecycle === "deferred" ? " - deferred" : ""}
-                        </span>
-                      </div>
-                    </NavLink>
-                  ))}
-                </nav>
+                          {item.lifecycle === "deferred" ? " (Deferred)" : ""}
+                        </small>
+                      </span>
+                    ) : null}
+                  </NavLink>
+                ))}
               </section>
             ))}
-          </div>
+          </nav>
 
-          <div className="workspace-sidebar-footer">
+          <div className="platform-sidebar-footer">
             <StatusPill tone={props.modeState.mode === PLATFORM_MODES.LIVE ? "warning" : "success"}>
               {props.modeState.mode}
             </StatusPill>
-            <span className="tag">Source: {props.modeState.source}</span>
-            <StatusPill tone="info">Role: {workspaceRole}</StatusPill>
-            <span className="tag">{session.user.fullName || session.user.email}</span>
-            <button type="button" className="button-ghost" onClick={() => void onLogout()}>
-              Logout
-            </button>
+            {!sidebarCollapsed ? (
+              <div className="platform-sidebar-account">
+                <strong>{session.user.fullName || session.user.email}</strong>
+                <small>
+                  {session.scope.organizationSlug} / {session.scope.workspaceSlug}
+                </small>
+                <div className="platform-sidebar-account-actions">
+                  <Link to="/profile">Profile</Link>
+                  <Link to="/settings">Settings</Link>
+                  <button type="button" className="button-ghost" onClick={() => void onLogout()}>
+                    Logout
+                  </button>
+                </div>
+              </div>
+            ) : null}
           </div>
         </aside>
 
-        <div className="workspace-main">
-          <header className="workspace-main-header">
-            <div className="workspace-global-topbar">
-              <form className="workspace-global-search" onSubmit={onGlobalSearchSubmit}>
+        <div className="platform-main-shell">
+          <header className="platform-topbar">
+            <div className="platform-topbar-copy">
+              <span className="platform-topbar-kicker">{routeMeta.sectionLabel}</span>
+              <h1>{routeMeta.title}</h1>
+              <p>{routeMeta.description}</p>
+            </div>
+
+            <div className="platform-topbar-actions">
+              <form className="platform-search" onSubmit={onSearchSubmit}>
                 <input
                   type="search"
-                  placeholder="Search pages, runs, apps, or settings..."
-                  value={globalSearchQuery}
-                  onFocus={() => setGlobalSearchOpen(true)}
-                  onChange={(event) => setGlobalSearchQuery(event.target.value)}
+                  value={searchQuery}
+                  placeholder="Search pages, workflows, integrations..."
+                  onChange={(event) => setSearchQuery(event.target.value)}
                 />
-                <button type="submit" className="button-primary" disabled={globalSearchResults.length === 0}>
-                  Go
-                </button>
-                {globalSearchOpen && globalSearchResults.length > 0 ? (
-                  <div className="workspace-global-search-results">
-                    {globalSearchResults.map((entry) => (
+                {searchResults.length > 0 ? (
+                  <div className="platform-search-results">
+                    {searchResults.map((item) => (
                       <button
-                        key={`global-search-${entry.to}`}
+                        key={`${item.groupLabel}-${item.to}`}
                         type="button"
-                        className="workspace-global-search-result"
+                        className="platform-search-result"
                         onClick={() => {
-                          setGlobalSearchOpen(false);
-                          setGlobalSearchQuery("");
-                          void navigate(entry.to);
+                          setSearchQuery("");
+                          void navigate(item.to);
                         }}
                       >
-                        <div className="stack-sm">
-                          <strong>{entry.label}</strong>
-                          <span>{entry.hint}</span>
-                        </div>
-                        <span className="tag">{entry.groupLabel}</span>
+                        <strong>{item.label}</strong>
+                        <span>{item.groupLabel}</span>
                       </button>
                     ))}
                   </div>
                 ) : null}
               </form>
-              <div className="workspace-global-actions">
-                <button type="button" onClick={() => setQuickSwitchOpen(true)}>
-                  Quick switch
-                </button>
-                <Link to="/first-automation">First success</Link>
-                {routeContext.primaryActionTo ? (
-                  <Link className="button-link-primary" to={routeContext.primaryActionTo}>
-                    {routeContext.primaryActionLabel || "Open"}
-                  </Link>
-                ) : null}
-              </div>
+              <StatusPill tone={props.modeState.mode === PLATFORM_MODES.LIVE ? "warning" : "success"}>
+                {props.modeState.mode}
+              </StatusPill>
+              {routeMeta.lifecycle === "deferred" ? (
+                <StatusPill tone="warning">Deferred</StatusPill>
+              ) : null}
+              <Link className="button-ghost" to="/first-automation">
+                First success
+              </Link>
+              <Link className="button-primary" to="/workflows/new">
+                New workflow
+              </Link>
             </div>
-            <ShellContextStrip
-              title={routeContext.title}
-              description={routeContext.description}
-              meta={
-                <>
-                  <StatusPill tone="info">Workspace {workspaceTitle}</StatusPill>
-                  <StatusPill tone={props.modeState.mode === PLATFORM_MODES.LIVE ? "warning" : "success"}>
-                    {props.modeState.mode}
-                  </StatusPill>
-                  {routeContext.lifecycle === "deferred" ? (
-                    <StatusPill tone="warning">Deferred surface</StatusPill>
-                  ) : null}
-                  <span className="tag">{routeContext.section.toUpperCase()}</span>
-                </>
-              }
-              actions={
-                <>
-                  <span className="workspace-global-chip">
-                    CONTEXT: {routeContext.section.toUpperCase()}
-                  </span>
-                  {routeContext.lifecycleNote ? (
-                    <span className="workspace-global-chip">{routeContext.lifecycleNote}</span>
-                  ) : null}
-                </>
-              }
-            />
           </header>
 
-          <main className="workspace-content">
-            <div className="workspace-content-inner page">
+          <main className="platform-shell-content">
+            <div className="platform-shell-page page">
               <Routes>
-                <Route path="/" element={<Navigate to={workspaceHomePath} replace />} />
+                <Route path="/" element={<Navigate to={getDefaultWorkspaceRoute()} replace />} />
                 <Route path="/dashboard" element={<DashboardPage />} />
-                <Route path="/integrations" element={<IntegrationsPage />} />
                 <Route path="/onboarding" element={<OnboardingPage />} />
                 <Route path="/first-automation" element={<FirstAutomationPage />} />
-                <Route path="/workflows" element={<WorkflowsPage />} />
+                <Route path="/workflows" element={<WorkflowListPage />} />
+                <Route path="/workflows/new" element={<WorkflowsPage />} />
+                <Route path="/workflows/:workflowId" element={<WorkflowsPage />} />
+                <Route path="/integrations" element={<IntegrationsPage />} />
+                <Route path="/activity" element={<ActivityPage />} />
+                <Route path="/runs" element={<Navigate to="/activity?view=runs" replace />} />
+                <Route path="/alerts" element={<AlertSettingsPage />} />
+                <Route path="/audit-logs" element={<AuditLogsPage />} />
+                <Route path="/approvals" element={<ApprovalsPage />} />
                 <Route path="/communication" element={<CommunicationPage />} />
                 <Route path="/facility" element={<FacilityManagementPage />} />
                 <Route path="/maintenance" element={<MaintenanceSystemPage />} />
                 <Route path="/calendar" element={<CalendarSystemPage />} />
-                <Route path="/runs" element={<RunsPage />} />
-                <Route path="/audit-logs" element={<AuditLogsPage />} />
-                <Route path="/approvals" element={<ApprovalsPage />} />
-                <Route path="/alerts" element={<AlertSettingsPage />} />
-                <Route path="/settings" element={<SettingsPage />} />
-                <Route path="/profile" element={<ProfilePage />} />
                 <Route path="/organization" element={<OrganizationPage />} />
+                <Route path="/profile" element={<ProfilePage />} />
+                <Route path="/settings" element={<SettingsPage />} />
                 <Route path="/docs" element={<DocsHubPage />} />
                 <Route path="/files" element={<FilesPage />} />
+                <Route path="/login" element={<Navigate to={getDefaultWorkspaceRoute()} replace />} />
                 <Route path="*" element={<Navigate to={getDefaultWorkspaceRoute()} replace />} />
               </Routes>
             </div>
           </main>
         </div>
       </div>
-
-      <QuickSwitchModal
-        open={quickSwitchOpen}
-        query={quickSwitchQuery}
-        entries={filteredQuickSwitchEntries}
-        onQueryChange={setQuickSwitchQuery}
-        onClose={() => {
-          setQuickSwitchOpen(false);
-          setQuickSwitchQuery("");
-        }}
-      />
     </div>
   );
 }
@@ -473,20 +340,16 @@ export default function App(props: {
   initialPlatformMode: PlatformModeResolution;
 }) {
   const location = useLocation();
-  const [sessionVersion, setSessionVersion] = useState(0);
-  // MODE: Prototype Mode | Live Mode
-  // DO NOT MIX PROTOTYPE STATUS WITH LIVE RUNTIME STATUS
-  const [modeState, setModeState] = useState<AppModeState>(props.initialPlatformMode);
   const session = getAuthSession();
-  const shellMode = getWorkspaceShellLayoutMode(location.pathname);
+  const [sessionVersion, setSessionVersion] = useState(0);
+  const [modeState, setModeState] = useState<AppModeState>(props.initialPlatformMode);
+  const shellMode = getPlatformShellLayoutMode(location.pathname);
 
   useEffect(() => {
     setApiRuntimeMode(modeState.mode);
   }, [modeState.mode]);
 
   const platformHealthQuery = useQuery({
-    // SHARED BETWEEN PROTOTYPE AND LIVE
-    // API health is authoritative runtime mode when reachable.
     queryKey: ["platform-health"],
     queryFn: fetchPlatformHealth,
     retry: false,
@@ -496,6 +359,7 @@ export default function App(props: {
     if (!platformHealthQuery.data) {
       return;
     }
+
     setModeState({
       mode: platformHealthQuery.data.mode,
       source: "api_health",
@@ -505,27 +369,40 @@ export default function App(props: {
 
   if (shellMode === "auth") {
     return (
-      <div className="app-root auth-mode" data-session-version={sessionVersion}>
-        <main className="auth-content page">
-          <div className="inline-actions" style={{ marginBottom: "0.75rem" }}>
-            <StatusPill tone={modeState.mode === PLATFORM_MODES.LIVE ? "warning" : "success"}>
-              {modeState.mode}
-            </StatusPill>
-            <span className="tag">Source: {modeState.source}</span>
-          </div>
-          <Routes>
-            <Route
-              path="/login"
-              element={
-                session?.accessToken ? (
-                  <Navigate to={getDefaultWorkspaceRoute()} replace />
-                ) : (
-                  <LoginPage onLoggedIn={() => setSessionVersion((value) => value + 1)} />
-                )
-              }
-            />
-            <Route path="*" element={<Navigate to="/login" replace />} />
-          </Routes>
+      <div className="app-root platform-auth-root" data-session-version={sessionVersion}>
+        <main className="platform-auth-shell">
+          <section className="platform-auth-panel">
+            <div className="platform-auth-copy">
+              <span className="page-eyebrow">Integrator Platform</span>
+              <h1>Canonical runtime frontend rebuilt from integrator-platform.</h1>
+              <p>
+                `apps/web` is the runtime UI. The integrator-platform folder remains source
+                reference and migration history only.
+              </p>
+              <div className="inline-actions">
+                <StatusPill tone={modeState.mode === PLATFORM_MODES.LIVE ? "warning" : "success"}>
+                  {modeState.mode}
+                </StatusPill>
+                <span className="tag">Source: {modeState.source}</span>
+              </div>
+            </div>
+
+            <div className="platform-auth-form">
+              <Routes>
+                <Route
+                  path="/login"
+                  element={
+                    session?.accessToken ? (
+                      <Navigate to={getDefaultWorkspaceRoute()} replace />
+                    ) : (
+                      <LoginPage onLoggedIn={() => setSessionVersion((value) => value + 1)} />
+                    )
+                  }
+                />
+                <Route path="*" element={<Navigate to="/login" replace />} />
+              </Routes>
+            </div>
+          </section>
         </main>
       </div>
     );
@@ -533,9 +410,7 @@ export default function App(props: {
 
   return (
     <WorkspaceShell
-      onSessionRefresh={() => {
-        setSessionVersion((value) => value + 1);
-      }}
+      onSessionRefresh={() => setSessionVersion((value) => value + 1)}
       modeState={modeState}
     />
   );

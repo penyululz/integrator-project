@@ -21,6 +21,8 @@ Self-hostable, enterprise-oriented AI automation platform for teams that want vi
 - implement all frontend work in `apps/web`
 - do not use external/legacy frontend folders as runtime sources
 - keep route/query/state contracts aligned with `apps/api` + `packages/shared`
+- `integrator-platform/` is checked in as migration/reference history for UI model and flow design only
+- legacy `apps/web` shell/navigation UI was replaced; do not reintroduce hybrid shell behavior
 
 ## Repository Surface Status
 
@@ -32,6 +34,13 @@ Self-hostable, enterprise-oriented AI automation platform for teams that want vi
   - BullMQ legacy queue fallback path (`INTEGRATOR_QUEUE_DRIVER=legacy`)
 - `Deferred`:
   - communication/facility/maintenance/calendar surfaces are route-stable and Prototype-ready, with deeper Live Mode service integrations intentionally postponed
+
+## Frontend Routing Canonicalization
+
+- `/activity` is the canonical monitoring surface
+- `/runs` remains a compatibility route and redirects to `/activity?view=runs`
+- `/alerts` remains a dedicated alert policy/configuration surface
+- `/audit-logs`, `/approvals`, and `/login` remain first-class routes in the platform UI
 
 ## Development Modes
 

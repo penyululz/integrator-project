@@ -1,7 +1,10 @@
 export const STABLE_WORKSPACE_ROUTES = {
   dashboard: "/dashboard",
+  onboarding: "/onboarding",
+  firstAutomation: "/first-automation",
   apps: "/integrations",
   workflows: "/workflows",
+  activity: "/activity",
   communication: "/communication",
   facility: "/facility",
   maintenance: "/maintenance",
@@ -59,7 +62,7 @@ export function redirectAfterConnection(input: {
   returnTo?: string | null;
   fallback?: string;
 }): string {
-  const fallback = input.fallback || "/first-automation";
+  const fallback = input.fallback || STABLE_WORKSPACE_ROUTES.firstAutomation;
   const returnPath = getReturnPath({
     returnTo: input.returnTo,
     templateId: input.templateId,

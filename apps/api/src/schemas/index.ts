@@ -143,6 +143,50 @@ export const workspaceFilesQuerySchema = standardListQuerySchema
   })
   .strict();
 
+export const communicationThreadsQuerySchema = standardListQuerySchema
+  .extend({
+    channelType: z.enum(["channel", "team", "direct", "incident"]).optional(),
+    archived: z.coerce.boolean().optional(),
+  })
+  .strict();
+
+export const communicationMessagesQuerySchema = standardListQuerySchema.strict();
+
+export const facilitiesQuerySchema = standardListQuerySchema
+  .extend({
+    status: z.enum(["available", "limited", "maintenance"]).optional(),
+    category: z.string().trim().min(1).max(120).optional(),
+  })
+  .strict();
+
+export const facilityBookingsQuerySchema = standardListQuerySchema
+  .extend({
+    facilityId: z.string().uuid().optional(),
+    status: z.enum(["pending", "approved", "rejected", "cancelled"]).optional(),
+    from: isoDateTimeSchema.optional(),
+    to: isoDateTimeSchema.optional(),
+  })
+  .strict()
+  .superRefine(validateDateRange);
+
+export const maintenanceTicketsQuerySchema = standardListQuerySchema
+  .extend({
+    status: z.enum(["open", "in_progress", "resolved", "closed"]).optional(),
+    priority: z.enum(["low", "medium", "high"]).optional(),
+    category: z.string().trim().min(1).max(120).optional(),
+  })
+  .strict();
+
+export const calendarEventsQuerySchema = standardListQuerySchema
+  .extend({
+    source: z.enum(["custom", "facility", "maintenance"]).optional(),
+    status: z.enum(["scheduled", "in_progress", "completed", "cancelled"]).optional(),
+    from: isoDateTimeSchema.optional(),
+    to: isoDateTimeSchema.optional(),
+  })
+  .strict()
+  .superRefine(validateDateRange);
+
 export function normalizeListQueryParams(
   raw: Record<string, unknown>,
 ): Record<string, unknown> {
@@ -208,6 +252,199 @@ export const updateProfileSchema = z
     fullName: z
       .union([z.string().trim().min(1).max(160), z.null()])
       .optional(),
+  })
+  .strict();
+
+export const communicationThreadCreateSchema = z
+  .object({
+    title: z.string().trim().min(1).max(240),
+    channelType: z.enum(["channel", "team", "direct", "incident"]).optional(),
+    topic: z.string().trim().max(500).optional(),
+  })
+  .strict();
+
+export const communicationMessageCreateSchema = z
+  .object({
+    body: z.string().trim().min(1).max(5000),
+  })
+  .strict();
+
+export const facilityCreateSchema = z
+  .object({
+    name: z.string().trim().min(1).max(240),
+    category: z.string().trim().min(1).max(120),
+    status: z.enum(["available", "limited", "maintenance"]).optional(),
+    location: z.string().trim().max(240).optional(),
+    capacity: z.coerce.number().int().min(0).max(100_000).optional(),
+    metadata: z.record(z.unknown()).optional(),
+  })
+  .strict();
+
+export const facilityUpdateSchema = z
+  .object({
+    name: z.string().trim().min(1).max(240).optional(),
+    category: z.string().trim().min(1).max(120).optional(),
+    status: z.enum(["available", "limited", "maintenance"]).optional(),
+    location: z.union([z.string().trim().max(240), z.null()]).optional(),
+    capacity: z.coerce.number().int().min(0).max(100_000).nullable().optional(),
+    metadata: z.record(z.unknown()).optional(),
+  })
+  .strict();
+
+export const facilityBookingCreateSchema = z
+  .object({
+    facilityId: z.string().uuid(),
+    title: z.string().trim().min(1).max(240),
+    startsAt: isoDateTimeSchema,
+    endsAt: isoDateTimeSchema,
+    status: z.enum(["pending", "approved", "rejected", "cancelled"]).optional(),
+    notes: z.string().trim().max(1000).optional(),
+    metadata: z.record(z.unknown()).optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    const from = Date.parse(value.startsAt);
+    const to = Date.parse(value.endsAt);
+    if (Number.isFinite(from) && Number.isFinite(to) && from > to) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["startsAt"],
+        message: "`startsAt` must be less than or equal to `endsAt`.",
+      });
+    }
+  });
+
+export const facilityBookingUpdateSchema = z
+  .object({
+    status: z.enum(["pending", "approved", "rejected", "cancelled"]).optional(),
+    notes: z.union([z.string().trim().max(1000), z.null()]).optional(),
+  })
+  .strict();
+
+export const maintenanceTicketCreateSchema = z
+  .object({
+    title: z.string().trim().min(1).max(240),
+    summary: z.string().trim().min(1).max(2000),
+    category: z.string().trim().min(1).max(120),
+    priority: z.enum(["low", "medium", "high"]).optional(),
+    status: z.enum(["open", "in_progress", "resolved", "closed"]).optional(),
+    assigneeName: z.string().trim().max(240).optional(),
+    dueAt: isoDateTimeSchema.optional(),
+    metadata: z.record(z.unknown()).optional(),
+  })
+  .strict();
+
+export const maintenanceTicketUpdateSchema = z
+  .object({
+    status: z.enum(["open", "in_progress", "resolved", "closed"]).optional(),
+    priority: z.enum(["low", "medium", "high"]).optional(),
+    assigneeName: z.union([z.string().trim().max(240), z.null()]).optional(),
+    dueAt: z.union([isoDateTimeSchema, z.null()]).optional(),
+    summary: z.string().trim().min(1).max(2000).optional(),
+    metadata: z.record(z.unknown()).optional(),
+  })
+  .strict();
+
+export const maintenanceCommentCreateSchema = z
+  .object({
+    body: z.string().trim().min(1).max(5000),
+  })
+  .strict();
+
+export const calendarEventCreateSchema = z
+  .object({
+    title: z.string().trim().min(1).max(240),
+    startsAt: isoDateTimeSchema,
+    endsAt: z.union([isoDateTimeSchema, z.null()]).optional(),
+    status: z.enum(["scheduled", "in_progress", "completed", "cancelled"]).optional(),
+    description: z.string().trim().max(5000).optional(),
+    metadata: z.record(z.unknown()).optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (!value.endsAt) {
+      return;
+    }
+    const from = Date.parse(value.startsAt);
+    const to = Date.parse(value.endsAt);
+    if (Number.isFinite(from) && Number.isFinite(to) && from > to) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["startsAt"],
+        message: "`startsAt` must be less than or equal to `endsAt`.",
+      });
+    }
+  });
+
+export const calendarEventUpdateSchema = z
+  .object({
+    title: z.string().trim().min(1).max(240).optional(),
+    startsAt: isoDateTimeSchema.optional(),
+    endsAt: z.union([isoDateTimeSchema, z.null()]).optional(),
+    status: z.enum(["scheduled", "in_progress", "completed", "cancelled"]).optional(),
+    description: z.union([z.string().trim().max(5000), z.null()]).optional(),
+    metadata: z.record(z.unknown()).optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (!value.endsAt || !value.startsAt) {
+      return;
+    }
+    const from = Date.parse(value.startsAt);
+    const to = Date.parse(value.endsAt);
+    if (Number.isFinite(from) && Number.isFinite(to) && from > to) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["startsAt"],
+        message: "`startsAt` must be less than or equal to `endsAt`.",
+      });
+    }
+  });
+
+export const knowledgeDocCreateSchema = z
+  .object({
+    title: z.string().trim().min(1).max(240),
+    category: z.enum(["runbooks", "playbooks", "specs", "notes"]),
+    owner: z.string().trim().min(1).max(240).optional(),
+    summary: z.string().trim().min(1).max(2000),
+    contentMarkdown: z.string().optional(),
+    tags: z.array(z.string().trim().min(1).max(80)).max(50).optional(),
+  })
+  .strict();
+
+export const knowledgeDocUpdateSchema = z
+  .object({
+    title: z.string().trim().min(1).max(240).optional(),
+    category: z.enum(["runbooks", "playbooks", "specs", "notes"]).optional(),
+    owner: z.string().trim().min(1).max(240).optional(),
+    summary: z.string().trim().min(1).max(2000).optional(),
+    contentMarkdown: z.string().optional(),
+    tags: z.array(z.string().trim().min(1).max(80)).max(50).optional(),
+  })
+  .strict();
+
+export const workspaceFileCreateSchema = z
+  .object({
+    parentId: z.union([z.string().uuid(), z.null()]).optional(),
+    name: z.string().trim().min(1).max(240),
+    kind: z.enum(["folder", "file"]),
+    extension: z.string().trim().max(40).optional(),
+    owner: z.string().trim().max(240).optional(),
+    sizeBytes: z.coerce.number().int().min(0).nullable().optional(),
+    shared: z.boolean().optional(),
+    metadata: z.record(z.unknown()).optional(),
+  })
+  .strict();
+
+export const workspaceFileUpdateSchema = z
+  .object({
+    parentId: z.union([z.string().uuid(), z.null()]).optional(),
+    name: z.string().trim().min(1).max(240).optional(),
+    extension: z.union([z.string().trim().max(40), z.null()]).optional(),
+    owner: z.string().trim().max(240).optional(),
+    sizeBytes: z.coerce.number().int().min(0).nullable().optional(),
+    shared: z.boolean().optional(),
+    metadata: z.record(z.unknown()).optional(),
   })
   .strict();
 

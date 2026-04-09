@@ -152,7 +152,10 @@ async function fetchRunResources(): Promise<RunResourcesPayload> {
   };
 }
 
-export function RunsPage() {
+export function RunsPage(props?: {
+  surface?: "activity" | "runs";
+}) {
+  const surface = props?.surface || "activity";
   const [searchParams] = useSearchParams();
   const session = getAuthSession();
   const isOperator =
@@ -746,9 +749,17 @@ export function RunsPage() {
   return (
     <div className="stack">
       <PageHeader
-        eyebrow="Run Explorer"
-        title="Runs, Timeline, and Recovery"
-        subtitle="Track execution outcomes, inspect retries and durable waits, and run first-success tests without leaving the app."
+        eyebrow={surface === "activity" ? "Activity Center" : "Run Explorer"}
+        title={
+          surface === "activity"
+            ? "Activity, Runs, and Recovery"
+            : "Runs, Timeline, and Recovery"
+        }
+        subtitle={
+          surface === "activity"
+            ? "Monitor execution outcomes, inspect retries and durable waits, and respond to incidents from the canonical operations surface."
+            : "Track execution outcomes, inspect retries and durable waits, and run first-success tests without leaving the app."
+        }
         actions={
           <>
             <button type="button" onClick={() => setShowAdvancedFilters(true)}>
@@ -780,7 +791,7 @@ export function RunsPage() {
 
       <DemoHint>
         First-success path: send a simulator test, inspect the run timeline, then confirm related
-        {isOperator ? " audit and alert signals." : " results."}
+        {isOperator ? " alert, audit, and approval signals." : " results."}
       </DemoHint>
 
       <div className="inline-actions">
@@ -805,7 +816,7 @@ export function RunsPage() {
           title="Run update"
           actions={
             <>
-              <Link to="/runs">Refresh run list</Link>
+              <Link to="/activity?view=runs">Refresh activity</Link>
               <Link to="/dashboard">View dashboard</Link>
               {isOperator ? <Link to="/alerts">Open alerts</Link> : null}
             </>
@@ -910,7 +921,7 @@ export function RunsPage() {
               title="Test queued"
               actions={
                 <>
-                  <Link to="/runs">Open runs</Link>
+            <Link to="/activity?view=runs">Open activity</Link>
                   {isOperator ? <Link to="/audit-logs">Check audit</Link> : null}
                   {isOperator ? <Link to="/alerts">Check alerts</Link> : null}
                 </>
@@ -943,7 +954,7 @@ export function RunsPage() {
                 <strong>Inspect timeline</strong>
                 <p>Review step outcomes, retries, delays, and branch decisions.</p>
                 <div className="inline-actions">
-                  <Link to="/runs">Run detail</Link>
+            <Link to="/activity?view=runs">Run detail</Link>
                 </div>
               </div>
             </div>

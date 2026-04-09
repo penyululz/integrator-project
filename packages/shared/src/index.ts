@@ -9,6 +9,7 @@ export * from "./types/agent";
 export * from "./types/platform";
 export * from "./types/query";
 export * from "./types/workspace";
+export * from "./types/collaboration";
 export * from "./types/workflow";
 export * from "./schemas";
 export * from "./utils/http-client";

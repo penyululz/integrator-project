@@ -17,20 +17,26 @@ React operational UI for:
 ## Canonical UI Source
 
 - `apps/web` is the canonical and only active frontend runtime surface.
+- `integrator-platform/` at repo root is migration/reference history only, not a build target.
 - Keep `Prototype Mode` and `Live Mode` behavior contract-compatible.
 - Keep route/query/state behavior aligned with `apps/api` and `packages/shared`.
+- The legacy shell/quick-switch/context-strip UI model was replaced with the integrator-platform shell model.
 
 ### Canonical Surface Coverage (current)
 
 - core runtime-integrated surfaces:
   - `/dashboard`, `/onboarding`, `/first-automation`
-  - `/integrations`, `/workflows`
-  - `/runs`, `/alerts`, `/audit-logs`, `/approvals`
+  - `/integrations`, `/workflows`, `/workflows/new`, `/workflows/:workflowId`
+  - `/activity`, `/alerts`, `/audit-logs`, `/approvals`
 - absorbed future-facing workspace surfaces (UI-ready, runtime-light):
   - `/settings`, `/profile`, `/organization`, `/docs`, `/files`
   - `/communication`, `/facility`, `/maintenance`, `/calendar`
 - source-of-truth:
   - `apps/web` is the active frontend working area
+
+### Compatibility Routes
+
+- `/runs` is compatibility-only and redirects to `/activity?view=runs`.
 
 ## Surface Lifecycle (Cleanup 3.5B)
 

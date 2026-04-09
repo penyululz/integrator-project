@@ -19,7 +19,7 @@ import {
   type EdgeChange,
   type NodeChange,
 } from "@xyflow/react";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useParams, useSearchParams } from "react-router-dom";
 import {
   createWorkflow,
   getAuthSession,
@@ -172,6 +172,8 @@ function toSupportModelLabel(
 }
 
 export function WorkflowsPage() {
+  const location = useLocation();
+  const params = useParams<{ workflowId?: string }>();
   const session = getAuthSession();
   const isOperator =
     session?.scope.orgRole === "owner" ||
@@ -180,6 +182,12 @@ export function WorkflowsPage() {
     session?.scope.workspaceRole === "admin";
   const [searchParams] = useSearchParams();
   const requestedTemplateId = searchParams.get("templateId");
+  const routeMode =
+    params.workflowId != null
+      ? "detail"
+      : location.pathname.endsWith("/new")
+        ? "create"
+        : "overview";
   const [adapters, setAdapters] = useState<AdapterMetadata[]>([]);
   const [agentTools, setAgentTools] = useState<AgentToolRecord[]>([]);
   const [credentials, setCredentials] = useState<CredentialRecord[]>([]);
@@ -509,6 +517,16 @@ export function WorkflowsPage() {
     () => suggestToolsForGoal(goalDraft),
     [goalDraft],
   );
+
+  useEffect(() => {
+    if (routeMode === "overview") {
+      return;
+    }
+    document.getElementById("workflow-studio-root")?.scrollIntoView({
+      behavior: "smooth",
+      block: "start",
+    });
+  }, [routeMode]);
 
   function updateDefinition(nextDefinition: WorkflowDefinition) {
     setDefinition(nextDefinition);
@@ -1365,7 +1383,7 @@ export function WorkflowsPage() {
       setContextDraft(JSON.stringify(nextDefault.context || {}, null, 2));
       setValidationErrors([]);
       setInfoMessage(
-        "Automation created successfully. Next: send a test run from the first automation wizard or Runs page.",
+        "Automation created successfully. Next: send a test run from First Success or the Activity surface.",
       );
     } catch (error) {
       const maybeAxiosError = error as {
@@ -1392,14 +1410,31 @@ export function WorkflowsPage() {
   return (
     <div className="stack">
       <PageHeader
-        eyebrow="Automations"
-        title="Automation Builder"
-        subtitle="Pick a starter automation, make small edits, and run your first result quickly."
+        eyebrow={routeMode === "overview" ? "Workflows" : "Workflow Studio"}
+        title={
+          routeMode === "detail"
+            ? "Edit Workflow"
+            : routeMode === "create"
+              ? "Build a New Workflow"
+              : "Workflow Library and Studio"
+        }
+        subtitle={
+          routeMode === "overview"
+            ? "Browse starter workflows, open the studio, and keep contract-backed validation and test-run behavior underneath the replacement UI system."
+            : "Use the dedicated workflow studio route for builder work, then move directly into Activity, approvals, and alerts without falling back to the retired shell."
+        }
         actions={
           <>
-            {nextStep ? <StatusPill tone="warning">Next: {nextStep.title}</StatusPill> : <StatusPill tone="success">Onboarding complete</StatusPill>}
-            <Link to="/first-automation">First automation wizard</Link>
-            <Link to="/runs">Runs</Link>
+            {nextStep ? (
+              <StatusPill tone="warning">Next: {nextStep.title}</StatusPill>
+            ) : (
+              <StatusPill tone="success">Onboarding complete</StatusPill>
+            )}
+            {params.workflowId ? (
+              <StatusPill tone="info">Workflow: {params.workflowId}</StatusPill>
+            ) : null}
+            <Link to="/first-automation">First success</Link>
+            <Link to="/activity?view=runs">Activity</Link>
             {isOperator ? <Link to="/audit-logs">Audit</Link> : null}
           </>
         }
@@ -1414,16 +1449,16 @@ export function WorkflowsPage() {
         }
         right={
           <>
-            <Link to="/integrations">Apps</Link>
-            <Link to="/first-automation">First automation</Link>
-            <Link to="/runs">Runs</Link>
+            <Link to="/integrations">Integrations</Link>
+            <Link to="/workflows/new">Open studio</Link>
+            <Link to="/activity?view=runs">Activity</Link>
           </>
         }
       />
 
       <DemoHint>
         Fastest path: pick a template, click <strong>Use template</strong>, then create the automation and
-        run a simulator test from <Link to="/runs">Runs</Link>.
+        run a simulator test from <Link to="/activity?view=runs">Activity</Link>.
       </DemoHint>
 
       <details
@@ -1454,7 +1489,7 @@ export function WorkflowsPage() {
               >
                 Browse starter templates
               </button>
-              <Link to="/first-automation">Open first automation wizard</Link>
+              <Link to="/first-automation">Open first success guide</Link>
             </div>
           </article>
           <article className="template-card">
@@ -1785,6 +1820,8 @@ export function WorkflowsPage() {
             </div>
           ) : null}
         </SurfaceCard>
+
+        <div id="workflow-studio-root" />
 
         {editorMode === "form" ? (
           <SurfaceCard
@@ -2437,7 +2474,7 @@ export function WorkflowsPage() {
                       </p>
                     </Callout>
                     <div className="inline-actions">
-                      <Link to="/runs">Open run explorer</Link>
+                      <Link to="/activity?view=runs">Open activity</Link>
                       {isOperator ? <Link to="/alerts">Check alerts</Link> : null}
                     </div>
                   </div>

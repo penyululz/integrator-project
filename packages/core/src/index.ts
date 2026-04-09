@@ -8,6 +8,7 @@ import { WorkflowRepository } from "./repositories/workflow-repository";
 import { RunRepository } from "./repositories/run-repository";
 import { AlertRepository } from "./repositories/alert-repository";
 import { RetentionRepository } from "./repositories/retention-repository";
+import { CollaborationRepository } from "./repositories/collaboration-repository";
 import { PluginLoader } from "./engine/plugin-loader";
 import { EventQueue } from "./engine/event-queue";
 import { resolveEventQueueBootstrapConfig } from "./engine/event-queue-config";
@@ -50,6 +51,7 @@ export type CoreRuntime = {
     authRepository: AuthRepository;
     alertRepository?: AlertRepository;
     retentionRepository?: RetentionRepository;
+    collaborationRepository?: CollaborationRepository;
   };
   close: () => Promise<void>;
 };
@@ -163,6 +165,7 @@ export async function createCoreRuntime(): Promise<CoreRuntime> {
   const authRepository = new AuthRepository(pool);
   const alertRepository = new AlertRepository(pool);
   const retentionRepository = new RetentionRepository(pool);
+  const collaborationRepository = new CollaborationRepository(pool);
 
   const pluginLoader = new PluginLoader();
   const discovered = await pluginLoader.loadFromManifests({
@@ -328,6 +331,7 @@ export async function createCoreRuntime(): Promise<CoreRuntime> {
       authRepository,
       alertRepository,
       retentionRepository,
+      collaborationRepository,
     },
     close: async () => {
       await eventQueue.close();
