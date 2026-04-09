@@ -11,9 +11,11 @@ import {
   Callout,
   DemoHint,
   FilterPills,
+  InsightChip,
   LoadingInline,
   MetricTile,
   PageHeader,
+  ProductToolbar,
   StatusPill,
 } from "../components/ui-kit";
 import {
@@ -312,6 +314,22 @@ export function AuditLogsPage() {
         eyebrow="Audit"
         title="Audit Console"
         subtitle="Trace operator actions and security-relevant changes with list/detail diagnostics."
+      />
+      <ProductToolbar
+        left={
+          <>
+            <InsightChip label="Total events" value={pagination.total} />
+            <InsightChip label="Security" value={classificationCounts.security} />
+            <InsightChip label="Operator" value={classificationCounts.operator_action} />
+          </>
+        }
+        right={
+          <>
+            <Link to="/runs">Runs</Link>
+            <Link to="/approvals">Approvals</Link>
+            <Link to="/alerts">Alerts</Link>
+          </>
+        }
       />
 
       <div className="metric-grid">

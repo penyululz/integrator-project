@@ -343,3 +343,30 @@ export function ChecklistSteps(props: {
     </ol>
   );
 }
+
+export function ProductToolbar(props: {
+  left?: ReactNode;
+  right?: ReactNode;
+}) {
+  if (!props.left && !props.right) {
+    return null;
+  }
+  return (
+    <section className="product-toolbar">
+      {props.left ? <div className="product-toolbar-left">{props.left}</div> : <span />}
+      {props.right ? <div className="product-toolbar-right">{props.right}</div> : null}
+    </section>
+  );
+}
+
+export function InsightChip(props: {
+  label: string;
+  value: ReactNode;
+}) {
+  return (
+    <div className="insight-chip">
+      <span>{props.label}</span>
+      <strong>{props.value}</strong>
+    </div>
+  );
+}

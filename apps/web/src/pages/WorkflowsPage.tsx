@@ -51,8 +51,10 @@ import {
   DemoHint,
   EmptyStatePanel,
   FilterPills,
+  InsightChip,
   LoadingInline,
   PageHeader,
+  ProductToolbar,
   StatusPill,
   SurfaceCard,
 } from "../components/ui-kit";
@@ -1399,6 +1401,22 @@ export function WorkflowsPage() {
             <Link to="/first-automation">First automation wizard</Link>
             <Link to="/runs">Runs</Link>
             {isOperator ? <Link to="/audit-logs">Audit</Link> : null}
+          </>
+        }
+      />
+      <ProductToolbar
+        left={
+          <>
+            <InsightChip label="Templates" value={templates.length} />
+            <InsightChip label="Automations" value={workflows.length} />
+            <InsightChip label="Runs" value={runsCount} />
+          </>
+        }
+        right={
+          <>
+            <Link to="/integrations">Apps</Link>
+            <Link to="/first-automation">First automation</Link>
+            <Link to="/runs">Runs</Link>
           </>
         }
       />

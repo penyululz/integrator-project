@@ -14,6 +14,18 @@ React operational UI for:
 - runs/logs
 - dashboard, alerts, and audit views
 
+## Canonical UI Source
+
+- `integrator-platform` is the canonical UI reference adopted into `apps/web`.
+- Migration strategy:
+  - preserve `apps/web` route/query/mode/runtime boundaries
+  - port stronger shell/surface patterns and visual hierarchy from `integrator-platform`
+  - keep `Prototype Mode` and `Live Mode` behavior contract-compatible
+- stack reconciliation:
+  - `integrator-platform` uses React/TypeScript/Vite/Zustand/Tailwind + `reactflow`
+  - `apps/web` keeps locked stack runtime (`@xyflow/react`, TanStack Query, React Router)
+  - visual patterns are adopted; API/runtime contracts remain monorepo-owned
+
 ## Phase 2 Experience Layer
 
 Current UX direction in web app:

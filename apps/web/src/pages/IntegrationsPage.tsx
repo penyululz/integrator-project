@@ -31,8 +31,10 @@ import {
   DemoHint,
   EmptyStatePanel,
   FilterPills,
+  InsightChip,
   LoadingInline,
   PageHeader,
+  ProductToolbar,
   StatusPill,
   SurfaceCard,
 } from "../components/ui-kit";
@@ -1345,6 +1347,34 @@ export function IntegrationsPage() {
             <span className="tag">{appCounts.total} total apps</span>
             <Link to="/first-automation">First automation</Link>
             <Link to="/workflows">Starter automations</Link>
+          </>
+        }
+      />
+      <ProductToolbar
+        left={
+          <>
+            <InsightChip label="Ready apps" value={appCounts.readyNow} />
+            <InsightChip label="Connected" value={appCounts.connected} />
+            <InsightChip label="Catalog mode" value={catalogMode} />
+          </>
+        }
+        right={
+          <>
+            <button
+              type="button"
+              onClick={() => setCatalogMode("starter")}
+              className={catalogMode === "starter" ? "button-primary" : ""}
+            >
+              Starter catalog
+            </button>
+            <button
+              type="button"
+              onClick={() => setCatalogMode("all")}
+              className={catalogMode === "all" ? "button-primary" : ""}
+            >
+              Full catalog
+            </button>
+            <Link to="/first-automation">First success</Link>
           </>
         }
       />

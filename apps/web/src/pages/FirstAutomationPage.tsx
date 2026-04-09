@@ -25,9 +25,11 @@ import {
   ChecklistSteps,
   DemoHint,
   EmptyStatePanel,
+  InsightChip,
   LoadingInline,
   PageHeader,
   PrimaryActionPanel,
+  ProductToolbar,
   StatusPill,
   SurfaceCard,
 } from "../components/ui-kit";
@@ -417,6 +419,22 @@ export function FirstAutomationPage() {
           isPrototypeMode
             ? "Prototype-first journey: connect seeded app, create starter automation, run simulation, inspect outcomes."
             : "Connect app -> build automation -> send test -> observe result."
+        }
+      />
+      <ProductToolbar
+        left={
+          <>
+            <InsightChip label="Mode" value={runtimeMode} />
+            <InsightChip label="Slack" value={stepStatus.connectedSlack ? "Connected" : "Pending"} />
+            <InsightChip label="Run status" value={latestRun?.status || "Not started"} />
+          </>
+        }
+        right={
+          <>
+            <Link to="/integrations">Apps</Link>
+            <Link to="/workflows">Automations</Link>
+            <Link to="/runs">Runs</Link>
+          </>
         }
       />
 

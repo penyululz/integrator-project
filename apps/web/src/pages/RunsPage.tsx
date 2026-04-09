@@ -36,9 +36,11 @@ import {
   DemoHint,
   EmptyStatePanel,
   FilterPills,
+  InsightChip,
   LoadingInline,
   MetricTile,
   PageHeader,
+  ProductToolbar,
   StatusPill,
   SurfaceCard,
 } from "../components/ui-kit";
@@ -753,6 +755,25 @@ export function RunsPage() {
               Advanced filters
             </button>
             <button type="button" onClick={() => void loadRuns(selectedRunId)}>Refresh runs</button>
+          </>
+        }
+      />
+      <ProductToolbar
+        left={
+          <>
+            <InsightChip label="Total runs" value={runs.length} />
+            <InsightChip label="Selected filter" value={runStatusFilter} />
+            <InsightChip
+              label="Awaiting approval"
+              value={runs.filter((run) => run.status === "awaiting_approval").length}
+            />
+          </>
+        }
+        right={
+          <>
+            <Link to="/workflows">Automations</Link>
+            {isOperator ? <Link to="/alerts">Alerts</Link> : null}
+            {isOperator ? <Link to="/audit-logs">Audit</Link> : null}
           </>
         }
       />

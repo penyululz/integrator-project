@@ -14,6 +14,47 @@ Self-hostable, enterprise-oriented AI automation platform for teams that want vi
 - `CI/CD: GitHub Actions`
 - `MODE: Prototype Mode | Live Mode`
 
+## Canonical Frontend Adoption (integrator-platform -> apps/web)
+
+`apps/web` now adopts the `integrator-platform` UI direction as the canonical product surface, while keeping the monorepo runtime contracts and mode behavior.
+
+### Stack Reconciliation
+
+- `integrator-platform` actual frontend stack:
+  - React + TypeScript + Vite
+  - Zustand local state
+  - Tailwind utility styling + component primitives
+  - `reactflow` (v11 package)
+  - local in-app page switching + mock-data store (no route/API contract parity layer)
+- `apps/web` active frontend stack:
+  - React + TypeScript + Vite
+  - React Router route shell
+  - TanStack Query for server-state
+  - Zustand for local UI state
+  - Tailwind + product CSS system
+  - `@xyflow/react` canvas runtime
+  - Prototype Mode / Live Mode contract-aware API integration
+- final locked target:
+  - React + TypeScript + Vite + TanStack Query + Zustand + Tailwind + React Flow / XYFlow
+
+Compatibility classification:
+
+- Fully compatible and preserved:
+  - React, TypeScript, Vite
+  - Zustand usage patterns
+  - Tailwind design language and component layering
+  - visual builder mental model
+- Partially compatible (adapted):
+  - `reactflow` from `integrator-platform` adapted to `@xyflow/react` in `apps/web`
+  - local mock-first page state adapted into route/query-driven runtime views
+- Conflicts kept out of runtime:
+  - mock-data-only page switching router
+  - frontend-local data source replacing real API contracts
+- Preserved visually only:
+  - shell/topbar hierarchy
+  - catalog/list/detail visual treatment
+  - builder palette/canvas/inspector interaction cues
+
 ## Development Modes
 
 - `Prototype Mode`: fake seeded data and simulated flows for local testing, UI review, and demos without real external setup.

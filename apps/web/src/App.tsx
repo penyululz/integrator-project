@@ -1,6 +1,14 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Link, NavLink, Navigate, Route, Routes, useLocation } from "react-router-dom";
+import {
+  Link,
+  NavLink,
+  Navigate,
+  Route,
+  Routes,
+  useLocation,
+  useNavigate,
+} from "react-router-dom";
 import {
   fetchPlatformHealth,
   getAuthSession,
@@ -148,6 +156,7 @@ function WorkspaceShell(props: {
   modeState: AppModeState;
 }) {
   const location = useLocation();
+  const navigate = useNavigate();
   const session = getAuthSession();
 
   if (!session?.accessToken) {
@@ -176,6 +185,8 @@ function WorkspaceShell(props: {
   const quickSwitchQuery = useUiStore((state) => state.quickSwitchQuery);
   const setQuickSwitchOpen = useUiStore((state) => state.setQuickSwitchOpen);
   const setQuickSwitchQuery = useUiStore((state) => state.setQuickSwitchQuery);
+  const [globalSearchQuery, setGlobalSearchQuery] = useState("");
+  const [globalSearchOpen, setGlobalSearchOpen] = useState(false);
 
   const filteredQuickSwitchEntries = useMemo(() => {
     const query = quickSwitchQuery.trim().toLowerCase();
@@ -188,6 +199,19 @@ function WorkspaceShell(props: {
       ),
     );
   }, [quickSwitchEntries, quickSwitchQuery]);
+  const globalSearchResults = useMemo(() => {
+    const query = globalSearchQuery.trim().toLowerCase();
+    if (!query) {
+      return [] as WorkspaceRoute[];
+    }
+    return quickSwitchEntries
+      .filter((entry) =>
+        [entry.label, entry.hint, entry.groupLabel].some((value) =>
+          value.toLowerCase().includes(query),
+        ),
+      )
+      .slice(0, 6);
+  }, [quickSwitchEntries, globalSearchQuery]);
 
   useEffect(() => {
     function onKeydown(event: KeyboardEvent) {
@@ -204,10 +228,24 @@ function WorkspaceShell(props: {
     window.addEventListener("keydown", onKeydown);
     return () => window.removeEventListener("keydown", onKeydown);
   }, []);
+  useEffect(() => {
+    setGlobalSearchOpen(false);
+  }, [location.pathname]);
 
   async function onLogout() {
     await logout();
     props.onSessionRefresh();
+  }
+
+  function onGlobalSearchSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const target = globalSearchResults[0];
+    if (!target) {
+      return;
+    }
+    setGlobalSearchOpen(false);
+    setGlobalSearchQuery("");
+    void navigate(target.to);
   }
 
   return (
@@ -282,6 +320,53 @@ function WorkspaceShell(props: {
 
         <div className="workspace-main">
           <header className="workspace-main-header">
+            <div className="workspace-global-topbar">
+              <form className="workspace-global-search" onSubmit={onGlobalSearchSubmit}>
+                <input
+                  type="search"
+                  placeholder="Search pages, runs, apps, or settings..."
+                  value={globalSearchQuery}
+                  onFocus={() => setGlobalSearchOpen(true)}
+                  onChange={(event) => setGlobalSearchQuery(event.target.value)}
+                />
+                <button type="submit" className="button-primary" disabled={globalSearchResults.length === 0}>
+                  Go
+                </button>
+                {globalSearchOpen && globalSearchResults.length > 0 ? (
+                  <div className="workspace-global-search-results">
+                    {globalSearchResults.map((entry) => (
+                      <button
+                        key={`global-search-${entry.to}`}
+                        type="button"
+                        className="workspace-global-search-result"
+                        onClick={() => {
+                          setGlobalSearchOpen(false);
+                          setGlobalSearchQuery("");
+                          void navigate(entry.to);
+                        }}
+                      >
+                        <div className="stack-sm">
+                          <strong>{entry.label}</strong>
+                          <span>{entry.hint}</span>
+                        </div>
+                        <span className="tag">{entry.groupLabel}</span>
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </form>
+              <div className="workspace-global-actions">
+                <button type="button" onClick={() => setQuickSwitchOpen(true)}>
+                  Quick switch
+                </button>
+                <Link to="/first-automation">First success</Link>
+                {routeContext.primaryActionTo ? (
+                  <Link className="button-link-primary" to={routeContext.primaryActionTo}>
+                    {routeContext.primaryActionLabel || "Open"}
+                  </Link>
+                ) : null}
+              </div>
+            </div>
             <ShellContextStrip
               title={routeContext.title}
               description={routeContext.description}
@@ -296,12 +381,9 @@ function WorkspaceShell(props: {
               }
               actions={
                 <>
-                  {routeContext.primaryActionTo ? (
-                    <Link className="button-link-primary" to={routeContext.primaryActionTo}>
-                      {routeContext.primaryActionLabel || "Open"}
-                    </Link>
-                  ) : null}
-                  <Link to="/first-automation">First success</Link>
+                  <span className="workspace-global-chip">
+                    CONTEXT: {routeContext.section.toUpperCase()}
+                  </span>
                 </>
               }
             />

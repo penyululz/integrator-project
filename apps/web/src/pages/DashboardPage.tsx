@@ -30,10 +30,12 @@ import {
   ChecklistSteps,
   DemoHint,
   EmptyStatePanel,
+  InsightChip,
   LoadingInline,
   MetricTile,
   PageHeader,
   PrimaryActionPanel,
+  ProductToolbar,
   StatusPill,
   SurfaceCard,
 } from "../components/ui-kit";
@@ -255,6 +257,22 @@ export function DashboardPage() {
             <button type="button" onClick={() => void loadAnalytics(timeWindow)}>
               Refresh
             </button>
+          </>
+        }
+      />
+      <ProductToolbar
+        left={
+          <>
+            <InsightChip label="Workspace" value={session?.scope.workspaceSlug || "unknown"} />
+            <InsightChip label="Mode" value={runtimeMode} />
+            <InsightChip label="Failure rate" value={overview ? formatPercent(failureRate) : "-"} />
+          </>
+        }
+        right={
+          <>
+            <Link to="/integrations">Connect app</Link>
+            <Link to="/workflows">Build automation</Link>
+            <Link to="/runs">View runs</Link>
           </>
         }
       />

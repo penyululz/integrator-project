@@ -15,9 +15,11 @@ import {
   Callout,
   DemoHint,
   FilterPills,
+  InsightChip,
   LoadingInline,
   MetricTile,
   PageHeader,
+  ProductToolbar,
   StatusPill,
 } from "../components/ui-kit";
 import {
@@ -465,6 +467,22 @@ export function AlertSettingsPage() {
         eyebrow="Alerts"
         title="Alert Operations Console"
         subtitle="Monitor alert delivery outcomes, inspect failures, and maintain escalation policy from one console."
+      />
+      <ProductToolbar
+        left={
+          <>
+            <InsightChip label="Lifecycle" value={derivedLifecycle} />
+            <InsightChip label="Stream events" value={logs.length} />
+            <InsightChip label="Cooldown" value={`${formState?.cooldownSeconds || 0}s`} />
+          </>
+        }
+        right={
+          <>
+            <Link to="/runs">Runs</Link>
+            <Link to="/approvals">Approvals</Link>
+            <Link to="/audit-logs">Audit</Link>
+          </>
+        }
       />
 
       <div className="metric-grid">

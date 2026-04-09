@@ -15,10 +15,12 @@ import {
   Callout,
   ChecklistSteps,
   EmptyStatePanel,
+  InsightChip,
   LoadingInline,
   MetricTile,
   PageHeader,
   PrimaryActionPanel,
+  ProductToolbar,
   StatusPill,
   SurfaceCard,
 } from "../components/ui-kit";
@@ -126,6 +128,22 @@ export function OnboardingPage() {
           isPrototypeMode
             ? "Prototype-first path: inspect seeded setup, trigger a simulated run, and verify outcomes without external setup."
             : "Follow a short sequence to connect an app, create an automation, and verify your first run."
+        }
+      />
+      <ProductToolbar
+        left={
+          <>
+            <InsightChip label="Completion" value={`${completion}%`} />
+            <InsightChip label="Templates" value={templates.length} />
+            <InsightChip label="Runs" value={runsCount} />
+          </>
+        }
+        right={
+          <>
+            <Link to="/integrations">Apps</Link>
+            <Link to="/first-automation">First automation</Link>
+            <Link to="/runs">Runs</Link>
+          </>
         }
       />
 

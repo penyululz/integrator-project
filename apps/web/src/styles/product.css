@@ -333,6 +333,82 @@ button:disabled {
   z-index: 5;
 }
 
+.workspace-global-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.workspace-global-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1 1 520px;
+}
+
+.workspace-global-search input {
+  width: 100%;
+  background: #ffffff;
+  border: 1px solid #d4deeb;
+  border-radius: 10px;
+  padding: 9px 11px;
+}
+
+.workspace-global-search-results {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 78px;
+  z-index: 12;
+  border: 1px solid #c9d8ec;
+  border-radius: 12px;
+  background: #ffffff;
+  box-shadow: 0 18px 34px rgba(16, 34, 51, 0.18);
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+}
+
+.workspace-global-search-result {
+  width: 100%;
+  text-align: left;
+  border: 1px solid #d9e3f1;
+  background: #f8fbff;
+  border-radius: 10px;
+  padding: 8px 9px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.workspace-global-search-result span {
+  color: #4f6475;
+  font-size: 12px;
+}
+
+.workspace-global-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.workspace-global-chip {
+  border-radius: 999px;
+  border: 1px solid #c8d6ea;
+  background: #f5f9ff;
+  color: #35526b;
+  padding: 3px 9px;
+  font-size: 11px;
+  font-weight: 800;
+}
+
 .workspace-content {
   min-height: 0;
   overflow: auto;
@@ -620,6 +696,41 @@ button:disabled {
 .page-section-body {
   display: grid;
   gap: 10px;
+}
+
+.product-toolbar {
+  border: 1px solid #d8e2ef;
+  border-radius: 12px;
+  background: #f8fbff;
+  padding: 10px;
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.product-toolbar-left,
+.product-toolbar-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.insight-chip {
+  border: 1px solid #d2ddec;
+  border-radius: 10px;
+  background: #ffffff;
+  padding: 6px 10px;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.insight-chip span {
+  color: #5a6f84;
+  font-size: 12px;
 }
 
 .inline-actions {
@@ -2335,6 +2446,20 @@ details[open] summary {
     position: relative;
     top: auto;
     padding: 10px 12px;
+  }
+
+  .workspace-global-topbar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .workspace-global-search-results {
+    right: 0;
+  }
+
+  .workspace-global-actions {
+    justify-content: flex-start;
   }
 
   .workspace-content {

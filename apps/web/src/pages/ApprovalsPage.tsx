@@ -12,9 +12,11 @@ import {
   Callout,
   EmptyStatePanel,
   FilterPills,
+  InsightChip,
   LoadingInline,
   MetricTile,
   PageHeader,
+  ProductToolbar,
   StatusPill,
 } from "../components/ui-kit";
 import {
@@ -281,6 +283,22 @@ export function ApprovalsPage() {
         eyebrow="Human Approval"
         title="Approval Queue Console"
         subtitle="Review high-safety agent tool requests, decide, and continue or terminate runs with a clear audit trail."
+      />
+      <ProductToolbar
+        left={
+          <>
+            <InsightChip label="Pending" value={statusCounts.pending} />
+            <InsightChip label="Approved" value={statusCounts.approved} />
+            <InsightChip label="Denied/Expired" value={statusCounts.denied + statusCounts.expired} />
+          </>
+        }
+        right={
+          <>
+            <Link to="/runs">Runs</Link>
+            <Link to="/audit-logs">Audit</Link>
+            <Link to="/alerts">Alerts</Link>
+          </>
+        }
       />
 
       <div className="metric-grid">
