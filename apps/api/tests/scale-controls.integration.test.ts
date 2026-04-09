@@ -300,7 +300,7 @@ async function createScaleRuntime() {
 
   return {
     runtime,
-    app: createApp(runtime),
+    app: await createApp(runtime),
     scope: {
       tenantId,
       organizationId,
@@ -359,13 +359,13 @@ describe("Scale controls + quotas + fairness", () => {
             workspaceSlug: "default",
           });
 
-          const first = await request(app)
+          const first = await request(app.server)
             .post("/api/v1/webhook/webhook/http_post")
             .set("authorization", `Bearer ${token}`)
             .send({ payload: { sequence: 1 } });
           expect(first.status).toBe(202);
 
-          const second = await request(app)
+          const second = await request(app.server)
             .post("/api/v1/webhook/webhook/http_post")
             .set("authorization", `Bearer ${token}`)
             .send({ payload: { sequence: 2 } });
@@ -429,12 +429,12 @@ describe("Scale controls + quotas + fairness", () => {
             runtime,
             workspaceSlug: "default",
           });
-          await request(app)
+          await request(app.server)
             .post("/api/v1/webhook/webhook/http_post")
             .set("authorization", `Bearer ${token}`)
             .send({ payload: { sequence: 1 } })
             .expect(202);
-          await request(app)
+          await request(app.server)
             .post("/api/v1/webhook/webhook/http_post")
             .set("authorization", `Bearer ${token}`)
             .send({ payload: { sequence: 2 } })
@@ -546,17 +546,17 @@ describe("Scale controls + quotas + fairness", () => {
             workspaceSlug: "secondary",
           });
 
-          await request(app)
+          await request(app.server)
             .post("/api/v1/webhook/webhook/http_post")
             .set("authorization", `Bearer ${tokenDefault}`)
             .send({ payload: { sequence: 1 } })
             .expect(202);
-          await request(app)
+          await request(app.server)
             .post("/api/v1/webhook/webhook/http_post")
             .set("authorization", `Bearer ${tokenDefault}`)
             .send({ payload: { sequence: 2 } })
             .expect(202);
-          await request(app)
+          await request(app.server)
             .post("/api/v1/webhook/webhook/http_post")
             .set("authorization", `Bearer ${tokenSecondary}`)
             .send({ payload: { sequence: 3 } })
@@ -580,7 +580,7 @@ describe("Scale controls + quotas + fairness", () => {
           expect(primaryRuns.length).toBeGreaterThanOrEqual(1);
           expect(secondaryRuns.length).toBeGreaterThanOrEqual(1);
 
-          const metricsResponse = await request(app).get("/metrics");
+          const metricsResponse = await request(app.server).get("/metrics");
           expect(metricsResponse.status).toBe(200);
           expect(metricsResponse.text).toContain("queue_fairness_events_total");
         } finally {
@@ -642,7 +642,7 @@ describe("Scale controls + quotas + fairness", () => {
             runtime,
             workspaceSlug: "default",
           });
-          await request(app)
+          await request(app.server)
             .post("/api/v1/webhook/webhook/http_post")
             .set("authorization", `Bearer ${token}`)
             .send({ payload: { sequence: 1 } })
@@ -658,20 +658,20 @@ describe("Scale controls + quotas + fairness", () => {
           expect(runs).toHaveLength(1);
           expect(runs[0].status).toBe("failed");
 
-          const quotas = await request(app)
+          const quotas = await request(app.server)
             .get("/api/v1/quotas")
             .set("authorization", `Bearer ${token}`);
           expect(quotas.status).toBe(200);
           expect(quotas.body.limits.maxQueuedJobsPerWorkspace).toBeGreaterThan(0);
 
-          const usage = await request(app)
+          const usage = await request(app.server)
             .get("/api/v1/usage")
             .set("authorization", `Bearer ${token}`);
           expect(usage.status).toBe(200);
           expect(usage.body.usage.workflowRunsStarted).toBeGreaterThanOrEqual(1);
           expect(usage.body.usage.adapterActionsExecuted).toBeGreaterThanOrEqual(1);
 
-          const metrics = await request(app).get("/metrics");
+          const metrics = await request(app.server).get("/metrics");
           expect(metrics.status).toBe(200);
           expect(metrics.text).toContain("workflow_throttled_total");
           expect(metrics.text).toContain(

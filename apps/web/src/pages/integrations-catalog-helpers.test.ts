@@ -5,6 +5,7 @@ import {
   getAppVisual,
   getSuggestedTemplatesForApp,
   toConnectionStatusLabel,
+  toReadinessBadgeTone,
 } from "./integrations-catalog-helpers";
 
 const templates: WorkflowTemplateSummary[] = [
@@ -61,6 +62,13 @@ describe("integrations-catalog-helpers", () => {
     expect(getAppVisual("graphql").iconKey).toBe("graphql");
     expect(describeSetupMethod("oauth2")).toBe("Secure sign-in");
     expect(describeSetupMethod("form")).toBe("Quick form setup");
+    expect(
+      toReadinessBadgeTone({
+        key: "slack",
+        readinessTier: "ready",
+        supportModel: "native",
+      }),
+    ).toBe("success");
   });
 
   it("maps connection status to user-facing labels", () => {

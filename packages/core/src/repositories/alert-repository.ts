@@ -2,6 +2,7 @@ import { Pool } from "pg";
 import {
   redactSensitiveRecord,
   sanitizeSensitiveMessage,
+  type StandardListResult,
 } from "@integration/shared";
 import {
   createCredentialCryptoFromEnv,
@@ -13,6 +14,15 @@ import type {
   AlertDeliveryLogItem,
   AlertSeverity,
 } from "../alerts/types";
+import {
+  appendFilterGroupClause,
+  buildOrderByClause,
+  encodeOffsetCursor,
+  normalizeSortDirectives,
+  resolvePaginationState,
+  type SqlColumnMap,
+  type SqlListQueryInput,
+} from "./list-query";
 
 export type AlertConfigStorageRecord = {
   id: string;
@@ -91,6 +101,17 @@ type AlertDeliveryLogRecord = {
   metadata_json: Record<string, unknown>;
   created_at: string;
 };
+
+export type AlertDeliveryLogListQuery = SqlListQueryInput & {
+  eventType?: string;
+  severity?: string;
+  status?: string;
+  channel?: string;
+  from?: string;
+  to?: string;
+};
+
+export type AlertDeliveryLogListResult = StandardListResult<AlertDeliveryLogItem>;
 
 function normalizeTextArray(input: unknown): string[] {
   if (!Array.isArray(input)) {
@@ -550,19 +571,115 @@ export class AlertRepository {
     workspaceId: string;
     limit?: number;
   }): Promise<AlertDeliveryLogItem[]> {
-    const limit = Math.max(1, Math.min(input.limit || 25, 100));
+    const result = await this.listDeliveryLogs({
+      tenantId: input.tenantId,
+      organizationId: input.organizationId,
+      workspaceId: input.workspaceId,
+      query: {
+        limit: input.limit,
+      },
+    });
+    return result.rows;
+  }
+
+  async listDeliveryLogs(input: {
+    tenantId: string;
+    organizationId: string;
+    workspaceId: string;
+    query: AlertDeliveryLogListQuery;
+  }): Promise<AlertDeliveryLogListResult> {
+    const predicates = [
+      "tenant_id = $1",
+      "organization_id = $2",
+      "workspace_id = $3",
+    ];
+    const values: unknown[] = [
+      input.tenantId,
+      input.organizationId,
+      input.workspaceId,
+    ];
+
+    if (input.query.eventType) {
+      values.push(input.query.eventType);
+      predicates.push(`event_type = $${values.length}`);
+    }
+    if (input.query.severity) {
+      values.push(input.query.severity);
+      predicates.push(`severity = $${values.length}`);
+    }
+    if (input.query.status) {
+      values.push(input.query.status);
+      predicates.push(`status = $${values.length}`);
+    }
+    if (input.query.channel) {
+      values.push(input.query.channel);
+      predicates.push(`channel = $${values.length}`);
+    }
+    if (input.query.from) {
+      values.push(input.query.from);
+      predicates.push(`created_at >= $${values.length}`);
+    }
+    if (input.query.to) {
+      values.push(input.query.to);
+      predicates.push(`created_at <= $${values.length}`);
+    }
+    if (input.query.search) {
+      values.push(`%${input.query.search}%`);
+      const position = values.length;
+      predicates.push(
+        `(event_type ILIKE $${position} OR channel ILIKE $${position} OR status ILIKE $${position} OR error_message ILIKE $${position} OR dispatch_id::text ILIKE $${position})`,
+      );
+    }
+
+    const filterColumns: SqlColumnMap = {
+      eventType: "event_type",
+      severity: "severity",
+      status: "status",
+      channel: "channel",
+      createdAt: "created_at",
+      attemptCount: "attempt_count",
+      responseCode: "response_code",
+      dispatchId: "dispatch_id::text",
+    };
+    appendFilterGroupClause({
+      predicates,
+      values,
+      filterGroup: input.query.filterGroup,
+      allowedColumns: filterColumns,
+    });
+
+    const pagination = resolvePaginationState(input.query, {
+      limit: 25,
+      maxLimit: 100,
+    });
+    const appliedSorts = normalizeSortDirectives(
+      input.query.sort,
+      filterColumns,
+      [{ field: "createdAt", direction: "desc" }],
+    );
+    const orderBy = buildOrderByClause(appliedSorts, filterColumns);
+
+    const countResult = await this.pool.query<{ total: string }>(
+      `SELECT COUNT(*)::bigint AS total
+       FROM alert_delivery_logs
+       WHERE ${predicates.join("\n         AND ")}`,
+      values,
+    );
+
+    const pagedValues = [...values, pagination.limit, pagination.offset];
+    const limitPosition = pagedValues.length - 1;
+    const offsetPosition = pagedValues.length;
     const result = await this.pool.query<AlertDeliveryLogRecord>(
       `SELECT *
        FROM alert_delivery_logs
-       WHERE tenant_id = $1
-         AND organization_id = $2
-         AND workspace_id = $3
-       ORDER BY created_at DESC
-       LIMIT $4`,
-      [input.tenantId, input.organizationId, input.workspaceId, limit],
+       WHERE ${predicates.join("\n         AND ")}
+       ${orderBy}
+       LIMIT $${limitPosition}
+       OFFSET $${offsetPosition}`,
+      pagedValues,
     );
 
-    return result.rows.map((row) => ({
+    const rows = result.rows.map((row) => ({
       id: row.id,
       dispatchId: row.dispatch_id,
       eventType: row.event_type,
@@ -575,6 +692,19 @@ export class AlertRepository {
       metadata: toJsonRecord(row.metadata_json),
       createdAt: row.created_at,
     }));
+    const totalApprox = Number(countResult.rows[0]?.total || 0);
+    const hasMore = pagination.offset + rows.length < totalApprox;
+
+    return {
+      rows,
+      nextCursor: hasMore ? encodeOffsetCursor(pagination.offset + rows.length) : null,
+      totalApprox,
+      appliedFilters: input.query.filterGroup || null,
+      appliedSorts,
+      page: pagination.page,
+      limit: pagination.limit,
+      hasMore,
+    };
   }
 
   private buildEncryptionEnvelope(

@@ -3,7 +3,17 @@ import {
   redactSensitiveRecord,
   redactSensitiveValue,
   sanitizeSensitiveMessage,
+  type StandardListResult,
 } from "@integration/shared";
+import {
+  appendFilterGroupClause,
+  buildOrderByClause,
+  encodeOffsetCursor,
+  normalizeSortDirectives,
+  resolvePaginationState,
+  type SqlColumnMap,
+  type SqlListQueryInput,
+} from "./list-query";
 
 export type WorkflowRunStatus =
   | "queued"
@@ -47,6 +57,22 @@ export type EventLogRecord = {
   event_type: string;
   payload_json: Record<string, unknown>;
   created_at: string;
+};
+
+export type RunTimelineEntry = {
+  id: string;
+  eventType: string;
+  stepId: string | null;
+  stepPath: string | null;
+  stepType: string | null;
+  status: string;
+  attempt: number | null;
+  message: string | null;
+  createdAt: string;
+  durationMs: number | null;
+  failureClassification: string | null;
+  selectedBranch: string | null;
+  skippedReason: string | null;
 };
 
 export type RetryQueueStatus =
@@ -205,6 +231,15 @@ export type AuditLogListResult = {
   hasMore: boolean;
 };
 
+export type WorkflowRunListQuery = SqlListQueryInput & {
+  status?: WorkflowRunStatus;
+  workflowId?: string;
+  from?: string;
+  to?: string;
+};
+
+export type WorkflowRunListResult = StandardListResult<WorkflowRunRecord>;
+
 export type AgentToolApprovalStatus =
   | "pending"
   | "approved"
@@ -259,6 +294,28 @@ export type AgentToolApprovalListResult = {
   hasMore: boolean;
 };
 
+export type AgentToolApprovalListQuery = SqlListQueryInput & {
+  runId?: string;
+  actorUserId?: string;
+  toolId?: string;
+  status?: AgentToolApprovalStatus;
+  from?: string;
+  to?: string;
+};
+
+export type AgentToolApprovalQueryResult = StandardListResult<AgentToolApprovalRecord>;
+
+export type AuditLogListQuery = SqlListQueryInput & {
+  actorUserId?: string;
+  action?: string;
+  targetType?: string;
+  targetId?: string;
+  from?: string;
+  to?: string;
+};
+
+export type AuditLogQueryResult = StandardListResult<AuditLogRecord>;
+
 export type AgentToolApprovalDecisionResult = {
   approval: AgentToolApprovalRecord;
   changed: boolean;
@@ -294,6 +351,8 @@ function toIsoIfPossible(value: unknown): string | null {
 
 export class RunRepository {
   constructor(private readonly pool: Pool) {}
+  // TODO(vNext): introduce time-based partitioning for workflow_runs/event_logs/audit_logs
+  // once retention windows exceed current single-table scan assumptions.
 
   private buildRunFilter(
     input: AnalyticsFilter,
@@ -637,6 +696,115 @@ export class RunRepository {
       [input.tenantId, input.organizationId, input.workspaceId],
     );
     return result.rows;
+  }
+
+  async listRunsWithQuery(input: {
+    tenantId: string;
+    organizationId: string;
+    workspaceId: string;
+    query: WorkflowRunListQuery;
+  }): Promise<WorkflowRunListResult> {
+    const predicates = [
+      "tenant_id = $1",
+      "organization_id = $2",
+      "workspace_id = $3",
+    ];
+    const values: unknown[] = [
+      input.tenantId,
+      input.organizationId,
+      input.workspaceId,
+    ];
+
+    if (input.query.workflowId) {
+      values.push(input.query.workflowId);
+      predicates.push(`workflow_id = $${values.length}`);
+    }
+    if (input.query.status) {
+      values.push(input.query.status);
+      predicates.push(`status = $${values.length}`);
+    }
+    if (input.query.from) {
+      values.push(input.query.from);
+      predicates.push(`created_at >= $${values.length}`);
+    }
+    if (input.query.to) {
+      values.push(input.query.to);
+      predicates.push(`created_at <= $${values.length}`);
+    }
+    if (input.query.search) {
+      values.push(`%${input.query.search}%`);
+      const position = values.length;
+      predicates.push(
+        `(id::text ILIKE $${position} OR workflow_id::text ILIKE $${position} OR status ILIKE $${position} OR last_error ILIKE $${position})`,
+      );
+    }
+
+    const filterColumns: SqlColumnMap = {
+      id: "id::text",
+      workflowId: "workflow_id::text",
+      status: "status",
+      attemptCount: "attempt_count",
+      maxAttempts: "max_attempts",
+      createdAt: "created_at",
+      startedAt: "started_at",
+      finishedAt: "finished_at",
+      replayOfRunId: "replay_of_run_id::text",
+      deadLetteredAt: "dead_lettered_at",
+      cancellationRequestedAt: "cancellation_requested_at",
+    };
+
+    appendFilterGroupClause({
+      predicates,
+      values,
+      filterGroup: input.query.filterGroup,
+      allowedColumns: filterColumns,
+    });
+
+    const pagination = resolvePaginationState(input.query, {
+      limit: 25,
+      maxLimit: 100,
+    });
+    const appliedSorts = normalizeSortDirectives(
+      input.query.sort,
+      filterColumns,
+      [{ field: "createdAt", direction: "desc" }],
+    );
+    const orderBy = buildOrderByClause(appliedSorts, filterColumns);
+
+    const countResult = await this.pool.query<{ total: string }>(
+      `SELECT COUNT(*)::bigint AS total
+       FROM workflow_runs
+       WHERE ${predicates.join("\n         AND ")}`,
+      values,
+    );
+
+    const pagedValues = [...values, pagination.limit, pagination.offset];
+    const limitPosition = pagedValues.length - 1;
+    const offsetPosition = pagedValues.length;
+    const rows = await this.pool.query<WorkflowRunRecord>(
+      `SELECT *
+       FROM workflow_runs
+       WHERE ${predicates.join("\n         AND ")}
+       ${orderBy}
+       LIMIT $${limitPosition}
+       OFFSET $${offsetPosition}`,
+      pagedValues,
+    );
+
+    const totalApprox = Number(countResult.rows[0]?.total || 0);
+    const hasMore = pagination.offset + rows.rows.length < totalApprox;
+    return {
+      rows: rows.rows,
+      nextCursor: hasMore
+        ? encodeOffsetCursor(pagination.offset + rows.rows.length)
+        : null,
+      totalApprox,
+      appliedFilters: input.query.filterGroup || null,
+      appliedSorts,
+      page: pagination.page,
+      limit: pagination.limit,
+      hasMore,
+    };
   }
 
   async findLatestReplayRunBySource(input: {
@@ -1080,8 +1248,9 @@ export class RunRepository {
     workspaceId: string;
     runId?: string;
     eventType?: string;
+    limit?: number;
   }): Promise<EventLogRecord[]> {
-    const values: Array<string> = [
+    const values: unknown[] = [
       input.tenantId,
       input.organizationId,
       input.workspaceId,
@@ -1102,15 +1271,114 @@ export class RunRepository {
       predicates.push(`event_type = $${values.length}`);
     }
 
+    const limit = Math.max(1, Math.min(input.limit || 250, 500));
+    values.push(limit);
+    const limitPosition = values.length;
+
     const result = await this.pool.query<EventLogRecord>(
       `SELECT *
        FROM event_logs
        WHERE ${predicates.join("\n         AND ")}
        ORDER BY created_at DESC
-       LIMIT 250`,
+       LIMIT $${limitPosition}`,
       values,
     );
     return result.rows;
+  }
+
+  async listRunTimeline(input: {
+    tenantId: string;
+    organizationId: string;
+    workspaceId: string;
+    runId: string;
+    limit?: number;
+  }): Promise<RunTimelineEntry[]> {
+    const logs = await this.listLogs({
+      tenantId: input.tenantId,
+      organizationId: input.organizationId,
+      workspaceId: input.workspaceId,
+      runId: input.runId,
+      limit: input.limit || 400,
+    });
+
+    return logs
+      .filter((entry) => {
+        if (!entry.workflow_run_id) {
+          return false;
+        }
+        if (!entry.event_type.startsWith("workflow.")) {
+          return false;
+        }
+        const payload = entry.payload_json || {};
+        return (
+          typeof payload.stepId === "string" ||
+          entry.event_type.startsWith("workflow.run.")
+        );
+      })
+      .map((entry) => {
+        const payload = entry.payload_json || {};
+        const eventType = entry.event_type;
+        const status = (() => {
+          if (eventType === "workflow.step.completed" || eventType === "workflow.delay.completed") {
+            return "success";
+          }
+          if (eventType === "workflow.step.failed" || eventType === "workflow.failed") {
+            return "failed";
+          }
+          if (eventType === "workflow.step.skipped") {
+            return "skipped";
+          }
+          if (eventType === "workflow.retry.scheduled" || eventType === "workflow.retry.started") {
+            return "retrying";
+          }
+          if (eventType === "workflow.delay.scheduled" || eventType === "workflow.delay.persisted") {
+            return "waiting";
+          }
+          if (eventType === "workflow.branch.selected") {
+            return "branch";
+          }
+          if (eventType === "workflow.run.cancelled_by_operator") {
+            return "cancelled";
+          }
+          return "info";
+        })();
+
+        return {
+          id: entry.id,
+          eventType,
+          stepId: typeof payload.stepId === "string" ? payload.stepId : null,
+          stepPath: typeof payload.stepPath === "string" ? payload.stepPath : null,
+          stepType: typeof payload.type === "string" ? payload.type : null,
+          status,
+          attempt: typeof payload.attempt === "number" ? payload.attempt : null,
+          message:
+            typeof payload.message === "string"
+              ? sanitizeSensitiveMessage(payload.message)
+              : null,
+          createdAt: entry.created_at,
+          durationMs:
+            typeof payload.stepDurationMs === "number"
+              ? payload.stepDurationMs
+              : typeof payload.adapterActionDurationMs === "number"
+                ? payload.adapterActionDurationMs
+                : null,
+          failureClassification:
+            typeof payload.classification === "string"
+              ? payload.classification
+              : typeof payload.failureClassification === "string"
+                ? payload.failureClassification
+                : null,
+          selectedBranch:
+            typeof payload.selectedBranch === "string" ? payload.selectedBranch : null,
+          skippedReason:
+            typeof payload.reason === "string"
+              ? payload.reason
+              : typeof payload.skippedReason === "string"
+                ? payload.skippedReason
+                : null,
+        } satisfies RunTimelineEntry;
+      })
+      .sort((left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt));
   }
 
   async upsertRetryJob(input: {
@@ -2121,38 +2389,144 @@ export class RunRepository {
   async listAgentToolApprovals(
     input: AgentToolApprovalFilter,
   ): Promise<AgentToolApprovalListResult> {
-    const filter = this.buildApprovalFilter(input);
-    const limit = Math.max(1, Math.min(input.limit || 25, 100));
-    const page = Math.max(1, input.page || 1);
-    const offset = (page - 1) * limit;
+    const result = await this.listAgentToolApprovalsWithQuery({
+      tenantId: input.tenantId,
+      organizationId: input.organizationId,
+      workspaceId: input.workspaceId,
+      query: {
+        runId: input.runId,
+        actorUserId: input.actorUserId,
+        toolId: input.toolId,
+        status: input.status,
+        from: input.from,
+        to: input.to,
+        page: input.page,
+        limit: input.limit,
+      },
+    });
+
+    return {
+      approvals: result.rows,
+      total: result.totalApprox,
+      page: result.page,
+      limit: result.limit,
+      hasMore: result.hasMore,
+    };
+  }
+
+  async listAgentToolApprovalsWithQuery(input: {
+    tenantId: string;
+    organizationId: string;
+    workspaceId: string;
+    query: AgentToolApprovalListQuery;
+  }): Promise<AgentToolApprovalQueryResult> {
+    const predicates = [
+      "tenant_id = $1",
+      "organization_id = $2",
+      "workspace_id = $3",
+    ];
+    const values: unknown[] = [
+      input.tenantId,
+      input.organizationId,
+      input.workspaceId,
+    ];
+
+    if (input.query.runId) {
+      values.push(input.query.runId);
+      predicates.push(`workflow_run_id = $${values.length}`);
+    }
+    if (input.query.actorUserId) {
+      values.push(input.query.actorUserId);
+      predicates.push(`actor_user_id = $${values.length}`);
+    }
+    if (input.query.toolId) {
+      values.push(input.query.toolId);
+      predicates.push(`tool_id = $${values.length}`);
+    }
+    if (input.query.status) {
+      values.push(input.query.status);
+      predicates.push(`status = $${values.length}`);
+    }
+    if (input.query.from) {
+      values.push(input.query.from);
+      predicates.push(`requested_at >= $${values.length}`);
+    }
+    if (input.query.to) {
+      values.push(input.query.to);
+      predicates.push(`requested_at <= $${values.length}`);
+    }
+    if (input.query.search) {
+      values.push(`%${input.query.search}%`);
+      const position = values.length;
+      predicates.push(
+        `(tool_id ILIKE $${position} OR tool_title ILIKE $${position} OR reason ILIKE $${position} OR workflow_run_id::text ILIKE $${position})`,
+      );
+    }
+
+    const filterColumns: SqlColumnMap = {
+      runId: "workflow_run_id::text",
+      status: "status",
+      toolId: "tool_id",
+      toolTitle: "tool_title",
+      actorUserId: "actor_user_id::text",
+      requestedAt: "requested_at",
+      decidedAt: "decided_at",
+      expiresAt: "expires_at",
+      workflowId: "workflow_id::text",
+      stepId: "step_id",
+      stepPath: "step_path",
+    };
+    appendFilterGroupClause({
+      predicates,
+      values,
+      filterGroup: input.query.filterGroup,
+      allowedColumns: filterColumns,
+    });
+
+    const pagination = resolvePaginationState(input.query, {
+      limit: 25,
+      maxLimit: 100,
+    });
+    const appliedSorts = normalizeSortDirectives(
+      input.query.sort,
+      filterColumns,
+      [{ field: "requestedAt", direction: "desc" }],
+    );
+    const orderBy = buildOrderByClause(appliedSorts, filterColumns);
 
     const countResult = await this.pool.query<{ total: string }>(
       `SELECT COUNT(*)::bigint AS total
        FROM agent_tool_approvals
-       WHERE ${filter.predicates.join("\n         AND ")}`,
-      filter.values,
-    );
-
-    const values = [...filter.values, limit, offset];
-    const limitPosition = values.length - 1;
-    const offsetPosition = values.length;
-    const rows = await this.pool.query<AgentToolApprovalRecord>(
-      `SELECT *
-       FROM agent_tool_approvals
-       WHERE ${filter.predicates.join("\n         AND ")}
-       ORDER BY requested_at DESC, created_at DESC
-       LIMIT $${limitPosition}
-       OFFSET $${offsetPosition}`,
+       WHERE ${predicates.join("\n         AND ")}`,
       values,
     );
 
-    const total = Number(countResult.rows[0]?.total || 0);
+    const pagedValues = [...values, pagination.limit, pagination.offset];
+    const limitPosition = pagedValues.length - 1;
+    const offsetPosition = pagedValues.length;
+    const rows = await this.pool.query<AgentToolApprovalRecord>(
+      `SELECT *
+       FROM agent_tool_approvals
+       WHERE ${predicates.join("\n         AND ")}
+       ${orderBy}
+       LIMIT $${limitPosition}
+       OFFSET $${offsetPosition}`,
+      pagedValues,
+    );
+
+    const totalApprox = Number(countResult.rows[0]?.total || 0);
+    const hasMore = pagination.offset + rows.rows.length < totalApprox;
     return {
-      approvals: rows.rows,
-      total,
-      page,
-      limit,
-      hasMore: page * limit < total,
+      rows: rows.rows,
+      nextCursor: hasMore
+        ? encodeOffsetCursor(pagination.offset + rows.rows.length)
+        : null,
+      totalApprox,
+      appliedFilters: input.query.filterGroup || null,
+      appliedSorts,
+      page: pagination.page,
+      limit: pagination.limit,
+      hasMore,
     };
   }
 
@@ -2524,29 +2898,108 @@ export class RunRepository {
   }
 
   async listAuditLogs(input: AuditLogFilter): Promise<AuditLogListResult> {
-    const auditFilter = this.buildAuditFilter(input);
-    const limit = Math.max(1, Math.min(input.limit || 25, 100));
-    const page = Math.max(1, input.page || 1);
-    const offset = (page - 1) * limit;
+    const result = await this.listAuditLogsWithQuery({
+      tenantId: input.tenantId,
+      organizationId: input.organizationId,
+      workspaceId: input.workspaceId,
+      query: {
+        actorUserId: input.actorUserId,
+        action: input.action,
+        targetType: input.targetType,
+        targetId: input.targetId,
+        from: input.from,
+        to: input.to,
+        page: input.page,
+        limit: input.limit,
+      },
+    });
 
-    const countResult = await this.pool.query<{ total: string }>(
-      `SELECT COUNT(*)::bigint AS total
-       FROM audit_logs al
-       WHERE ${auditFilter.predicates.join("\n         AND ")}`,
-      auditFilter.values,
+    return {
+      logs: result.rows,
+      total: result.totalApprox,
+      page: result.page,
+      limit: result.limit,
+      hasMore: result.hasMore,
+    };
+  }
+
+  async listAuditLogsWithQuery(input: {
+    tenantId: string;
+    organizationId: string;
+    workspaceId: string;
+    query: AuditLogListQuery;
+  }): Promise<AuditLogQueryResult> {
+    const predicates = [
+      "al.tenant_id = $1",
+      "al.organization_id = $2",
+      "al.workspace_id = $3",
+    ];
+    const values: unknown[] = [
+      input.tenantId,
+      input.organizationId,
+      input.workspaceId,
+    ];
+
+    if (input.query.actorUserId) {
+      values.push(input.query.actorUserId);
+      predicates.push(`al.actor_user_id = $${values.length}`);
+    }
+    if (input.query.action) {
+      values.push(input.query.action);
+      predicates.push(`al.action = $${values.length}`);
+    }
+    if (input.query.targetType) {
+      values.push(input.query.targetType);
+      predicates.push(`al.entity_type = $${values.length}`);
+    }
+    if (input.query.targetId) {
+      values.push(input.query.targetId);
+      predicates.push(`al.entity_id::text = $${values.length}`);
+    }
+    if (input.query.from) {
+      values.push(input.query.from);
+      predicates.push(`al.created_at >= $${values.length}`);
+    }
+    if (input.query.to) {
+      values.push(input.query.to);
+      predicates.push(`al.created_at <= $${values.length}`);
+    }
+    if (input.query.search) {
+      values.push(`%${input.query.search}%`);
+      const position = values.length;
+      predicates.push(
+        `(al.action ILIKE $${position} OR al.entity_type ILIKE $${position} OR al.entity_id::text ILIKE $${position} OR u.email ILIKE $${position} OR u.full_name ILIKE $${position})`,
+      );
+    }
+
+    const filterColumns: SqlColumnMap = {
+      action: "al.action",
+      targetType: "al.entity_type",
+      targetId: "al.entity_id::text",
+      actorUserId: "al.actor_user_id::text",
+      actorEmail: "u.email",
+      actorRole: "COALESCE(wm.role, om.role, u.role)::text",
+      createdAt: "al.created_at",
+    };
+    appendFilterGroupClause({
+      predicates,
+      values,
+      filterGroup: input.query.filterGroup,
+      allowedColumns: filterColumns,
+    });
+
+    const pagination = resolvePaginationState(input.query, {
+      limit: 25,
+      maxLimit: 100,
+    });
+    const appliedSorts = normalizeSortDirectives(
+      input.query.sort,
+      filterColumns,
+      [{ field: "createdAt", direction: "desc" }],
     );
+    const orderBy = buildOrderByClause(appliedSorts, filterColumns);
 
-    const values = [...auditFilter.values, limit, offset];
-    const limitPosition = values.length - 1;
-    const offsetPosition = values.length;
-
-    const result = await this.pool.query<AuditLogRecord>(
-      `SELECT
-         al.*,
-         u.email AS actor_email,
-         u.full_name AS actor_full_name,
-         COALESCE(wm.role, om.role, u.role)::text AS actor_role
-       FROM audit_logs al
+    const baseFrom = `FROM audit_logs al
        LEFT JOIN users u
          ON u.id = al.actor_user_id
        LEFT JOIN workspace_memberships wm
@@ -2556,26 +3009,48 @@ export class RunRepository {
        LEFT JOIN organization_memberships om
          ON om.user_id = al.actor_user_id
         AND om.organization_id = al.organization_id
-        AND om.status = 'active'
-       WHERE ${auditFilter.predicates.join("\n         AND ")}
-       ORDER BY al.created_at DESC, al.id DESC
+        AND om.status = 'active'`;
+
+    const countResult = await this.pool.query<{ total: string }>(
+      `SELECT COUNT(*)::bigint AS total
+       ${baseFrom}
+       WHERE ${predicates.join("\n         AND ")}`,
+      values,
+    );
+
+    const pagedValues = [...values, pagination.limit, pagination.offset];
+    const limitPosition = pagedValues.length - 1;
+    const offsetPosition = pagedValues.length;
+    const result = await this.pool.query<AuditLogRecord>(
+      `SELECT
+         al.*,
+         u.email AS actor_email,
+         u.full_name AS actor_full_name,
+         COALESCE(wm.role, om.role, u.role)::text AS actor_role
+       ${baseFrom}
+       WHERE ${predicates.join("\n         AND ")}
+       ${orderBy}
        LIMIT $${limitPosition}
        OFFSET $${offsetPosition}`,
-      values,
+      pagedValues,
     );
 
     const logs = result.rows.map((row) => ({
       ...row,
       metadata_json: redactSensitiveRecord((row.metadata_json || {}) as Record<string, unknown>),
     }));
-    const total = Number(countResult.rows[0]?.total || 0);
+    const totalApprox = Number(countResult.rows[0]?.total || 0);
+    const hasMore = pagination.offset + logs.length < totalApprox;
 
     return {
-      logs,
-      total,
-      page,
-      limit,
-      hasMore: page * limit < total,
+      rows: logs,
+      nextCursor: hasMore ? encodeOffsetCursor(pagination.offset + logs.length) : null,
+      totalApprox,
+      appliedFilters: input.query.filterGroup || null,
+      appliedSorts,
+      page: pagination.page,
+      limit: pagination.limit,
+      hasMore,
     };
   }
 

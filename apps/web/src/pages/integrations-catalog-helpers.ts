@@ -1,4 +1,5 @@
-﻿import type { AppConnectionRecord, WorkflowTemplateSummary } from "../api";
+import type { AppConnectionRecord, WorkflowTemplateSummary } from "../api";
+import { getAppReadiness } from "./app-readiness-helpers";
 
 export type AppIconKey =
   | "slack"
@@ -109,3 +110,8 @@ export function describeSetupMethod(method: AppConnectionRecord["setupMethod"]):
   return "No credentials needed";
 }
 
+export function toReadinessBadgeTone(
+  app: Pick<AppConnectionRecord, "key" | "readinessTier" | "supportModel">,
+): "success" | "warning" | "info" {
+  return getAppReadiness(app).tone;
+}

@@ -1,8 +1,74 @@
-﻿import axios from "axios";
+import axios from "axios";
+import {
+  PLATFORM_MODES,
+  resolvePlatformModeFromWebEnv,
+  type PlatformMode,
+} from "./platform-mode";
+// PROTOTYPE MODE ONLY
+// USED FOR LOCAL DEMO / UI ITERATION
+// KEEP CONTRACT SHAPE IN SYNC
+import {
+  prototypeApproveAgentApproval,
+  prototypeCancelRun,
+  prototypeCancelWait,
+  prototypeCompleteAdapterAuth,
+  prototypeCreateIntegration,
+  prototypeCreateWorkflow,
+  prototypeDevLogin,
+  prototypeDenyAgentApproval,
+  prototypeDisconnectAppConnection,
+  prototypeDisconnectCredential,
+  prototypeFetchMe,
+  prototypeFetchPlatformHealth,
+  prototypeGetAdapterAnalytics,
+  prototypeGetAgentApproval,
+  prototypeGetAlertConfig,
+  prototypeGetAnalyticsOverview,
+  prototypeGetAuditLog,
+  prototypeGetRetentionPolicy,
+  prototypeGetRetentionStatus,
+  prototypeGetRun,
+  prototypeGetWorkflowTemplate,
+  prototypeGetWorkflowAnalytics,
+  prototypeGetWorkspaceQuotas,
+  prototypeGetWorkspaceUsage,
+  prototypeListAdapters,
+  prototypeListAgentApprovals,
+  prototypeListAgentMemory,
+  prototypeListAgentTools,
+  prototypeListAlertDeliveryLogs,
+  prototypeListApps,
+  prototypeListAuditLogs,
+  prototypeListCredentials,
+  prototypeListIntegrations,
+  prototypeListLogs,
+  prototypeListRetryJobs,
+  prototypeListRuns,
+  prototypeListScheduledWaits,
+  prototypeListWorkflowTemplates,
+  prototypeListWorkflows,
+  prototypeLogin,
+  prototypeReleaseWaitNow,
+  prototypeReplayRun,
+  prototypeRescheduleWait,
+  prototypeResumeRunIfWaiting,
+  prototypeSendTestAlert,
+  prototypeStartAdapterAuth,
+  prototypeTestAppConnection,
+  prototypeTriggerWorkflowTestRun,
+  prototypeUpdateAlertConfig,
+  prototypeUpsertAgentMemory,
+  prototypeUpsertAppConnection,
+  prototypeValidateWorkflow,
+} from "./prototype-fixtures";
 import type { WorkflowDefinition } from "./types/workflow";
 
+// MODE: Prototype Mode | Live Mode
+// SHARED BETWEEN PROTOTYPE AND LIVE
+// KEEP CONTRACT SHAPE IN SYNC
 const baseURL = import.meta.env.VITE_API_BASE_URL || "http://localhost:4000/api/v1";
 const SESSION_STORAGE_KEY = "integration.auth.session";
+let apiRuntimeMode: PlatformMode = resolvePlatformModeFromWebEnv(import.meta.env).mode;
 
 export type PlatformRole = "owner" | "admin" | "member";
 
@@ -28,6 +94,12 @@ export type AuthSession = {
   expiresIn: string;
   user: SessionUser;
   scope: SessionScope;
+};
+
+export type PlatformHealth = {
+  status: string;
+  mode: PlatformMode;
+  modeSource: string;
 };
 
 export type AdapterMetadata = {
@@ -646,6 +718,37 @@ export type AlertDeliveryLogRecord = {
   createdAt: string;
 };
 
+export type StandardListQuery = {
+  cursor?: string;
+  page?: number;
+  limit?: number;
+  search?: string;
+  sort?: Array<{
+    field: string;
+    direction?: "asc" | "desc";
+  }>;
+  filterGroup?: Record<string, unknown>;
+  fields?: string[];
+};
+
+export type StandardListResponse<Row> = {
+  rows: Row[];
+  nextCursor: string | null;
+  totalApprox: number;
+  appliedFilters: Record<string, unknown>;
+  appliedSorts: Array<{
+    field: string;
+    direction: "asc" | "desc";
+  }>;
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    hasMore: boolean;
+    nextCursor?: string | null;
+  };
+};
+
 type LoginInput = {
   email: string;
   password: string;
@@ -670,11 +773,75 @@ function authHeaders(): Record<string, string> {
   };
 }
 
+function toStandardListResponse<Row>(input: {
+  payload: Record<string, unknown>;
+  fallbackRows?: Row[];
+  defaultPage?: number;
+  defaultLimit?: number;
+}): StandardListResponse<Row> {
+  const rows = (Array.isArray(input.payload.rows)
+    ? (input.payload.rows as Row[])
+    : input.fallbackRows || []) as Row[];
+  const nextCursor =
+    typeof input.payload.nextCursor === "string" ? input.payload.nextCursor : null;
+  const totalApprox = Number(input.payload.totalApprox || rows.length);
+  const paginationRaw =
+    typeof input.payload.pagination === "object" && input.payload.pagination !== null
+      ? (input.payload.pagination as Record<string, unknown>)
+      : {};
+
+  return {
+    rows,
+    nextCursor,
+    totalApprox: Number.isFinite(totalApprox) ? totalApprox : rows.length,
+    appliedFilters:
+      typeof input.payload.appliedFilters === "object" &&
+      input.payload.appliedFilters !== null
+        ? (input.payload.appliedFilters as Record<string, unknown>)
+        : {},
+    appliedSorts: Array.isArray(input.payload.appliedSorts)
+      ? (input.payload.appliedSorts as Array<{ field: string; direction: "asc" | "desc" }>)
+      : [],
+    pagination: {
+      page: Number(paginationRaw.page || input.defaultPage || 1),
+      limit: Number(paginationRaw.limit || input.defaultLimit || 25),
+      total: Number(paginationRaw.total || totalApprox || rows.length),
+      hasMore: Boolean(paginationRaw.hasMore),
+      nextCursor:
+        typeof paginationRaw.nextCursor === "string"
+          ? paginationRaw.nextCursor
+          : nextCursor,
+    },
+  };
+}
+
+export function setApiRuntimeMode(mode: PlatformMode): void {
+  apiRuntimeMode = mode;
+}
+
+export function getApiRuntimeMode(): PlatformMode {
+  return apiRuntimeMode;
+}
+
+function isPrototypeModeRuntime(): boolean {
+  // SHARED BETWEEN PROTOTYPE AND LIVE
+  // Source-of-truth runtime guard for API adapter behavior in the web client.
+  return apiRuntimeMode === PLATFORM_MODES.PROTOTYPE;
+}
+
 export function apiClient() {
   return axios.create({
     baseURL,
     headers: authHeaders(),
   });
+}
+
+export async function fetchPlatformHealth(): Promise<PlatformHealth> {
+  if (isPrototypeModeRuntime()) {
+    return prototypeFetchPlatformHealth(apiRuntimeMode);
+  }
+  const response = await axios.get<PlatformHealth>(`${baseURL}/health`);
+  return response.data;
 }
 
 export function getAuthSession(): AuthSession | null {
@@ -700,12 +867,22 @@ export function clearAuthSession(): void {
 }
 
 export async function login(input: LoginInput): Promise<AuthSession> {
+  if (isPrototypeModeRuntime()) {
+    const session = prototypeLogin(input);
+    setAuthSession(session);
+    return session;
+  }
   const response = await axios.post<AuthSession>(`${baseURL}/auth/login`, input);
   setAuthSession(response.data);
   return response.data;
 }
 
 export async function devLogin(input: DevLoginInput = {}): Promise<AuthSession> {
+  if (isPrototypeModeRuntime()) {
+    const session = prototypeDevLogin(input);
+    setAuthSession(session);
+    return session;
+  }
   const response = await axios.post<AuthSession>(`${baseURL}/auth/dev-login`, input);
   setAuthSession(response.data);
   return response.data;
@@ -716,11 +893,18 @@ export async function fetchMe(): Promise<{
   scope: SessionScope;
   workspaces: Array<{ id: string; slug: string; name: string; role: PlatformRole }>;
 }> {
+  if (isPrototypeModeRuntime()) {
+    return prototypeFetchMe();
+  }
   const response = await apiClient().get("/auth/me");
   return response.data;
 }
 
 export async function logout(): Promise<void> {
+  if (isPrototypeModeRuntime()) {
+    clearAuthSession();
+    return;
+  }
   try {
     await apiClient().post("/auth/logout");
   } finally {
@@ -732,6 +916,9 @@ export async function listAdapters(): Promise<{
   adapters: AdapterMetadata[];
   installedAdapters: InstalledAdapter[];
 }> {
+  if (isPrototypeModeRuntime()) {
+    return prototypeListAdapters();
+  }
   const response = await apiClient().get("/adapters");
   return {
     adapters: response.data.adapters || [],
@@ -740,6 +927,9 @@ export async function listAdapters(): Promise<{
 }
 
 export async function listApps(): Promise<AppConnectionRecord[]> {
+  if (isPrototypeModeRuntime()) {
+    return prototypeListApps();
+  }
   const response = await apiClient().get("/apps");
   return response.data.apps || [];
 }
@@ -752,6 +942,9 @@ export async function listAgentTools(): Promise<{
     contexts: McpContextRecord[];
   };
 }> {
+  if (isPrototypeModeRuntime()) {
+    return prototypeListAgentTools();
+  }
   const response = await apiClient().get("/agent/tools");
   return {
     tools: response.data.tools || [],
@@ -770,6 +963,9 @@ export async function listAgentMemory(input: {
   query?: string;
   limit?: number;
 } = {}): Promise<AgentMemoryRecord[]> {
+  if (isPrototypeModeRuntime()) {
+    return prototypeListAgentMemory(input);
+  }
   const response = await apiClient().get("/agent/memory", {
     params: input,
   });
@@ -783,6 +979,9 @@ export async function upsertAgentMemory(input: {
   key: string;
   value: unknown;
 }): Promise<AgentMemoryRecord> {
+  if (isPrototypeModeRuntime()) {
+    return prototypeUpsertAgentMemory(input);
+  }
   const response = await apiClient().put("/agent/memory", input);
   return response.data.memory as AgentMemoryRecord;
 }
@@ -801,6 +1000,9 @@ export async function upsertAppConnection(input: {
     sensitiveConfig?: Record<string, unknown>;
   };
 }): Promise<AppConnectionRecord | null> {
+  if (isPrototypeModeRuntime()) {
+    return prototypeUpsertAppConnection(input);
+  }
   const response = await apiClient().put(`/apps/${input.appKey}/connection`, {
     integrationName: input.integrationName,
     integrationConfig: input.integrationConfig,
@@ -818,6 +1020,9 @@ export async function testAppConnection(input: {
   reason: string | null;
   testedAt: string;
 }> {
+  if (isPrototypeModeRuntime()) {
+    return prototypeTestAppConnection(input);
+  }
   const response = await apiClient().post(`/apps/${input.appKey}/test`, {
     integrationConfig: input.integrationConfig,
   });
@@ -827,13 +1032,36 @@ export async function testAppConnection(input: {
 export async function disconnectAppConnection(
   appKey: string,
 ): Promise<{ deletedCredentials: number; app: AppConnectionRecord | null }> {
+  if (isPrototypeModeRuntime()) {
+    return prototypeDisconnectAppConnection(appKey);
+  }
   const response = await apiClient().delete(`/apps/${appKey}/connection`);
   return response.data;
 }
 
+export async function listIntegrationsQuery(
+  query: StandardListQuery & {
+    adapterKey?: string;
+    status?: string;
+  } = {},
+): Promise<StandardListResponse<IntegrationRecord>> {
+  if (isPrototypeModeRuntime()) {
+    return prototypeListIntegrations(query);
+  }
+  const response = await apiClient().get("/integrations", {
+    params: query,
+  });
+  return toStandardListResponse<IntegrationRecord>({
+    payload: response.data || {},
+    fallbackRows: response.data.integrations || [],
+    defaultPage: query.page || 1,
+    defaultLimit: query.limit || 25,
+  });
+}
+
 export async function listIntegrations(): Promise<IntegrationRecord[]> {
-  const response = await apiClient().get("/integrations");
-  return response.data.integrations || [];
+  const result = await listIntegrationsQuery();
+  return result.rows;
 }
 
 export async function createIntegration(input: {
@@ -841,6 +1069,9 @@ export async function createIntegration(input: {
   name: string;
   config?: Record<string, unknown>;
 }): Promise<IntegrationRecord> {
+  if (isPrototypeModeRuntime()) {
+    return prototypeCreateIntegration(input);
+  }
   const response = await apiClient().post("/integrations", {
     ...input,
     config: input.config || {},
@@ -849,11 +1080,18 @@ export async function createIntegration(input: {
 }
 
 export async function listCredentials(): Promise<CredentialRecord[]> {
+  if (isPrototypeModeRuntime()) {
+    return prototypeListCredentials();
+  }
   const response = await apiClient().get("/credentials");
   return response.data.credentials || [];
 }
 
 export async function disconnectCredential(providerKey: string): Promise<void> {
+  if (isPrototypeModeRuntime()) {
+    prototypeDisconnectCredential(providerKey);
+    return;
+  }
   await apiClient().delete(`/credentials/${providerKey}`);
 }
 
@@ -864,6 +1102,9 @@ export async function startAdapterAuth(input: {
   scopes?: string[];
   connection?: Record<string, unknown>;
 }): Promise<{ authUrl?: string }> {
+  if (isPrototypeModeRuntime()) {
+    return prototypeStartAdapterAuth(input);
+  }
   const response = await apiClient().post(`/integrations/${input.adapterKey}/auth/start`, {
     redirectUri: input.redirectUri,
     state: input.state,
@@ -880,6 +1121,10 @@ export async function completeAdapterAuth(input: {
   integrationId?: string;
   connection?: Record<string, unknown>;
 }): Promise<void> {
+  if (isPrototypeModeRuntime()) {
+    prototypeCompleteAdapterAuth(input);
+    return;
+  }
   await apiClient().post(`/integrations/${input.adapterKey}/auth/callback`, {
     integrationId: input.integrationId,
     code: input.code,
@@ -888,14 +1133,38 @@ export async function completeAdapterAuth(input: {
   });
 }
 
+export async function listWorkflowsQuery(
+  query: StandardListQuery & {
+    status?: string;
+    from?: string;
+    to?: string;
+  } = {},
+): Promise<StandardListResponse<WorkflowRecord>> {
+  if (isPrototypeModeRuntime()) {
+    return prototypeListWorkflows(query);
+  }
+  const response = await apiClient().get("/workflows", {
+    params: query,
+  });
+  return toStandardListResponse<WorkflowRecord>({
+    payload: response.data || {},
+    fallbackRows: response.data.workflows || [],
+    defaultPage: query.page || 1,
+    defaultLimit: query.limit || 25,
+  });
+}
+
 export async function listWorkflows(): Promise<WorkflowRecord[]> {
-  const response = await apiClient().get("/workflows");
-  return response.data.workflows || [];
+  const result = await listWorkflowsQuery();
+  return result.rows;
 }
 
 export async function validateWorkflow(input: {
   definition: WorkflowDefinition;
 }): Promise<{ valid: boolean; errors: string[] }> {
+  if (isPrototypeModeRuntime()) {
+    return prototypeValidateWorkflow(input);
+  }
   const response = await apiClient().post("/workflows/validate", input);
   return response.data;
 }
@@ -905,6 +1174,9 @@ export async function createWorkflow(input: {
   description?: string;
   definition: WorkflowDefinition;
 }): Promise<WorkflowRecord> {
+  if (isPrototypeModeRuntime()) {
+    return prototypeCreateWorkflow(input);
+  }
   const response = await apiClient().post("/workflows", input);
   return response.data.workflow;
 }
@@ -914,6 +1186,9 @@ export async function triggerWorkflowTestRun(input: {
   payload?: Record<string, unknown>;
   correlationId?: string;
 }): Promise<WorkflowTestRunResponse> {
+  if (isPrototypeModeRuntime()) {
+    return prototypeTriggerWorkflowTestRun(input);
+  }
   const response = await apiClient().post(`/workflows/${input.workflowId}/test-run`, {
     payload: input.payload,
     correlationId: input.correlationId,
@@ -922,21 +1197,52 @@ export async function triggerWorkflowTestRun(input: {
 }
 
 export async function listWorkflowTemplates(): Promise<WorkflowTemplateSummary[]> {
+  if (isPrototypeModeRuntime()) {
+    return prototypeListWorkflowTemplates();
+  }
   const response = await apiClient().get("/templates");
   return response.data.templates || [];
 }
 
 export async function getWorkflowTemplate(templateId: string): Promise<WorkflowTemplate> {
+  if (isPrototypeModeRuntime()) {
+    return prototypeGetWorkflowTemplate(templateId);
+  }
   const response = await apiClient().get(`/templates/${templateId}`);
   return response.data.template;
 }
 
+export async function listRunsQuery(
+  query: StandardListQuery & {
+    workflowId?: string;
+    status?: string;
+    from?: string;
+    to?: string;
+  } = {},
+): Promise<StandardListResponse<RunRecord>> {
+  if (isPrototypeModeRuntime()) {
+    return prototypeListRuns(query);
+  }
+  const response = await apiClient().get("/runs", {
+    params: query,
+  });
+  return toStandardListResponse<RunRecord>({
+    payload: response.data || {},
+    fallbackRows: response.data.runs || [],
+    defaultPage: query.page || 1,
+    defaultLimit: query.limit || 25,
+  });
+}
+
 export async function listRuns(): Promise<RunRecord[]> {
-  const response = await apiClient().get("/runs");
-  return response.data.runs || [];
+  const result = await listRunsQuery();
+  return result.rows;
 }
 
 export async function getRun(runId: string): Promise<RunRecord> {
+  if (isPrototypeModeRuntime()) {
+    return prototypeGetRun(runId);
+  }
   const response = await apiClient().get(`/runs/${runId}`);
   return response.data.run;
 }
@@ -950,6 +1256,9 @@ export async function cancelRun(
   cancelledRetryJobs: number;
   cancelledWaits: number;
 }> {
+  if (isPrototypeModeRuntime()) {
+    return prototypeCancelRun(runId, input);
+  }
   const response = await apiClient().post(`/runs/${runId}/cancel`, input);
   return response.data;
 }
@@ -963,6 +1272,9 @@ export async function replayRun(
   workflowId: string;
   correlationId: string | null;
 }> {
+  if (isPrototypeModeRuntime()) {
+    return prototypeReplayRun(runId, input);
+  }
   const response = await apiClient().post(`/runs/${runId}/replay`, input);
   return response.data;
 }
@@ -975,11 +1287,17 @@ export async function resumeRunIfWaiting(
   releasedWaits: number;
   status: string;
 }> {
+  if (isPrototypeModeRuntime()) {
+    return prototypeResumeRunIfWaiting(runId, input);
+  }
   const response = await apiClient().post(`/runs/${runId}/resume-if-waiting`, input);
   return response.data;
 }
 
 export async function listRetryJobs(): Promise<RetryQueueRecord[]> {
+  if (isPrototypeModeRuntime()) {
+    return prototypeListRetryJobs();
+  }
   const response = await apiClient().get("/retries");
   return response.data.retries || [];
 }
@@ -987,6 +1305,9 @@ export async function listRetryJobs(): Promise<RetryQueueRecord[]> {
 export async function listScheduledWaits(input?: {
   runId?: string;
 }): Promise<ScheduledWaitRecord[]> {
+  if (isPrototypeModeRuntime()) {
+    return prototypeListScheduledWaits(input);
+  }
   const response = await apiClient().get("/delays", {
     params: {
       runId: input?.runId,
@@ -999,6 +1320,9 @@ export async function rescheduleWait(
   waitId: string,
   input: { scheduledFor: string; reason?: string },
 ): Promise<{ wait: ScheduledWaitRecord }> {
+  if (isPrototypeModeRuntime()) {
+    return prototypeRescheduleWait(waitId, input);
+  }
   const response = await apiClient().post(`/waits/${waitId}/reschedule`, input);
   return response.data;
 }
@@ -1007,6 +1331,9 @@ export async function releaseWaitNow(
   waitId: string,
   input: { reason?: string } = {},
 ): Promise<{ wait: ScheduledWaitRecord }> {
+  if (isPrototypeModeRuntime()) {
+    return prototypeReleaseWaitNow(waitId, input);
+  }
   const response = await apiClient().post(`/waits/${waitId}/release-now`, input);
   return response.data;
 }
@@ -1020,6 +1347,9 @@ export async function cancelWait(
   runOutcome: string;
   run: RunRecord | null;
 }> {
+  if (isPrototypeModeRuntime()) {
+    return prototypeCancelWait(waitId, input);
+  }
   const response = await apiClient().post(`/waits/${waitId}/cancel`, input);
   return response.data;
 }
@@ -1028,6 +1358,9 @@ export async function listLogs(input?: {
   runId?: string;
   eventType?: string;
 }): Promise<EventLogRecord[]> {
+  if (isPrototypeModeRuntime()) {
+    return prototypeListLogs(input);
+  }
   const response = await apiClient().get("/logs", {
     params: {
       runId: input?.runId,
@@ -1040,21 +1373,33 @@ export async function listLogs(input?: {
 export async function listAuditLogs(
   input: AuditLogFilters = {},
 ): Promise<AuditLogListResponse> {
+  if (isPrototypeModeRuntime()) {
+    return prototypeListAuditLogs(input);
+  }
   const response = await apiClient().get("/audit-logs", {
     params: input,
   });
+  const standard = toStandardListResponse<AuditLogRecord>({
+    payload: response.data || {},
+    fallbackRows: response.data.logs || [],
+    defaultPage: input.page || 1,
+    defaultLimit: input.limit || 25,
+  });
   return {
-    logs: response.data.logs || [],
-    pagination: response.data.pagination || {
-      page: input.page || 1,
-      limit: input.limit || 25,
-      total: 0,
-      hasMore: false,
+    logs: standard.rows,
+    pagination: {
+      page: standard.pagination.page,
+      limit: standard.pagination.limit,
+      total: standard.pagination.total,
+      hasMore: standard.pagination.hasMore,
     },
   };
 }
 
 export async function getAuditLog(auditLogId: string): Promise<AuditLogRecord> {
+  if (isPrototypeModeRuntime()) {
+    return prototypeGetAuditLog(auditLogId);
+  }
   const response = await apiClient().get(`/audit-logs/${auditLogId}`);
   return response.data.log;
 }
@@ -1070,6 +1415,9 @@ export async function listAgentApprovals(
     hasMore: boolean;
   };
 }> {
+  if (isPrototypeModeRuntime()) {
+    return prototypeListAgentApprovals(input);
+  }
   const params: Record<string, unknown> = { ...input };
   if (!input.status || input.status === "all") {
     delete params.status;
@@ -1077,18 +1425,27 @@ export async function listAgentApprovals(
   const response = await apiClient().get("/approvals", {
     params,
   });
+  const standard = toStandardListResponse<AgentApprovalRecord>({
+    payload: response.data || {},
+    fallbackRows: response.data.approvals || [],
+    defaultPage: input.page || 1,
+    defaultLimit: input.limit || 25,
+  });
   return {
-    approvals: response.data.approvals || [],
-    pagination: response.data.pagination || {
-      page: input.page || 1,
-      limit: input.limit || 25,
-      total: 0,
-      hasMore: false,
+    approvals: standard.rows,
+    pagination: {
+      page: standard.pagination.page,
+      limit: standard.pagination.limit,
+      total: standard.pagination.total,
+      hasMore: standard.pagination.hasMore,
     },
   };
 }
 
 export async function getAgentApproval(approvalId: string): Promise<AgentApprovalRecord> {
+  if (isPrototypeModeRuntime()) {
+    return prototypeGetAgentApproval(approvalId);
+  }
   const response = await apiClient().get(`/approvals/${approvalId}`);
   return response.data.approval;
 }
@@ -1104,6 +1461,9 @@ export async function approveAgentApproval(
     approvedToolIds?: string[];
   };
 }> {
+  if (isPrototypeModeRuntime()) {
+    return prototypeApproveAgentApproval(approvalId, input);
+  }
   const response = await apiClient().post(`/approvals/${approvalId}/approve`, input);
   return response.data;
 }
@@ -1118,6 +1478,9 @@ export async function denyAgentApproval(
     queued: boolean;
   };
 }> {
+  if (isPrototypeModeRuntime()) {
+    return prototypeDenyAgentApproval(approvalId, input);
+  }
   const response = await apiClient().post(`/approvals/${approvalId}/deny`, input);
   return response.data;
 }
@@ -1126,6 +1489,9 @@ export async function getAnalyticsOverview(input: AnalyticsFilters = {}): Promis
   overview: AnalyticsOverview;
   alerts: AnalyticsAlertSignal[];
 }> {
+  if (isPrototypeModeRuntime()) {
+    return prototypeGetAnalyticsOverview(input);
+  }
   const response = await apiClient().get("/analytics/overview", {
     params: input,
   });
@@ -1138,6 +1504,9 @@ export async function getAnalyticsOverview(input: AnalyticsFilters = {}): Promis
 export async function getWorkflowAnalytics(
   input: AnalyticsFilters = {},
 ): Promise<WorkflowAnalyticsRow[]> {
+  if (isPrototypeModeRuntime()) {
+    return prototypeGetWorkflowAnalytics(input);
+  }
   const response = await apiClient().get("/analytics/workflows", {
     params: input,
   });
@@ -1147,6 +1516,9 @@ export async function getWorkflowAnalytics(
 export async function getAdapterAnalytics(
   input: AnalyticsFilters = {},
 ): Promise<AdapterAnalyticsRow[]> {
+  if (isPrototypeModeRuntime()) {
+    return prototypeGetAdapterAnalytics(input);
+  }
   const response = await apiClient().get("/analytics/adapters", {
     params: input,
   });
@@ -1154,6 +1526,9 @@ export async function getAdapterAnalytics(
 }
 
 export async function getWorkspaceQuotas(): Promise<WorkspaceQuotaResponse> {
+  if (isPrototypeModeRuntime()) {
+    return prototypeGetWorkspaceQuotas();
+  }
   const response = await apiClient().get("/quotas");
   return response.data as WorkspaceQuotaResponse;
 }
@@ -1162,6 +1537,9 @@ export async function getWorkspaceUsage(input: {
   from?: string;
   to?: string;
 } = {}): Promise<WorkspaceUsageResponse> {
+  if (isPrototypeModeRuntime()) {
+    return prototypeGetWorkspaceUsage();
+  }
   const response = await apiClient().get("/usage", {
     params: input,
   });
@@ -1169,11 +1547,17 @@ export async function getWorkspaceUsage(input: {
 }
 
 export async function getRetentionPolicy(): Promise<RetentionPolicySummary> {
+  if (isPrototypeModeRuntime()) {
+    return prototypeGetRetentionPolicy();
+  }
   const response = await apiClient().get("/retention");
   return response.data.policy as RetentionPolicySummary;
 }
 
 export async function getRetentionStatus(): Promise<RetentionStatusSummary> {
+  if (isPrototypeModeRuntime()) {
+    return prototypeGetRetentionStatus();
+  }
   const response = await apiClient().get("/retention/status");
   return response.data.status as RetentionStatusSummary;
 }
@@ -1182,6 +1566,9 @@ export async function getAlertConfig(): Promise<{
   config: AlertConfigPublicView;
   deliveryLogs: AlertDeliveryLogRecord[];
 }> {
+  if (isPrototypeModeRuntime()) {
+    return prototypeGetAlertConfig();
+  }
   const response = await apiClient().get("/alerts/config");
   return {
     config: response.data.config,
@@ -1189,9 +1576,36 @@ export async function getAlertConfig(): Promise<{
   };
 }
 
+export async function listAlertDeliveryLogs(
+  query: StandardListQuery & {
+    eventType?: string;
+    severity?: string;
+    status?: string;
+    channel?: string;
+    from?: string;
+    to?: string;
+  } = {},
+): Promise<StandardListResponse<AlertDeliveryLogRecord>> {
+  if (isPrototypeModeRuntime()) {
+    return prototypeListAlertDeliveryLogs(query);
+  }
+  const response = await apiClient().get("/alerts/delivery-logs", {
+    params: query,
+  });
+  return toStandardListResponse<AlertDeliveryLogRecord>({
+    payload: response.data || {},
+    fallbackRows: response.data.deliveryLogs || [],
+    defaultPage: query.page || 1,
+    defaultLimit: query.limit || 25,
+  });
+}
+
 export async function updateAlertConfig(
   config: AlertConfigInput,
 ): Promise<AlertConfigPublicView> {
+  if (isPrototypeModeRuntime()) {
+    return prototypeUpdateAlertConfig(config);
+  }
   const response = await apiClient().put("/alerts/config", config);
   return response.data.config;
 }
@@ -1203,6 +1617,12 @@ export async function sendTestAlert(input: {
   queued: boolean;
   deduped: boolean;
 }> {
+  if (isPrototypeModeRuntime()) {
+    return prototypeSendTestAlert(input);
+  }
   const response = await apiClient().post("/alerts/test", input);
   return response.data;
 }
+
+
+

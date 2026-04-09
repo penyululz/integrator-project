@@ -12,7 +12,7 @@ export function getLiveRefreshIntervalMs(mode: LiveRefreshMode): number | null {
   return LIVE_REFRESH_INTERVAL_MS[mode];
 }
 
-export function toTableDensityClass(mode: ViewDensity): string {
+export function toTableDensityClass(mode: ViewDensity): ViewDensity {
   return mode === "compact" ? "compact" : "comfortable";
 }
 

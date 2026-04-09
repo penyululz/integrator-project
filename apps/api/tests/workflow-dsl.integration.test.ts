@@ -295,7 +295,7 @@ async function createDslRuntime(definition: WorkflowDefinition) {
   };
 
   return {
-    app: createApp(runtime),
+    app: await createApp(runtime),
     runtime,
     workflow,
     probeAdapter,
@@ -309,7 +309,7 @@ async function createDslRuntime(definition: WorkflowDefinition) {
 }
 
 async function queueWebhookEvent(input: {
-  app: ReturnType<typeof createApp>;
+  app: Awaited<ReturnType<typeof createApp>>;
   runtime: CoreRuntime;
   payload: Record<string, unknown>;
 }) {
@@ -320,7 +320,7 @@ async function queueWebhookEvent(input: {
     workspaceSlug: "default",
   });
 
-  const response = await request(input.app)
+  const response = await request(input.app.server)
     .post("/api/v1/webhook/webhook/http_post")
     .set("authorization", `Bearer ${login.accessToken}`)
     .send({ payload: input.payload });

@@ -2,11 +2,13 @@ import { describe, expect, it } from "vitest";
 import {
   buildFirstSuccessLinks,
   buildOnboardingSteps,
+  getOnboardingPrimaryAction,
   getNextRecommendedStep,
   getNextPendingStep,
   getOnboardingCompletion,
   getOnboardingProgress,
 } from "./onboarding-helpers";
+import { PLATFORM_MODES } from "../platform-mode";
 
 describe("onboarding-helpers", () => {
   it("builds onboarding steps with expected completion state", () => {
@@ -89,5 +91,65 @@ describe("onboarding-helpers", () => {
 
     expect(getNextPendingStep(steps)).toBeNull();
     expect(links.some((link) => link.path === "/dashboard")).toBe(true);
+  });
+
+  it("returns a clear primary onboarding action", () => {
+    const incomplete = buildOnboardingSteps({
+      integrationsCount: 0,
+      connectedCredentialProviders: 0,
+      templatesCount: 2,
+      workflowsCount: 0,
+      runsCount: 0,
+    });
+
+    expect(
+      getOnboardingPrimaryAction({
+        steps: incomplete,
+        isOperator: false,
+      }).path,
+    ).toBe("/first-automation");
+
+    const complete = buildOnboardingSteps({
+      integrationsCount: 2,
+      connectedCredentialProviders: 2,
+      templatesCount: 2,
+      workflowsCount: 2,
+      runsCount: 2,
+    });
+
+    expect(
+      getOnboardingPrimaryAction({
+        steps: complete,
+        isOperator: true,
+      }).path,
+    ).toBe("/dashboard");
+  });
+
+  it("switches to prototype-first onboarding action and includes approvals shortcut", () => {
+    const steps = buildOnboardingSteps({
+      integrationsCount: 0,
+      connectedCredentialProviders: 0,
+      templatesCount: 2,
+      workflowsCount: 0,
+      runsCount: 0,
+    });
+
+    const primaryAction = getOnboardingPrimaryAction({
+      steps,
+      isOperator: true,
+      mode: PLATFORM_MODES.PROTOTYPE,
+    });
+
+    expect(primaryAction.label).toBe("Start first-success demo");
+    expect(primaryAction.path).toBe("/first-automation");
+    expect(primaryAction.description).toContain("FIRST-SUCCESS DEMO");
+
+    const links = buildFirstSuccessLinks({
+      steps,
+      isOperator: true,
+      mode: PLATFORM_MODES.PROTOTYPE,
+    });
+
+    expect(links.some((link) => link.path === "/approvals")).toBe(true);
   });
 });

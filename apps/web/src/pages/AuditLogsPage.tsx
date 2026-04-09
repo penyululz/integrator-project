@@ -12,10 +12,18 @@ import {
   DemoHint,
   FilterPills,
   LoadingInline,
+  MetricTile,
   PageHeader,
   StatusPill,
-  SurfaceCard,
 } from "../components/ui-kit";
+import {
+  OperationsAdvancedFilterDrawer,
+  OperationsConsoleLayout,
+  OperationsFilterBar,
+  OperationsListButton,
+  OperationsStatusBadge,
+} from "../features/operations/operations-console";
+import { getAuditClassification } from "../features/operations/operations-status";
 import {
   buildAuditTargetLink,
   shortId,
@@ -37,7 +45,16 @@ const AUDIT_QUICK_ACTIONS = [
   { id: "run.replay", label: "Replays" },
   { id: "wait.reschedule", label: "Wait reschedules" },
   { id: "wait.release_now", label: "Release now" },
+  { id: "approval.approved", label: "Approvals" },
+  { id: "alert.config_updated", label: "Alert settings" },
 ];
+
+const AUDIT_CLASSIFICATION_FILTERS = [
+  { id: "all", label: "All classes" },
+  { id: "operator_action", label: "Operator action" },
+  { id: "security", label: "Security" },
+  { id: "info", label: "Info" },
+] as const;
 
 type AuditFilterForm = {
   action: string;
@@ -54,6 +71,8 @@ type PaginationState = {
   total: number;
   hasMore: boolean;
 };
+
+type AuditClassificationFilter = (typeof AUDIT_CLASSIFICATION_FILTERS)[number]["id"];
 
 function toFilterInput(form: AuditFilterForm): AuditLogFilters {
   return {
@@ -95,8 +114,11 @@ export function AuditLogsPage() {
     [searchParams],
   );
 
-  const [formFilters, setFormFilters] = useState<AuditFilterForm>(initialFilters);
+  const [filterForm, setFilterForm] = useState<AuditFilterForm>(initialFilters);
   const [appliedFilters, setAppliedFilters] = useState<AuditFilterForm>(initialFilters);
+  const [classificationFilter, setClassificationFilter] = useState<AuditClassificationFilter>("all");
+  const [searchValue, setSearchValue] = useState("");
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
   const [page, setPage] = useState(1);
   const [logs, setLogs] = useState<AuditLogRecord[]>([]);
   const [pagination, setPagination] = useState<PaginationState>({
@@ -115,7 +137,7 @@ export function AuditLogsPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    setFormFilters(initialFilters);
+    setFilterForm(initialFilters);
     setAppliedFilters(initialFilters);
     setPage(1);
   }, [initialFilters]);
@@ -165,8 +187,9 @@ export function AuditLogsPage() {
 
   function onApplyFilters(event: FormEvent) {
     event.preventDefault();
-    setAppliedFilters(formFilters);
+    setAppliedFilters(filterForm);
     setPage(1);
+    setShowAdvancedFilters(false);
   }
 
   function onResetFilters() {
@@ -178,9 +201,10 @@ export function AuditLogsPage() {
       from: "",
       to: "",
     };
-    setFormFilters(reset);
+    setFilterForm(reset);
     setAppliedFilters(reset);
     setPage(1);
+    setShowAdvancedFilters(false);
   }
 
   useEffect(() => {
@@ -219,6 +243,54 @@ export function AuditLogsPage() {
     };
   }, [isOperator, liveRefreshMode, page, appliedFilters, selectedLogId]);
 
+  const visibleLogs = useMemo(() => {
+    const query = searchValue.trim().toLowerCase();
+    return logs.filter((entry) => {
+      const classification = getAuditClassification(entry).classification;
+      if (classificationFilter !== "all" && classification !== classificationFilter) {
+        return false;
+      }
+      if (!query) {
+        return true;
+      }
+      return [
+        entry.actionType,
+        entry.targetType || "",
+        entry.targetId || "",
+        entry.actorName || "",
+        entry.actorEmail || "",
+        entry.reason || "",
+        entry.note || "",
+      ].some((value) => value.toLowerCase().includes(query));
+    });
+  }, [logs, searchValue, classificationFilter]);
+
+  useEffect(() => {
+    if (!visibleLogs.length) {
+      setSelectedLogId(null);
+      return;
+    }
+    if (selectedLogId && visibleLogs.some((entry) => entry.id === selectedLogId)) {
+      return;
+    }
+    setSelectedLogId(visibleLogs[0].id);
+  }, [visibleLogs, selectedLogId]);
+
+  const classificationCounts = useMemo(() => {
+    return logs.reduce(
+      (accumulator, entry) => {
+        const classification = getAuditClassification(entry).classification;
+        accumulator[classification] += 1;
+        return accumulator;
+      },
+      {
+        info: 0,
+        security: 0,
+        operator_action: 0,
+      },
+    );
+  }, [logs]);
+
   if (!isOperator) {
     return (
       <div className="stack">
@@ -238,245 +310,93 @@ export function AuditLogsPage() {
     <div className="stack">
       <PageHeader
         eyebrow="Audit"
-        title="Operator Audit Trail"
-        subtitle="Review who changed run and wait states, when changes happened, and why."
-        actions={
-          <>
-            <button type="button" onClick={() => void loadAuditList(page, appliedFilters)}>
-              Refresh
-            </button>
-            <label>
-              View
-              <select
-                value={viewDensity}
-                onChange={(event) => setViewDensity(event.target.value as ViewDensity)}
-                style={{ marginLeft: 8 }}
-              >
-                <option value="comfortable">Comfortable</option>
-                <option value="compact">Compact</option>
-              </select>
-            </label>
-            <label>
-              Live
-              <select
-                value={liveRefreshMode}
-                onChange={(event) => setLiveRefreshMode(event.target.value as LiveRefreshMode)}
-                style={{ marginLeft: 8 }}
-              >
-                <option value="off">Off</option>
-                <option value="15s">15s</option>
-                <option value="30s">30s</option>
-                <option value="60s">60s</option>
-              </select>
-            </label>
-            <Link to="/runs">Open runs</Link>
-          </>
-        }
+        title="Audit Console"
+        subtitle="Trace operator actions and security-relevant changes with list/detail diagnostics."
       />
 
-      <Callout
-        tone="info"
-        title="Cross-surface flow"
-        actions={
-          <>
-            <Link to="/runs">Runs</Link>
-            <Link to="/alerts">Alerts</Link>
-          </>
-        }
-      >
-        <p>
-          Perform an operator action in Runs (cancel, replay, release wait), then inspect the matching
-          audit event here.
-        </p>
-      </Callout>
-
-      <DemoHint>
-        Tip: use filters to focus one run ID and action type so investigation stays fast.
-      </DemoHint>
-
-      <div className="inline-actions">
-        <StatusPill tone={liveRefreshMode === "off" ? "warning" : "success"}>
-          {liveRefreshMode === "off" ? "Live refresh off" : `Auto-refresh ${liveRefreshMode}`}
-        </StatusPill>
-        <span className="tag">View: {viewDensity}</span>
-        <span className="tag">Last synced {lastSyncedAt ? formatDateTime(lastSyncedAt) : "not yet"}</span>
+      <div className="metric-grid">
+        <MetricTile label="Total events" value={String(pagination.total)} />
+        <MetricTile label="Operator actions" value={String(classificationCounts.operator_action)} />
+        <MetricTile label="Security events" value={String(classificationCounts.security)} />
+        <MetricTile label="Info events" value={String(classificationCounts.info)} />
       </div>
 
-      {error ? (
-        <Callout tone="danger" title="Unable to load audit data">
-          <p>{error}</p>
-        </Callout>
-      ) : null}
-
-      <SurfaceCard title="Filters" subtitle="Narrow results by action, actor, target, or time window.">
-        <form onSubmit={onApplyFilters} className="stack-sm">
-          <FilterPills
-            options={AUDIT_QUICK_ACTIONS}
-            value={formFilters.action}
-            onChange={(next) =>
-              setFormFilters((current) => ({
-                ...current,
-                action: next,
-              }))
+      <OperationsConsoleLayout
+        toolbar={
+          <OperationsFilterBar
+            searchValue={searchValue}
+            searchPlaceholder="Search action, target, actor, note"
+            onSearchValueChange={setSearchValue}
+            primaryFilters={
+              <FilterPills
+                options={AUDIT_CLASSIFICATION_FILTERS.map((item) => ({
+                  id: item.id,
+                  label: item.label,
+                  count:
+                    item.id === "operator_action"
+                      ? classificationCounts.operator_action
+                      : item.id === "security"
+                        ? classificationCounts.security
+                        : item.id === "info"
+                          ? classificationCounts.info
+                          : logs.length,
+                }))}
+                value={classificationFilter}
+                onChange={(next) => setClassificationFilter(next as AuditClassificationFilter)}
+              />
+            }
+            actions={
+              <>
+                <span className="tag">{summarizeAuditFilters(appliedFilters)}</span>
+                <span className="tag">
+                  Last synced {lastSyncedAt ? formatDateTime(lastSyncedAt) : "not yet"}
+                </span>
+                <button type="button" onClick={() => setShowAdvancedFilters(true)}>
+                  Advanced filters
+                </button>
+                <label>
+                  View
+                  <select
+                    value={viewDensity}
+                    onChange={(event) => setViewDensity(event.target.value as ViewDensity)}
+                    style={{ marginLeft: 8 }}
+                  >
+                    <option value="comfortable">Comfortable</option>
+                    <option value="compact">Compact</option>
+                  </select>
+                </label>
+                <label>
+                  Live
+                  <select
+                    value={liveRefreshMode}
+                    onChange={(event) => setLiveRefreshMode(event.target.value as LiveRefreshMode)}
+                    style={{ marginLeft: 8 }}
+                  >
+                    <option value="off">Off</option>
+                    <option value="15s">15s</option>
+                    <option value="30s">30s</option>
+                    <option value="60s">60s</option>
+                  </select>
+                </label>
+                <button type="button" onClick={() => void loadAuditList(page, appliedFilters)}>
+                  Refresh
+                </button>
+              </>
             }
           />
-          <div className="form-grid two">
-            <label>
-              Action
-              <input
-                value={formFilters.action}
-                onChange={(event) =>
-                  setFormFilters((current) => ({
-                    ...current,
-                    action: event.target.value,
-                  }))
-                }
-                placeholder="run.cancel"
-                style={{ width: "100%", marginTop: 4 }}
-              />
-            </label>
-
-            <label>
-              Actor user ID
-              <input
-                value={formFilters.actorUserId}
-                onChange={(event) =>
-                  setFormFilters((current) => ({
-                    ...current,
-                    actorUserId: event.target.value,
-                  }))
-                }
-                placeholder="user UUID"
-                style={{ width: "100%", marginTop: 4 }}
-              />
-            </label>
-
-            <label>
-              Target type
-              <input
-                value={formFilters.targetType}
-                onChange={(event) =>
-                  setFormFilters((current) => ({
-                    ...current,
-                    targetType: event.target.value,
-                  }))
-                }
-                placeholder="workflow_run"
-                style={{ width: "100%", marginTop: 4 }}
-              />
-            </label>
-
-            <label>
-              Target ID
-              <input
-                value={formFilters.targetId}
-                onChange={(event) =>
-                  setFormFilters((current) => ({
-                    ...current,
-                    targetId: event.target.value,
-                  }))
-                }
-                placeholder="target UUID"
-                style={{ width: "100%", marginTop: 4 }}
-              />
-            </label>
-
-            <label>
-              From (ISO)
-              <input
-                value={formFilters.from}
-                onChange={(event) =>
-                  setFormFilters((current) => ({
-                    ...current,
-                    from: event.target.value,
-                  }))
-                }
-                placeholder="2026-04-01T00:00:00.000Z"
-                style={{ width: "100%", marginTop: 4 }}
-              />
-            </label>
-
-            <label>
-              To (ISO)
-              <input
-                value={formFilters.to}
-                onChange={(event) =>
-                  setFormFilters((current) => ({
-                    ...current,
-                    to: event.target.value,
-                  }))
-                }
-                placeholder="2026-04-02T00:00:00.000Z"
-                style={{ width: "100%", marginTop: 4 }}
-              />
-            </label>
-          </div>
-
+        }
+        leftTitle="Audit stream"
+        leftSubtitle="Newest events first with quick drill-in."
+        leftMeta={
           <div className="inline-actions">
-            <button type="submit" className="button-primary">Apply filters</button>
-            <button type="button" onClick={onResetFilters}>Reset</button>
-            <span className="tag">{summarizeAuditFilters(appliedFilters)}</span>
+            <StatusPill tone={liveRefreshMode === "off" ? "warning" : "success"}>
+              {liveRefreshMode === "off" ? "Live refresh off" : `Auto-refresh ${liveRefreshMode}`}
+            </StatusPill>
+            <span className="tag">Page {pagination.page}</span>
           </div>
-        </form>
-      </SurfaceCard>
-
-      <div className="template-grid">
-        <SurfaceCard title="Audit entries" subtitle="Operator actions recorded for this workspace.">
-          {loadingList ? <LoadingInline label="Loading audit logs..." /> : null}
-
-          {logs.length === 0 ? (
-            <div className="empty-state">
-              <p>No audit events found for the current filters.</p>
-              <p>Try clearing filters or perform an operator action from the Runs page first.</p>
-              <div className="inline-actions">
-                <button type="button" onClick={onResetFilters}>Clear filters</button>
-                <Link to="/runs">Go to runs</Link>
-              </div>
-            </div>
-          ) : null}
-
-          {logs.length > 0 ? (
-            <div style={{ overflowX: "auto" }}>
-              <table className={`table ${viewDensity === "compact" ? "compact" : ""}`}>
-                <thead>
-                  <tr>
-                    <th>Timestamp</th>
-                    <th>Action</th>
-                    <th>Actor</th>
-                    <th>Target</th>
-                    <th>Reason</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {logs.map((entry) => {
-                    const targetLink = buildAuditTargetLink(entry);
-                    return (
-                      <tr
-                        key={entry.id}
-                        onClick={() => setSelectedLogId(entry.id)}
-                        className={selectedLogId === entry.id ? "table-row-selected" : ""}
-                        style={{ cursor: "pointer" }}
-                      >
-                        <td>{formatDateTime(entry.timestamp)}</td>
-                        <td>{toAuditActionLabel(entry.actionType)}</td>
-                        <td>{entry.actorName || entry.actorEmail || shortId(entry.actorUserId)}</td>
-                        <td>
-                          {targetLink ? (
-                            <Link to={targetLink}>{summarizeAuditTarget(entry)}</Link>
-                          ) : (
-                            summarizeAuditTarget(entry)
-                          )}
-                        </td>
-                        <td>{entry.reason || entry.note || "-"}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          ) : null}
-
-          <div className="inline-actions" style={{ marginTop: 8 }}>
+        }
+        leftActions={
+          <div className="inline-actions">
             <button
               type="button"
               disabled={page <= 1 || loadingList}
@@ -491,26 +411,96 @@ export function AuditLogsPage() {
             >
               Next
             </button>
-            <span className="tag">
-              Page {pagination.page} | {pagination.total} total
-            </span>
           </div>
-        </SurfaceCard>
-
-        <SurfaceCard title="Audit detail" subtitle="Expanded context for the selected event." highlight>
-          {loadingDetail ? <LoadingInline label="Loading detail..." /> : null}
-          {!selectedLog ? <p>Select an entry for details.</p> : null}
-
-          {selectedLog ? (
+        }
+        leftPane={
+          <>
+            <DemoHint>
+              Tip: filter by run or approval ID to reconstruct an exact operator decision chain.
+            </DemoHint>
+            {loadingList ? <LoadingInline label="Loading audit logs..." /> : null}
+            {error ? (
+              <Callout tone="danger" title="Unable to load audit data">
+                <p>{error}</p>
+              </Callout>
+            ) : null}
+            {visibleLogs.length === 0 ? (
+              <Callout tone="info" title="No audit events found for this view">
+                <p>Try clearing filters or perform an operator action from Runs or Approvals.</p>
+              </Callout>
+            ) : (
+              <div className="stack-sm">
+                {visibleLogs.map((entry) => {
+                  const classification = getAuditClassification(entry);
+                  const targetLink = buildAuditTargetLink(entry);
+                  return (
+                    <OperationsListButton
+                      key={entry.id}
+                      title={toAuditActionLabel(entry.actionType)}
+                      subtitle={summarizeAuditTarget(entry)}
+                      selected={selectedLogId === entry.id}
+                      status={
+                        <OperationsStatusBadge
+                          tone={classification.descriptor.tone}
+                          label={classification.descriptor.label}
+                        />
+                      }
+                      meta={
+                        <>
+                          <span className="tag">
+                            {entry.actorName || entry.actorEmail || shortId(entry.actorUserId)}
+                          </span>
+                          <span className="tag">{formatDateTime(entry.timestamp)}</span>
+                          {targetLink ? <Link to={targetLink}>Open target</Link> : null}
+                        </>
+                      }
+                      onClick={() => setSelectedLogId(entry.id)}
+                    />
+                  );
+                })}
+              </div>
+            )}
+          </>
+        }
+        rightTitle="Audit detail"
+        rightSubtitle="Full payload, state transition, and cross-linked targets."
+        rightMeta={
+          selectedLog ? (
+            <div className="inline-actions">
+              {buildAuditTargetLink(selectedLog) ? (
+                <Link to={buildAuditTargetLink(selectedLog)!}>Open target</Link>
+              ) : null}
+              <Link to="/runs">Runs</Link>
+              <Link to="/approvals">Approvals</Link>
+              <Link to="/alerts">Alerts</Link>
+            </div>
+          ) : null
+        }
+        rightPane={
+          loadingDetail ? (
+            <LoadingInline label="Loading detail..." />
+          ) : !selectedLog ? (
+            <Callout tone="info" title="Select an audit event to inspect details." />
+          ) : (
             <div className="stack-sm">
               <Callout tone="info" title="Action summary">
                 <p>{toAuditEntryDescription(selectedLog)}</p>
               </Callout>
 
+              <div className="inline-actions">
+                <OperationsStatusBadge
+                  tone={getAuditClassification(selectedLog).descriptor.tone}
+                  label={getAuditClassification(selectedLog).descriptor.label}
+                />
+                <span className="tag">{toAuditActionLabel(selectedLog.actionType)}</span>
+                <span className="tag">{selectedLog.correlationId || "no correlation id"}</span>
+              </div>
+
               <div><strong>ID:</strong> <code>{selectedLog.id}</code></div>
               <div><strong>Timestamp:</strong> {formatDateTime(selectedLog.timestamp)}</div>
               <div><strong>Actor role:</strong> {selectedLog.actorRole || "-"}</div>
-              <div><strong>Correlation ID:</strong> {selectedLog.correlationId || "-"}</div>
+              <div><strong>Target:</strong> {summarizeAuditTarget(selectedLog)}</div>
+              <div><strong>Reason:</strong> {selectedLog.reason || selectedLog.note || "-"}</div>
 
               <div className="card-muted" style={{ borderRadius: 10, padding: 10 }}>
                 <strong>Previous state</strong>
@@ -532,17 +522,113 @@ export function AuditLogsPage() {
                   {JSON.stringify(selectedLog.metadata || {}, null, 2)}
                 </pre>
               </div>
-
-              {buildAuditTargetLink(selectedLog) ? (
-                <div className="inline-actions">
-                  <Link to={buildAuditTargetLink(selectedLog)!}>Open related run/wait</Link>
-                  <Link to="/runs">Back to runs</Link>
-                </div>
-              ) : null}
             </div>
-          ) : null}
-        </SurfaceCard>
-      </div>
+          )
+        }
+      />
+
+      <OperationsAdvancedFilterDrawer
+        open={showAdvancedFilters}
+        title="Audit filters"
+        description="Filter by action, actor, target, and time range."
+        onClose={() => setShowAdvancedFilters(false)}
+        onApply={onApplyFilters}
+        onReset={onResetFilters}
+      >
+        <FilterPills
+          options={AUDIT_QUICK_ACTIONS}
+          value={filterForm.action}
+          onChange={(next) =>
+            setFilterForm((current) => ({
+              ...current,
+              action: next,
+            }))
+          }
+        />
+        <label>
+          Action
+          <input
+            value={filterForm.action}
+            onChange={(event) =>
+              setFilterForm((current) => ({
+                ...current,
+                action: event.target.value,
+              }))
+            }
+            placeholder="run.cancel"
+          />
+        </label>
+
+        <label>
+          Actor user ID
+          <input
+            value={filterForm.actorUserId}
+            onChange={(event) =>
+              setFilterForm((current) => ({
+                ...current,
+                actorUserId: event.target.value,
+              }))
+            }
+            placeholder="user UUID"
+          />
+        </label>
+
+        <label>
+          Target type
+          <input
+            value={filterForm.targetType}
+            onChange={(event) =>
+              setFilterForm((current) => ({
+                ...current,
+                targetType: event.target.value,
+              }))
+            }
+            placeholder="workflow_run"
+          />
+        </label>
+
+        <label>
+          Target ID
+          <input
+            value={filterForm.targetId}
+            onChange={(event) =>
+              setFilterForm((current) => ({
+                ...current,
+                targetId: event.target.value,
+              }))
+            }
+            placeholder="target UUID"
+          />
+        </label>
+
+        <label>
+          From (ISO)
+          <input
+            value={filterForm.from}
+            onChange={(event) =>
+              setFilterForm((current) => ({
+                ...current,
+                from: event.target.value,
+              }))
+            }
+            placeholder="2026-04-01T00:00:00.000Z"
+          />
+        </label>
+
+        <label>
+          To (ISO)
+          <input
+            value={filterForm.to}
+            onChange={(event) =>
+              setFilterForm((current) => ({
+                ...current,
+                to: event.target.value,
+              }))
+            }
+            placeholder="2026-04-02T00:00:00.000Z"
+          />
+        </label>
+      </OperationsAdvancedFilterDrawer>
     </div>
   );
 }

@@ -1,4 +1,5 @@
-﻿import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useSearchParams } from "react-router-dom";
 import {
   type AgentToolRecord,
@@ -41,6 +42,17 @@ import {
   StatusPill,
   SurfaceCard,
 } from "../components/ui-kit";
+import {
+  OperationsAdvancedFilterDrawer,
+  OperationsConsoleLayout,
+  OperationsFilterBar,
+  OperationsListButton,
+  OperationsStatusBadge,
+} from "../features/operations/operations-console";
+import {
+  getRunStatusDescriptor,
+  getWaitStatusDescriptor,
+} from "../features/operations/operations-status";
 import {
   compactPayload,
   countRunsByStatus,
@@ -116,6 +128,28 @@ function getLatestRunForWorkflow(runs: RunRecord[], workflowId: string): RunReco
   return candidate || null;
 }
 
+type RunResourcesPayload = {
+  runs: RunRecord[];
+  retries: RetryQueueRecord[];
+  scheduledWaits: ScheduledWaitRecord[];
+  workflows: WorkflowRecord[];
+};
+
+async function fetchRunResources(): Promise<RunResourcesPayload> {
+  const [runs, retries, scheduledWaits, workflows] = await Promise.all([
+    listRuns(),
+    listRetryJobs(),
+    listScheduledWaits(),
+    listWorkflows(),
+  ]);
+  return {
+    runs,
+    retries,
+    scheduledWaits,
+    workflows,
+  };
+}
+
 export function RunsPage() {
   const [searchParams] = useSearchParams();
   const session = getAuthSession();
@@ -155,9 +189,22 @@ export function RunsPage() {
   const [simulatorLoading, setSimulatorLoading] = useState(false);
   const [simulatorResult, setSimulatorResult] = useState<WorkflowTestRunResponse | null>(null);
   const [showAdvancedRunDetails, setShowAdvancedRunDetails] = useState(false);
+  const [runSearch, setRunSearch] = useState("");
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
 
   const requestedRunId = searchParams.get("runId");
   const requestedWaitId = searchParams.get("waitId");
+  const queryClient = useQueryClient();
+  const runResourcesQuery = useQuery({
+    // STATE: TanStack Query server-state source for run/retry/wait/workflow lists.
+    queryKey: ["runs-page-resources"],
+    queryFn: fetchRunResources,
+  });
+  const agentToolCatalogQuery = useQuery({
+    queryKey: ["agent-tool-catalog"],
+    queryFn: listAgentTools,
+  });
+  const runsLoading = loadingRuns || runResourcesQuery.isLoading || runResourcesQuery.isFetching;
 
   const selectedRunRetries = useMemo(() => {
     if (!selectedRunId) {
@@ -214,6 +261,21 @@ export function RunsPage() {
     () => filterRunsByStatus(runs, runStatusFilter),
     [runs, runStatusFilter],
   );
+  const searchFilteredRuns = useMemo(() => {
+    const query = runSearch.trim().toLowerCase();
+    if (!query) {
+      return visibleRuns;
+    }
+    return visibleRuns.filter((run) =>
+      [
+        run.id,
+        run.workflow_id,
+        run.status,
+        run.last_error || "",
+        run.created_at,
+      ].some((value) => value.toLowerCase().includes(query)),
+    );
+  }, [visibleRuns, runSearch]);
   const runStatusFilterPills = useMemo(
     () =>
       RUN_STATUS_FILTER_OPTIONS.map((option) => {
@@ -286,15 +348,68 @@ export function RunsPage() {
     [logHighlights],
   );
 
-  async function loadAgentToolCatalog() {
-    try {
-      const payload = await listAgentTools();
-      setAgentTools(payload.tools);
-      setAgentMcpContexts(payload.mcp.contexts);
-    } catch {
-      setAgentTools([]);
-      setAgentMcpContexts([]);
+  function applyRunResources(
+    payload: RunResourcesPayload,
+    currentSelectedRunId?: string | null,
+  ): RunRecord[] {
+    const nextRuns = payload.runs;
+    const nextRetries = payload.retries;
+    const nextScheduledWaits = payload.scheduledWaits;
+    const nextWorkflows = payload.workflows;
+    setRuns(nextRuns);
+    setRetries(nextRetries);
+    setScheduledWaits(nextScheduledWaits);
+    setWorkflows(nextWorkflows);
+    setLastSyncedAt(new Date().toISOString());
+
+    if (nextRuns.length === 0) {
+      setSelectedRunId(null);
+      setSelectedRun(null);
+      setLogs([]);
+      setRelatedAuditLogs([]);
+      setRunMemory([]);
+      setWorkflowMemory([]);
     }
+
+    const runIdFromWait = requestedWaitId
+      ? nextScheduledWaits.find((wait) => wait.id === requestedWaitId)?.workflow_run_id
+      : null;
+    const preferredRunIdCandidate =
+      currentSelectedRunId ||
+      requestedRunId ||
+      runIdFromWait ||
+      nextRuns[0]?.id ||
+      null;
+    const preferredRunId =
+      preferredRunIdCandidate && nextRuns.some((run) => run.id === preferredRunIdCandidate)
+        ? preferredRunIdCandidate
+        : nextRuns[0]?.id || null;
+
+    setSelectedRunId(preferredRunId);
+
+    if (nextWorkflows.length === 0) {
+      setSelectedTestWorkflowId("");
+    } else {
+      setSelectedTestWorkflowId((current) => {
+        if (current && nextWorkflows.some((workflow) => workflow.id === current)) {
+          return current;
+        }
+
+        if (preferredRunId) {
+          const runWorkflowId = nextRuns.find((run) => run.id === preferredRunId)?.workflow_id;
+          if (
+            runWorkflowId &&
+            nextWorkflows.some((workflow) => workflow.id === runWorkflowId)
+          ) {
+            return runWorkflowId;
+          }
+        }
+
+        return nextWorkflows[0].id;
+      });
+    }
+
+    return nextRuns;
   }
 
   async function loadRuns(currentSelectedRunId?: string | null): Promise<RunRecord[]> {
@@ -302,66 +417,11 @@ export function RunsPage() {
     setError(null);
 
     try {
-      const [nextRuns, nextRetries, nextScheduledWaits, nextWorkflows] = await Promise.all([
-        listRuns(),
-        listRetryJobs(),
-        listScheduledWaits(),
-        listWorkflows(),
-      ]);
-      setRuns(nextRuns);
-      setRetries(nextRetries);
-      setScheduledWaits(nextScheduledWaits);
-      setWorkflows(nextWorkflows);
-      setLastSyncedAt(new Date().toISOString());
-
-      if (nextRuns.length === 0) {
-        setSelectedRunId(null);
-        setSelectedRun(null);
-        setLogs([]);
-        setRelatedAuditLogs([]);
-        setRunMemory([]);
-        setWorkflowMemory([]);
-      }
-
-      const runIdFromWait = requestedWaitId
-        ? nextScheduledWaits.find((wait) => wait.id === requestedWaitId)?.workflow_run_id
-        : null;
-      const preferredRunIdCandidate =
-        currentSelectedRunId ||
-        requestedRunId ||
-        runIdFromWait ||
-        nextRuns[0]?.id ||
-        null;
-      const preferredRunId =
-        preferredRunIdCandidate && nextRuns.some((run) => run.id === preferredRunIdCandidate)
-          ? preferredRunIdCandidate
-          : nextRuns[0]?.id || null;
-
-      setSelectedRunId(preferredRunId);
-
-      if (nextWorkflows.length === 0) {
-        setSelectedTestWorkflowId("");
-      } else {
-        setSelectedTestWorkflowId((current) => {
-          if (current && nextWorkflows.some((workflow) => workflow.id === current)) {
-            return current;
-          }
-
-          if (preferredRunId) {
-            const runWorkflowId = nextRuns.find((run) => run.id === preferredRunId)?.workflow_id;
-            if (
-              runWorkflowId &&
-              nextWorkflows.some((workflow) => workflow.id === runWorkflowId)
-            ) {
-              return runWorkflowId;
-            }
-          }
-
-          return nextWorkflows[0].id;
-        });
-      }
-
-      return nextRuns;
+      const payload = await queryClient.fetchQuery({
+        queryKey: ["runs-page-resources"],
+        queryFn: fetchRunResources,
+      });
+      return applyRunResources(payload, currentSelectedRunId);
     } catch (loadError) {
       setError((loadError as Error).message || "Failed to load runs.");
       return [];
@@ -620,12 +680,25 @@ export function RunsPage() {
   }
 
   useEffect(() => {
-    void loadAgentToolCatalog();
-  }, []);
+    if (agentToolCatalogQuery.data) {
+      setAgentTools(agentToolCatalogQuery.data.tools);
+      setAgentMcpContexts(agentToolCatalogQuery.data.mcp.contexts);
+    }
+  }, [agentToolCatalogQuery.data]);
 
   useEffect(() => {
-    void loadRuns(selectedRunId);
-  }, [requestedRunId, requestedWaitId]);
+    if (runResourcesQuery.data) {
+      applyRunResources(runResourcesQuery.data, selectedRunId);
+      setLoadingRuns(false);
+    }
+  }, [runResourcesQuery.data, selectedRunId, requestedRunId, requestedWaitId]);
+
+  useEffect(() => {
+    if (runResourcesQuery.error) {
+      setError((runResourcesQuery.error as Error).message || "Failed to load runs.");
+      setLoadingRuns(false);
+    }
+  }, [runResourcesQuery.error]);
 
   useEffect(() => {
     if (!selectedRunId) {
@@ -676,45 +749,9 @@ export function RunsPage() {
         subtitle="Track execution outcomes, inspect retries and durable waits, and run first-success tests without leaving the app."
         actions={
           <>
-            <label>
-              Event filter
-              <select
-                value={eventTypeFilter}
-                onChange={(event) => setEventTypeFilter(event.target.value)}
-                style={{ marginLeft: 8 }}
-              >
-                {RUN_EVENT_FILTER_OPTIONS.map((option) => (
-                  <option key={option || "all"} value={option}>
-                    {option || "all events"}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              View
-              <select
-                value={viewDensity}
-                onChange={(event) => setViewDensity(event.target.value as ViewDensity)}
-                style={{ marginLeft: 8 }}
-              >
-                <option value="comfortable">Comfortable</option>
-                <option value="compact">Compact</option>
-              </select>
-            </label>
-            <label>
-              Live
-              <select
-                value={liveRefreshMode}
-                onChange={(event) => setLiveRefreshMode(event.target.value as LiveRefreshMode)}
-                style={{ marginLeft: 8 }}
-              >
-                <option value="off">Off</option>
-                <option value="15s">15s</option>
-                <option value="30s">30s</option>
-                <option value="60s">60s</option>
-              </select>
-            </label>
-            <button type="button" onClick={() => setEventTypeFilter("")}>Clear filter</button>
+            <button type="button" onClick={() => setShowAdvancedFilters(true)}>
+              Advanced filters
+            </button>
             <button type="button" onClick={() => void loadRuns(selectedRunId)}>Refresh runs</button>
           </>
         }
@@ -768,25 +805,13 @@ export function RunsPage() {
         </div>
       </SurfaceCard>
 
-      <SurfaceCard
-        title="Run views"
-        subtitle="Switch between activity slices to reduce noise and focus on what your team needs now."
-        muted
-      >
-        <FilterPills
-          options={runStatusFilterPills}
-          value={runStatusFilter}
-          onChange={(next) => setRunStatusFilter(next as RunStatusFilter)}
-        />
-      </SurfaceCard>
-
       <div className="template-grid">
         <SurfaceCard
           title="In-app test simulator"
           subtitle="Select an automation, edit a sample payload, and queue a test run with one click."
           highlight
         >
-          <div className="card-muted" style={{ borderRadius: 12, padding: 10 }}>
+          <div className="card-muted card-section-sm">
             <strong>Quick test presets</strong>
             <p>Choose a preset payload to avoid starting from raw JSON.</p>
             <div className="filter-pill-row">
@@ -810,7 +835,7 @@ export function RunsPage() {
               <select
                 value={selectedTestWorkflowId}
                 onChange={(event) => setSelectedTestWorkflowId(event.target.value)}
-                style={{ marginTop: 4, width: "100%" }}
+                className="field-input"
               >
                 {workflows.length === 0 ? (
                   <option value="">No automations available</option>
@@ -829,7 +854,7 @@ export function RunsPage() {
                 value={testPayloadInput}
                 onChange={(event) => setTestPayloadInput(event.target.value)}
                 rows={8}
-                style={{ width: "100%", fontFamily: "monospace", marginTop: 4 }}
+                className="field-input field-monospace"
               />
             </label>
 
@@ -886,14 +911,14 @@ export function RunsPage() {
           <div className="steps-progress">
             <div className="step-row">
               <span className="step-index">1</span>
-              <div className="stack-sm" style={{ width: "100%" }}>
+              <div className="stack-sm w-full">
                 <strong>Send test run</strong>
                 <p>Queue a test event from the simulator panel.</p>
               </div>
             </div>
             <div className="step-row">
               <span className="step-index">2</span>
-              <div className="stack-sm" style={{ width: "100%" }}>
+              <div className="stack-sm w-full">
                 <strong>Inspect timeline</strong>
                 <p>Review step outcomes, retries, delays, and branch decisions.</p>
                 <div className="inline-actions">
@@ -903,7 +928,7 @@ export function RunsPage() {
             </div>
             <div className="step-row">
               <span className="step-index">3</span>
-              <div className="stack-sm" style={{ width: "100%" }}>
+              <div className="stack-sm w-full">
                 <strong>Confirm operator signals</strong>
                 <p>Validate related audit entries and alert delivery behavior.</p>
                 <div className="inline-actions">
@@ -917,9 +942,70 @@ export function RunsPage() {
         </SurfaceCard>
       </div>
 
-      <div className="template-grid">
-        <SurfaceCard title="Run list" subtitle="Select a run to inspect execution details and lifecycle events.">
-          {loadingRuns ? <LoadingInline label="Loading runs..." /> : null}
+      <OperationsConsoleLayout
+        toolbar={
+          <OperationsFilterBar
+            searchValue={runSearch}
+            searchPlaceholder="Search run ID, workflow ID, or status"
+            onSearchValueChange={setRunSearch}
+            primaryFilters={
+              <FilterPills
+                options={runStatusFilterPills}
+                value={runStatusFilter}
+                onChange={(next) => setRunStatusFilter(next as RunStatusFilter)}
+              />
+            }
+            actions={
+              <>
+                <span className="tag">Event: {eventTypeFilter || "all events"}</span>
+                <button type="button" onClick={() => setShowAdvancedFilters(true)}>
+                  Edit filters
+                </button>
+                <button type="button" onClick={() => void loadRuns(selectedRunId)}>
+                  Refresh runs
+                </button>
+              </>
+            }
+          />
+        }
+        leftTitle="Run list"
+        leftSubtitle="Select a run to inspect execution details and lifecycle events."
+        leftMeta={
+          <div className="inline-actions">
+            <StatusPill tone={liveRefreshMode === "off" ? "warning" : "success"}>
+              {liveRefreshMode === "off" ? "Live refresh off" : `Auto-refresh ${liveRefreshMode}`}
+            </StatusPill>
+            <span className="tag">{searchFilteredRuns.length} in view</span>
+          </div>
+        }
+        rightTitle="Run detail"
+        rightSubtitle="Timeline, delays, retries, and event stream for the selected run."
+        rightMeta={
+          selectedRun ? (
+            <div className="inline-actions">
+              <Link to={`/workflows?workflowId=${encodeURIComponent(selectedRun.workflow_id)}`}>
+                Open workflow
+              </Link>
+              {isOperator ? (
+                <Link to={`/approvals?runId=${encodeURIComponent(selectedRun.id)}`}>
+                  Open approvals
+                </Link>
+              ) : null}
+              {isOperator ? (
+                <Link
+                  to={`/audit-logs?targetType=workflow_run&targetId=${encodeURIComponent(
+                    selectedRun.id,
+                  )}`}
+                >
+                  Open audit
+                </Link>
+              ) : null}
+            </div>
+          ) : null
+        }
+        leftPane={
+          <>
+          {runsLoading ? <LoadingInline label="Loading runs..." /> : null}
 
           {runs.length === 0 ? (
             <EmptyStatePanel
@@ -934,13 +1020,16 @@ export function RunsPage() {
             />
           ) : null}
 
-          {runs.length > 0 && visibleRuns.length === 0 ? (
+          {runs.length > 0 && searchFilteredRuns.length === 0 ? (
             <div className="empty-state">
-              <p>No runs match the selected view filter.</p>
-              <p>Switch back to All runs or trigger a fresh simulator test.</p>
+              <p>No runs match the selected filters.</p>
+              <p>Switch back to All runs, clear search, or trigger a fresh simulator test.</p>
               <div className="inline-actions">
                 <button type="button" onClick={() => setRunStatusFilter("all")}>
                   Show all runs
+                </button>
+                <button type="button" onClick={() => setRunSearch("")}>
+                  Clear search
                 </button>
                 <button type="button" onClick={() => void onRunSimulatorTest()} disabled={!selectedTestWorkflowId}>
                   Send test run
@@ -949,51 +1038,41 @@ export function RunsPage() {
             </div>
           ) : null}
 
-          {visibleRuns.length > 0 ? (
-            <div style={{ overflowX: "auto" }}>
-              <table className={`table ${viewDensity === "compact" ? "compact" : ""}`}>
-                <thead>
-                  <tr>
-                    <th>Run</th>
-                    <th>Status</th>
-                    <th>Attempts</th>
-                    <th>Started</th>
-                    <th>Finished</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {visibleRuns.map((run) => (
-                    <tr
-                      key={run.id}
-                      className={selectedRunId === run.id ? "table-row-selected" : ""}
-                      style={{ cursor: "pointer" }}
-                      onClick={() => setSelectedRunId(run.id)}
-                    >
-                      <td>
-                        <div><code>{shortId(run.id)}</code></div>
-                        <div style={{ fontSize: 12, color: "#6f8291" }}>{formatDateTime(run.created_at)}</div>
-                      </td>
-                      <td>
-                        <RunStatusBadge status={run.status} />
-                      </td>
-                      <td>
-                        {run.attempt_count}/{run.max_attempts}
-                      </td>
-                      <td>{formatDateTime(run.started_at)}</td>
-                      <td>{formatDateTime(run.finished_at)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+          {searchFilteredRuns.length > 0 ? (
+            <div className="stack-sm">
+              {searchFilteredRuns.map((run) => {
+                const descriptor = getRunStatusDescriptor(run.status);
+                return (
+                  <OperationsListButton
+                    key={run.id}
+                    title={<code>{shortId(run.id)}</code>}
+                    subtitle={`workflow ${shortId(run.workflow_id)} | ${formatDateTime(run.created_at)}`}
+                    selected={selectedRunId === run.id}
+                    status={
+                      <OperationsStatusBadge
+                        tone={descriptor.tone}
+                        label={descriptor.label}
+                      />
+                    }
+                    meta={
+                      <>
+                        <span className="tag">
+                          attempts {run.attempt_count}/{run.max_attempts}
+                        </span>
+                        <span className="tag">started {formatDateTime(run.started_at)}</span>
+                        <span className="tag">finished {formatDateTime(run.finished_at)}</span>
+                      </>
+                    }
+                    onClick={() => setSelectedRunId(run.id)}
+                  />
+                );
+              })}
             </div>
           ) : null}
-        </SurfaceCard>
-
-        <SurfaceCard
-          title="Run detail"
-          subtitle="Timeline, delays, retries, and event stream for the selected run."
-          highlight
-        >
+          </>
+        }
+        rightPane={
+          <>
           {loadingDetail ? <LoadingInline label="Loading run detail..." /> : null}
           {!selectedRun ? <p>Select a run to inspect execution details.</p> : null}
 
@@ -1021,22 +1100,22 @@ export function RunsPage() {
                 />
               </div>
 
-              <div className="card-muted" style={{ borderRadius: 12, padding: 12 }}>
-                <div className="inline-actions" style={{ justifyContent: "space-between" }}>
+              <div className="card-muted card-section">
+                <div className="inline-actions actions-between">
                   <div>
                     <strong>Run metadata</strong>
-                    <div style={{ fontSize: 13, color: "#4f6475" }}>
+                    <div className="meta-text">
                       Run <code>{selectedRun.id}</code> | Workflow <code>{selectedRun.workflow_id}</code>
                     </div>
                   </div>
                   <RunStatusBadge status={selectedRun.status} />
                 </div>
                 {selectedRun.last_error ? (
-                  <p style={{ color: "#b42318", marginTop: 8 }}>
+                  <p className="text-danger mt-sm">
                     <strong>Last error:</strong> {selectedRun.last_error}
                   </p>
                 ) : null}
-                <div className="tag-row" style={{ marginTop: 8 }}>
+                <div className="tag-row mt-sm">
                   {selectedRun.dead_lettered_at ? (
                     <span className="tag">Dead-lettered: {formatDateTime(selectedRun.dead_lettered_at)}</span>
                   ) : null}
@@ -1050,9 +1129,9 @@ export function RunsPage() {
               </div>
 
               {isOperator ? (
-                <div className="card-muted" style={{ borderRadius: 12, padding: 12 }}>
+                <div className="card-muted card-section">
                   <strong>Operator actions</strong>
-                  <div className="inline-actions" style={{ marginTop: 8 }}>
+                  <div className="inline-actions mt-sm">
                     <button
                       type="button"
                       onClick={() => void onCancelRun()}
@@ -1083,7 +1162,7 @@ export function RunsPage() {
                       Open related audit trail
                     </Link>
                   </div>
-                  <p style={{ fontSize: 12, marginTop: 8 }}>
+                  <p className="meta-text mt-sm">
                     Cancellations on currently running external calls are best-effort and apply at
                     safe execution boundaries.
                   </p>
@@ -1091,11 +1170,11 @@ export function RunsPage() {
               ) : null}
 
               <div className="template-grid">
-                <div className="card-muted" style={{ borderRadius: 12, padding: 12 }}>
+                <div className="card-muted card-section">
                   <strong>Retry records</strong>
                   {selectedRunRetries.length === 0 ? <p>No retry records.</p> : null}
                   {selectedRunRetries.map((retry) => (
-                    <div key={retry.id} className="step-card" style={{ marginTop: 8 }}>
+                    <div key={retry.id} className="step-card mt-sm">
                       <div className="step-header">
                         <strong>{retry.step_id || "unknown-step"}</strong>
                         <StatusPill tone={retry.status === "failed" ? "danger" : "info"}>
@@ -1110,16 +1189,17 @@ export function RunsPage() {
                   ))}
                 </div>
 
-                <div className="card-muted" style={{ borderRadius: 12, padding: 12 }}>
+                <div className="card-muted card-section">
                   <strong>Durable waits</strong>
                   {selectedRunScheduledWaits.length === 0 ? <p>No delay records for this run.</p> : null}
                   {selectedRunScheduledWaits.map((wait) => (
-                    <div key={wait.id} className="step-card delay" style={{ marginTop: 8 }}>
+                    <div key={wait.id} className="step-card delay mt-sm">
                       <div className="step-header">
                         <strong>{wait.step_id}</strong>
-                        <StatusPill tone={wait.status === "failed" ? "danger" : "warning"}>
-                          {wait.status}
-                        </StatusPill>
+                        <OperationsStatusBadge
+                          tone={getWaitStatusDescriptor(wait.status).tone}
+                          label={getWaitStatusDescriptor(wait.status).label}
+                        />
                       </div>
                       <p>
                         path <code>{wait.step_path}</code> | scheduled {formatDateTime(wait.scheduled_for)}
@@ -1127,7 +1207,7 @@ export function RunsPage() {
                       <p>
                         claimed {formatDateTime(wait.claimed_at)} | completed {formatDateTime(wait.completed_at)}
                       </p>
-                      {wait.last_error ? <p style={{ color: "#b42318" }}>{wait.last_error}</p> : null}
+                      {wait.last_error ? <p className="text-danger">{wait.last_error}</p> : null}
 
                       {isOperator && (wait.status === "pending" || wait.status === "processing") ? (
                         <div className="inline-actions">
@@ -1159,11 +1239,11 @@ export function RunsPage() {
                 </div>
               </div>
 
-              <div className="card-muted" style={{ borderRadius: 12, padding: 12 }}>
+              <div className="card-muted card-section">
                 <strong>Step timeline</strong>
                 {timeline.length === 0 ? <p>No timeline entries yet.</p> : null}
                 {timeline.map((step) => (
-                  <div key={`${step.stepPath}-${step.stepId}-${step.attempt}`} className="step-card" style={{ marginTop: 8 }}>
+                  <div key={`${step.stepPath}-${step.stepId}-${step.attempt}`} className="step-card mt-sm">
                     <div className="step-header">
                       <div className="inline-actions">
                         <strong>{step.stepId}</strong>
@@ -1173,23 +1253,23 @@ export function RunsPage() {
                       <span className="step-summary">attempt {step.attempt}</span>
                     </div>
                     {step.skippedReason ? <p>Skipped reason: <code>{step.skippedReason}</code></p> : null}
-                    {step.error ? <p style={{ color: "#b42318" }}>Error: {step.error}</p> : null}
+                    {step.error ? <p className="text-danger">Error: {step.error}</p> : null}
                     {step.output ? <p>Output: <code>{compactPayload(step.output)}</code></p> : null}
                   </div>
                 ))}
               </div>
 
-              <div className="card-muted" style={{ borderRadius: 12, padding: 12 }}>
+              <div className="card-muted card-section">
                 <strong>Agent trace and tool usage</strong>
-                <p style={{ marginTop: 6 }}>
+                <p className="mt-xs">
                   Review agent reasoning steps, tool calls, and final output for trust and debugging.
                 </p>
-                <div className="tag-row" style={{ marginTop: 8 }}>
+                <div className="tag-row mt-sm">
                   <span className="tag">Registered tools: {agentTools.length}</span>
                   <span className="tag">MCP contexts: {agentMcpContexts.length}</span>
                 </div>
                 {agentMcpContexts.length > 0 ? (
-                  <details style={{ marginTop: 8 }}>
+                  <details className="mt-sm">
                     <summary>Internal MCP context model</summary>
                     <ul>
                       {agentMcpContexts.map((context) => (
@@ -1202,7 +1282,7 @@ export function RunsPage() {
                 ) : null}
 
                 {agentTraces.length === 0 ? (
-                  <p style={{ marginTop: 8 }}>
+                  <p className="mt-sm">
                     No agent trace found in this run. Run an automation with an AI Agent step to see
                     detailed tool calls.
                   </p>
@@ -1218,7 +1298,7 @@ export function RunsPage() {
                   );
 
                   return (
-                    <div key={`${trace.stepPath}-${trace.stepId}`} className="step-card" style={{ marginTop: 8 }}>
+                    <div key={`${trace.stepPath}-${trace.stepId}`} className="step-card mt-sm">
                       <div className="step-header">
                         <div className="inline-actions">
                           <strong>{trace.stepId}</strong>
@@ -1275,7 +1355,7 @@ export function RunsPage() {
                           })
                         )}
                       </div>
-                      <div className="stack-sm" style={{ marginTop: 8 }}>
+                      <div className="stack-sm mt-sm">
                         {reasoningBlocks.map((block) => (
                           <details key={block.id} className="card-muted" open={block.streamState === "active"}>
                             <summary>
@@ -1286,7 +1366,7 @@ export function RunsPage() {
                               <span className="tag">iteration {block.iteration}</span>{" "}
                               <span className="tag">{block.streamState}</span>
                             </summary>
-                            <div className="stack-sm" style={{ marginTop: 8 }}>
+                            <div className="stack-sm mt-sm">
                               <p><strong>Intent:</strong> {block.intent}</p>
                               <p><strong>Action:</strong> {block.action}</p>
                               <p><strong>Result:</strong> {block.resultSummary}</p>
@@ -1304,17 +1384,17 @@ export function RunsPage() {
                 })}
               </div>
 
-              <div className="card-muted" style={{ borderRadius: 12, padding: 12 }}>
+              <div className="card-muted card-section">
                 <strong>Agent memory preview</strong>
-                <p style={{ marginTop: 6 }}>
+                <p className="mt-xs">
                   Short-term run memory and persistent workflow memory available to AI agent steps.
                 </p>
                 <div className="template-grid">
-                  <div className="card-muted" style={{ borderRadius: 10, padding: 10 }}>
+                  <div className="card-muted card-section-sm">
                     <strong>Run memory</strong>
                     {runMemory.length === 0 ? <p>No run-scoped memory saved for this run.</p> : null}
                     {runMemory.map((memory) => (
-                      <div key={memory.id} className="step-card" style={{ marginTop: 8 }}>
+                      <div key={memory.id} className="step-card mt-sm">
                         <div className="step-header">
                           <strong>{memory.key}</strong>
                           <span className="tag">{memory.scope}</span>
@@ -1323,11 +1403,11 @@ export function RunsPage() {
                       </div>
                     ))}
                   </div>
-                  <div className="card-muted" style={{ borderRadius: 10, padding: 10 }}>
+                  <div className="card-muted card-section-sm">
                     <strong>Workflow memory</strong>
                     {workflowMemory.length === 0 ? <p>No workflow-scoped memory entries yet.</p> : null}
                     {workflowMemory.map((memory) => (
-                      <div key={memory.id} className="step-card" style={{ marginTop: 8 }}>
+                      <div key={memory.id} className="step-card mt-sm">
                         <div className="step-header">
                           <strong>{memory.key}</strong>
                           <span className="tag">{memory.scope}</span>
@@ -1351,7 +1431,7 @@ export function RunsPage() {
               {showAdvancedRunDetails ? (
                 <>
                   <div className="template-grid">
-                    <div className="card-muted" style={{ borderRadius: 12, padding: 12 }}>
+                    <div className="card-muted card-section">
                       <strong>Branch decisions</strong>
                       {branchSelections.length === 0 ? <p>No branch decisions recorded.</p> : null}
                       <ul>
@@ -1363,7 +1443,7 @@ export function RunsPage() {
                       </ul>
                     </div>
 
-                    <div className="card-muted" style={{ borderRadius: 12, padding: 12 }}>
+                    <div className="card-muted card-section">
                       <strong>Delay lifecycle</strong>
                       {delayEvents.length === 0 ? <p>No delay events recorded.</p> : null}
                       <ul>
@@ -1381,7 +1461,7 @@ export function RunsPage() {
                   </div>
 
                   <div className="template-grid">
-                    <div className="card-muted" style={{ borderRadius: 12, padding: 12 }}>
+                    <div className="card-muted card-section">
                       <strong>Retry lifecycle events</strong>
                       {retryEvents.length === 0 ? <p>No retry lifecycle events.</p> : null}
                       <ul>
@@ -1396,7 +1476,7 @@ export function RunsPage() {
                       </ul>
                     </div>
 
-                    <div className="card-muted" style={{ borderRadius: 12, padding: 12 }}>
+                    <div className="card-muted card-section">
                       <strong>Deferred/throttled blockers</strong>
                       {blockedExecutionEvents.length === 0 ? <p>No quota or throttling blockers.</p> : null}
                       <ul>
@@ -1412,11 +1492,11 @@ export function RunsPage() {
                     </div>
                   </div>
 
-                  <div className="card-muted" style={{ borderRadius: 12, padding: 12 }}>
+                  <div className="card-muted card-section">
                     <strong>Event logs</strong>
                     {logHighlights.length === 0 ? <p>No logs for this run.</p> : null}
                     {logHighlights.length > 0 ? (
-                      <div style={{ overflowX: "auto" }}>
+                      <div className="table-wrap">
                         <table className={`table ${viewDensity === "compact" ? "compact" : ""}`}>
                           <thead>
                             <tr>
@@ -1444,7 +1524,7 @@ export function RunsPage() {
                   </div>
 
                   {isOperator ? (
-                    <div className="card-muted" style={{ borderRadius: 12, padding: 12 }}>
+                    <div className="card-muted card-section">
                       <strong>Related operator audit events</strong>
                       {relatedAuditLogs.length === 0 ? <p>No operator events for this run.</p> : null}
                       {relatedAuditLogs.length > 0 ? (
@@ -1467,9 +1547,79 @@ export function RunsPage() {
               ) : null}
             </div>
           ) : null}
-        </SurfaceCard>
-      </div>
+          </>
+        }
+      />
+
+      <OperationsAdvancedFilterDrawer
+        open={showAdvancedFilters}
+        title="Run filters"
+        description="Control event filters, live refresh, and table density for run diagnostics."
+        onClose={() => setShowAdvancedFilters(false)}
+        onApply={(event) => {
+          event.preventDefault();
+          setShowAdvancedFilters(false);
+        }}
+        onReset={() => {
+          setEventTypeFilter("");
+          setViewDensity("comfortable");
+          setLiveRefreshMode("15s");
+          setRunStatusFilter("all");
+          setRunSearch("");
+          setShowAdvancedFilters(false);
+        }}
+      >
+        <label>
+          Event type
+          <select
+            value={eventTypeFilter}
+            onChange={(event) => setEventTypeFilter(event.target.value)}
+          >
+            {RUN_EVENT_FILTER_OPTIONS.map((option) => (
+              <option key={option || "all"} value={option}>
+                {option || "all events"}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Run status view
+          <select
+            value={runStatusFilter}
+            onChange={(event) => setRunStatusFilter(event.target.value as RunStatusFilter)}
+          >
+            {RUN_STATUS_FILTER_OPTIONS.map((option) => (
+              <option key={option.id} value={option.id}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          View density
+          <select
+            value={viewDensity}
+            onChange={(event) => setViewDensity(event.target.value as ViewDensity)}
+          >
+            <option value="comfortable">Comfortable</option>
+            <option value="compact">Compact</option>
+          </select>
+        </label>
+        <label>
+          Live refresh
+          <select
+            value={liveRefreshMode}
+            onChange={(event) => setLiveRefreshMode(event.target.value as LiveRefreshMode)}
+          >
+            <option value="off">Off</option>
+            <option value="15s">15s</option>
+            <option value="30s">30s</option>
+            <option value="60s">60s</option>
+          </select>
+        </label>
+      </OperationsAdvancedFilterDrawer>
     </div>
   );
 }
+
 

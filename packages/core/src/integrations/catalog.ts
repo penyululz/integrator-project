@@ -374,7 +374,7 @@ const BUILTIN_APP_DEFINITIONS: Record<string, Omit<AppConnectionDefinition, "key
         target: "credentialApiKey",
         secret: true,
         placeholder: "sk-...",
-        helpText: "Optional for local demo mode. Required for production AI provider calls.",
+        helpText: "Optional for Prototype Mode local testing. Required for Live Mode provider calls.",
       },
       {
         key: "model",

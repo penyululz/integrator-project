@@ -1,6 +1,15 @@
+// Shared contract boundary for locked platform semantics.
+// MODE: Prototype Mode | Live Mode
+// SHARED BETWEEN PROTOTYPE AND LIVE
+// API: Fastify + Zod
+// DATA: PostgreSQL
+// QUEUE: Redis + BullMQ
 export * from "./types/adapter";
 export * from "./types/agent";
+export * from "./types/platform";
+export * from "./types/query";
 export * from "./types/workflow";
+export * from "./schemas";
 export * from "./utils/http-client";
 export * from "./utils/retry";
 export * from "./utils/rate-limiter";

@@ -5,6 +5,7 @@ import {
   denyAgentApproval,
   getAuthSession,
   listAgentApprovals,
+  type AgentApprovalFilters,
   type AgentApprovalRecord,
 } from "../api";
 import {
@@ -15,8 +16,15 @@ import {
   MetricTile,
   PageHeader,
   StatusPill,
-  SurfaceCard,
 } from "../components/ui-kit";
+import {
+  OperationsAdvancedFilterDrawer,
+  OperationsConsoleLayout,
+  OperationsFilterBar,
+  OperationsListButton,
+  OperationsStatusBadge,
+} from "../features/operations/operations-console";
+import { getApprovalStatusDescriptor } from "../features/operations/operations-status";
 import {
   APPROVAL_STATUS_FILTER_OPTIONS,
   countApprovalsByStatus,
@@ -24,6 +32,14 @@ import {
   summarizeApproval,
   type ApprovalStatusFilter,
 } from "./approvals-helpers";
+
+type ApprovalFilterFormState = {
+  runId: string;
+  actorUserId: string;
+  toolId: string;
+  from: string;
+  to: string;
+};
 
 function formatDateTime(value: string | null | undefined): string {
   if (!value) {
@@ -36,19 +52,19 @@ function formatDateTime(value: string | null | undefined): string {
   return new Date(parsed).toLocaleString();
 }
 
-function toTone(
-  status: AgentApprovalRecord["status"],
-): "info" | "success" | "warning" | "danger" {
-  if (status === "approved") {
-    return "success";
-  }
-  if (status === "pending") {
-    return "warning";
-  }
-  if (status === "denied") {
-    return "danger";
-  }
-  return "info";
+function toRequestSubtitle(approval: AgentApprovalRecord): string {
+  return `Step ${approval.stepId} - Run ${approval.workflowRunId.slice(0, 8)}`;
+}
+
+function buildApprovalFilters(input: ApprovalFilterFormState): AgentApprovalFilters {
+  return {
+    runId: input.runId || undefined,
+    actorUserId: input.actorUserId || undefined,
+    toolId: input.toolId || undefined,
+    from: input.from || undefined,
+    to: input.to || undefined,
+    limit: 100,
+  };
 }
 
 export function ApprovalsPage() {
@@ -60,17 +76,34 @@ export function ApprovalsPage() {
     session?.scope.workspaceRole === "owner" ||
     session?.scope.workspaceRole === "admin";
 
-  const runIdFilter = searchParams.get("runId") || undefined;
+  const runIdFilter = searchParams.get("runId") || "";
   const requestedApprovalId = searchParams.get("approvalId");
 
   const [approvals, setApprovals] = useState<AgentApprovalRecord[]>([]);
   const [selectedApprovalId, setSelectedApprovalId] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<ApprovalStatusFilter>("pending");
+  const [searchValue, setSearchValue] = useState("");
+  const [advancedFilterOpen, setAdvancedFilterOpen] = useState(false);
+  const [filterForm, setFilterForm] = useState<ApprovalFilterFormState>({
+    runId: runIdFilter,
+    actorUserId: "",
+    toolId: "",
+    from: "",
+    to: "",
+  });
+  const [appliedFilters, setAppliedFilters] = useState<ApprovalFilterFormState>({
+    runId: runIdFilter,
+    actorUserId: "",
+    toolId: "",
+    from: "",
+    to: "",
+  });
   const [note, setNote] = useState<string>("");
   const [loading, setLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
 
   if (!isOperator) {
     return (
@@ -89,12 +122,9 @@ export function ApprovalsPage() {
     setLoading(true);
     setError(null);
     try {
-      const response = await listAgentApprovals({
-        runId: runIdFilter,
-        status: statusFilter,
-        limit: 100,
-      });
+      const response = await listAgentApprovals(buildApprovalFilters(appliedFilters));
       setApprovals(response.approvals);
+      setLastSyncedAt(new Date().toISOString());
       const first = response.approvals[0] || null;
       setSelectedApprovalId((current) => {
         if (
@@ -124,20 +154,33 @@ export function ApprovalsPage() {
     }, 10000);
     return () => window.clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [statusFilter, runIdFilter]);
+  }, [appliedFilters]);
 
-  const statusCounts = useMemo(
-    () => countApprovalsByStatus(approvals),
-    [approvals],
-  );
-  const visibleApprovals = useMemo(
-    () => filterApprovalsByStatus(approvals, statusFilter),
-    [approvals, statusFilter],
-  );
+  const statusCounts = useMemo(() => countApprovalsByStatus(approvals), [approvals]);
+
+  const filteredApprovals = useMemo(() => {
+    const statusScoped = filterApprovalsByStatus(approvals, statusFilter);
+    const query = searchValue.trim().toLowerCase();
+    if (!query) {
+      return statusScoped;
+    }
+    return statusScoped.filter((approval) =>
+      [
+        approval.toolTitle,
+        approval.toolId,
+        approval.stepId,
+        approval.stepPath,
+        approval.workflowRunId,
+        approval.status,
+      ].some((value) => value.toLowerCase().includes(query)),
+    );
+  }, [approvals, statusFilter, searchValue]);
+
   const selectedApproval = useMemo(
     () => approvals.find((approval) => approval.id === selectedApprovalId) || null,
     [approvals, selectedApprovalId],
   );
+
   const statusPills = useMemo(
     () =>
       APPROVAL_STATUS_FILTER_OPTIONS.map((option) => {
@@ -161,7 +204,7 @@ export function ApprovalsPage() {
   );
 
   async function onApprove() {
-    if (!selectedApproval || !isOperator || actionLoading) {
+    if (!selectedApproval || actionLoading) {
       return;
     }
     setActionLoading(true);
@@ -189,7 +232,7 @@ export function ApprovalsPage() {
   }
 
   async function onDeny() {
-    if (!selectedApproval || !isOperator || actionLoading) {
+    if (!selectedApproval || actionLoading) {
       return;
     }
     setActionLoading(true);
@@ -214,86 +257,166 @@ export function ApprovalsPage() {
     }
   }
 
+  function onApplyAdvancedFilters() {
+    setAppliedFilters(filterForm);
+    setAdvancedFilterOpen(false);
+  }
+
+  function onResetAdvancedFilters() {
+    const reset = {
+      runId: "",
+      actorUserId: "",
+      toolId: "",
+      from: "",
+      to: "",
+    };
+    setFilterForm(reset);
+    setAppliedFilters(reset);
+    setAdvancedFilterOpen(false);
+  }
+
   return (
     <div className="stack-lg">
       <PageHeader
         eyebrow="Human Approval"
-        title="Approval Queue"
-        subtitle="Review approval-required agent tool calls, then approve or deny without leaving the workspace."
-        actions={
-          <div className="inline-actions">
-            {runIdFilter ? <span className="tag">Run filter: {runIdFilter.slice(0, 8)}</span> : null}
-            <button type="button" className="button-ghost" onClick={() => void loadApprovals()}>
-              Refresh
-            </button>
-          </div>
-        }
+        title="Approval Queue Console"
+        subtitle="Review high-safety agent tool requests, decide, and continue or terminate runs with a clear audit trail."
       />
 
-      <div className="metrics-grid">
+      <div className="metric-grid">
         <MetricTile label="Pending approvals" value={String(statusCounts.pending)} />
-        <MetricTile label="Approved today" value={String(statusCounts.approved)} />
-        <MetricTile label="Denied today" value={String(statusCounts.denied)} />
+        <MetricTile label="Approved" value={String(statusCounts.approved)} />
+        <MetricTile label="Denied" value={String(statusCounts.denied)} />
+        <MetricTile label="Expired" value={String(statusCounts.expired)} />
       </div>
 
-      <FilterPills
-        options={statusPills}
-        value={statusFilter}
-        onChange={(next) => setStatusFilter(next as ApprovalStatusFilter)}
-      />
-
-      {loading ? <LoadingInline label="Loading approvals..." /> : null}
-      {error ? <Callout tone="danger" title={error} /> : null}
-      {actionMessage ? <Callout tone="info" title={actionMessage} /> : null}
-
-      <div className="grid-two">
-        <SurfaceCard
-          title="Requests"
-          subtitle="Newest approval requests appear first."
-        >
-          {visibleApprovals.length === 0 ? (
-            <EmptyStatePanel
-              title="No approvals in this view"
-              description="When an agent needs human sign-off, approval requests will show up here."
-              primaryAction={
-                <Link className="button-link-primary" to="/runs">
-                  View runs
-                </Link>
-              }
-            />
-          ) : (
-            <div className="list-stack">
-              {visibleApprovals.map((approval) => (
-                <button
-                  key={approval.id}
-                  type="button"
-                  className={`catalog-card ${selectedApprovalId === approval.id ? "selected" : ""}`}
-                  onClick={() => setSelectedApprovalId(approval.id)}
-                >
-                  <div className="inline-between">
-                    <strong>{approval.toolTitle}</strong>
-                    <StatusPill tone={toTone(approval.status)}>{approval.status}</StatusPill>
-                  </div>
-                  <p className="muted">
-                    Step {approval.stepId} - Run {approval.workflowRunId.slice(0, 8)}
-                  </p>
-                  <p className="muted">{formatDateTime(approval.requestedAt)}</p>
+      <OperationsConsoleLayout
+        toolbar={
+          <OperationsFilterBar
+            searchValue={searchValue}
+            searchPlaceholder="Search by tool, run, step, or status"
+            onSearchValueChange={setSearchValue}
+            primaryFilters={
+              <FilterPills
+                options={statusPills}
+                value={statusFilter}
+                onChange={(next) => setStatusFilter(next as ApprovalStatusFilter)}
+              />
+            }
+            actions={
+              <>
+                {appliedFilters.runId ? (
+                  <span className="tag">Run {appliedFilters.runId.slice(0, 8)}</span>
+                ) : null}
+                <span className="tag">
+                  Last synced {lastSyncedAt ? formatDateTime(lastSyncedAt) : "not yet"}
+                </span>
+                <button type="button" onClick={() => setAdvancedFilterOpen(true)}>
+                  Advanced filters
                 </button>
-              ))}
-            </div>
-          )}
-        </SurfaceCard>
+                <button
+                  type="button"
+                  className="button-ghost"
+                  onClick={() => void loadApprovals()}
+                >
+                  Refresh
+                </button>
+              </>
+            }
+          />
+        }
+        leftTitle="Approval requests"
+        leftSubtitle="Pending and resolved human-in-the-loop decisions."
+        leftMeta={
+          <div className="inline-actions">
+            <StatusPill tone="warning">Pending {statusCounts.pending}</StatusPill>
+            <StatusPill tone="danger">Blocked {statusCounts.denied + statusCounts.expired}</StatusPill>
+          </div>
+        }
+        leftPane={
+          <>
+            {loading ? <LoadingInline label="Loading approvals..." /> : null}
+            {error ? <Callout tone="danger" title={error} /> : null}
+            {actionMessage ? <Callout tone="info" title={actionMessage} /> : null}
 
-        <SurfaceCard
-          title="Request detail"
-          subtitle={summarizeApproval(selectedApproval)}
-        >
-          {!selectedApproval ? (
-            <Callout tone="info" title="Select a request to review details." />
+            {filteredApprovals.length === 0 ? (
+              <EmptyStatePanel
+                title="No approvals in this view"
+                description="When an agent needs human sign-off, approval requests will appear here."
+                primaryAction={
+                  <Link className="button-link-primary" to="/runs">
+                    View runs
+                  </Link>
+                }
+              />
+            ) : (
+              <div className="stack-sm">
+                {filteredApprovals.map((approval) => {
+                  const descriptor = getApprovalStatusDescriptor(approval.status);
+                  return (
+                    <OperationsListButton
+                      key={approval.id}
+                      title={approval.toolTitle}
+                      subtitle={toRequestSubtitle(approval)}
+                      selected={selectedApprovalId === approval.id}
+                      status={
+                        <OperationsStatusBadge
+                          tone={descriptor.tone}
+                          label={descriptor.label}
+                        />
+                      }
+                      meta={
+                        <>
+                          <span className="tag">{approval.toolSafetyLevel}</span>
+                          <span className="tag">{formatDateTime(approval.requestedAt)}</span>
+                        </>
+                      }
+                      onClick={() => setSelectedApprovalId(approval.id)}
+                    />
+                  );
+                })}
+              </div>
+            )}
+          </>
+        }
+        rightTitle="Approval detail"
+        rightSubtitle={summarizeApproval(selectedApproval)}
+        rightMeta={
+          selectedApproval ? (
+            <div className="inline-actions">
+              <Link to={`/runs?runId=${encodeURIComponent(selectedApproval.workflowRunId)}`}>
+                Open run
+              </Link>
+              <Link
+                to={`/audit-logs?targetType=agent_approval&targetId=${encodeURIComponent(selectedApproval.id)}`}
+              >
+                Related audit
+              </Link>
+              <Link
+                to={`/alerts?runId=${encodeURIComponent(selectedApproval.workflowRunId)}`}
+              >
+                Related alerts
+              </Link>
+            </div>
+          ) : null
+        }
+        rightPane={
+          !selectedApproval ? (
+            <Callout tone="info" title="Select a request to inspect tool input and decide." />
           ) : (
-            <div className="stack-md">
+            <div className="stack">
+              <Callout
+                tone={getApprovalStatusDescriptor(selectedApproval.status).tone}
+                title={`Lifecycle: pending -> ${selectedApproval.status}`}
+              >
+                <p>{summarizeApproval(selectedApproval)}</p>
+              </Callout>
+
               <div className="inline-actions">
-                <StatusPill tone={toTone(selectedApproval.status)}>{selectedApproval.status}</StatusPill>
+                <OperationsStatusBadge
+                  tone={getApprovalStatusDescriptor(selectedApproval.status).tone}
+                  label={getApprovalStatusDescriptor(selectedApproval.status).label}
+                />
                 <span className="tag">Safety: {selectedApproval.toolSafetyLevel}</span>
                 <span className="tag">Step path: {selectedApproval.stepPath}</span>
               </div>
@@ -302,18 +425,22 @@ export function ApprovalsPage() {
                 <div>
                   <dt>Run</dt>
                   <dd>
-                    <Link to={`/runs?runId=${selectedApproval.workflowRunId}`}>
+                    <Link
+                      to={`/runs?runId=${encodeURIComponent(selectedApproval.workflowRunId)}`}
+                    >
                       {selectedApproval.workflowRunId}
                     </Link>
                   </dd>
                 </div>
                 <div>
-                  <dt>Tool ID</dt>
-                  <dd>{selectedApproval.toolId}</dd>
+                  <dt>Workflow</dt>
+                  <dd>{selectedApproval.workflowId}</dd>
                 </div>
                 <div>
-                  <dt>Reason</dt>
-                  <dd>{selectedApproval.reason || "No reason provided."}</dd>
+                  <dt>Tool</dt>
+                  <dd>
+                    {selectedApproval.toolTitle} (<code>{selectedApproval.toolId}</code>)
+                  </dd>
                 </div>
                 <div>
                   <dt>Requested</dt>
@@ -322,6 +449,10 @@ export function ApprovalsPage() {
                 <div>
                   <dt>Decided</dt>
                   <dd>{formatDateTime(selectedApproval.decidedAt)}</dd>
+                </div>
+                <div>
+                  <dt>Reason</dt>
+                  <dd>{selectedApproval.reason || "No reason provided."}</dd>
                 </div>
               </dl>
 
@@ -332,7 +463,7 @@ export function ApprovalsPage() {
                 </div>
               ) : null}
 
-              {selectedApproval.status === "pending" && isOperator ? (
+              {selectedApproval.status === "pending" ? (
                 <div className="stack-sm">
                   <label className="field-label" htmlFor="approval-note">
                     Decision note (optional)
@@ -352,7 +483,7 @@ export function ApprovalsPage() {
                       disabled={actionLoading}
                       onClick={() => void onApprove()}
                     >
-                      Approve and continue
+                      Approve and resume
                     </button>
                     <button
                       type="button"
@@ -360,28 +491,89 @@ export function ApprovalsPage() {
                       disabled={actionLoading}
                       onClick={() => void onDeny()}
                     >
-                      Deny request
+                      Deny and terminate
                     </button>
                   </div>
                 </div>
               ) : (
                 <Callout
-                  tone={selectedApproval.status === "denied" ? "danger" : "info"}
+                  tone={selectedApproval.status === "approved" ? "success" : "danger"}
                   title={
                     selectedApproval.status === "approved"
-                      ? "This request is approved."
+                      ? "Approved and continuation queued."
                       : selectedApproval.status === "denied"
-                        ? "This request was denied."
-                        : selectedApproval.status === "expired"
-                          ? "This request expired."
-                          : "This request is read-only for your role."
+                        ? "Denied and blocked."
+                        : "Request expired."
                   }
                 />
               )}
             </div>
-          )}
-        </SurfaceCard>
-      </div>
+          )
+        }
+      />
+
+      <OperationsAdvancedFilterDrawer
+        open={advancedFilterOpen}
+        title="Approval filters"
+        description="Narrow the queue by run, actor, tool, or date window."
+        onClose={() => setAdvancedFilterOpen(false)}
+        onApply={(event) => {
+          event.preventDefault();
+          onApplyAdvancedFilters();
+        }}
+        onReset={onResetAdvancedFilters}
+      >
+        <label>
+          Run ID
+          <input
+            value={filterForm.runId}
+            onChange={(event) =>
+              setFilterForm((current) => ({ ...current, runId: event.target.value }))
+            }
+            placeholder="workflow run UUID"
+          />
+        </label>
+        <label>
+          Actor user ID
+          <input
+            value={filterForm.actorUserId}
+            onChange={(event) =>
+              setFilterForm((current) => ({ ...current, actorUserId: event.target.value }))
+            }
+            placeholder="user UUID"
+          />
+        </label>
+        <label>
+          Tool ID
+          <input
+            value={filterForm.toolId}
+            onChange={(event) =>
+              setFilterForm((current) => ({ ...current, toolId: event.target.value }))
+            }
+            placeholder="tool key"
+          />
+        </label>
+        <label>
+          From (ISO timestamp)
+          <input
+            value={filterForm.from}
+            onChange={(event) =>
+              setFilterForm((current) => ({ ...current, from: event.target.value }))
+            }
+            placeholder="2026-04-01T00:00:00.000Z"
+          />
+        </label>
+        <label>
+          To (ISO timestamp)
+          <input
+            value={filterForm.to}
+            onChange={(event) =>
+              setFilterForm((current) => ({ ...current, to: event.target.value }))
+            }
+            placeholder="2026-04-02T00:00:00.000Z"
+          />
+        </label>
+      </OperationsAdvancedFilterDrawer>
     </div>
   );
 }

@@ -1,3 +1,4 @@
+// BUILDER: React Flow / XYFlow (official stack marker)
 export type WorkflowTrigger = {
   adapter: string;
   trigger: string;
@@ -92,5 +93,24 @@ export type WorkflowDefinition = {
   context?: Record<string, unknown>;
   steps: WorkflowStep[];
   enabled: boolean;
-  metadata?: Record<string, unknown>;
+  metadata?: WorkflowBuilderMetadata;
+};
+
+export type WorkflowBuilderNodeMetadata = {
+  stepId: string;
+  kind: "trigger" | "action" | "branch" | "delay" | "result";
+  x?: number;
+  y?: number;
+  lane?: string;
+  collapsed?: boolean;
+  notes?: string;
+};
+
+export type WorkflowBuilderMetadata = {
+  source?: "builder" | "template" | "api" | "import";
+  paletteVersion?: string;
+  inspectorVersion?: string;
+  createdFromTemplateId?: string;
+  nodeLayout?: WorkflowBuilderNodeMetadata[];
+  [key: string]: unknown;
 };

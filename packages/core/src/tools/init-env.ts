@@ -5,6 +5,7 @@ export type InitEnvResult = {
   repoRoot: string;
   envPath: string;
   created: boolean;
+  sourcePath: string;
 };
 
 function isRepoRoot(candidate: string): boolean {
@@ -39,10 +40,16 @@ export function findRepoRoot(startDir = process.cwd()): string {
 export function initializeRootEnv(options?: { force?: boolean }): InitEnvResult {
   const repoRoot = findRepoRoot();
   const envPath = path.join(repoRoot, ".env");
-  const sourcePath = path.join(repoRoot, "apps", "api", ".env.example");
+  const canonicalSourcePath = path.join(repoRoot, ".env.example");
+  const legacySourcePath = path.join(repoRoot, "apps", "api", ".env.example");
+  const sourcePath = fs.existsSync(canonicalSourcePath)
+    ? canonicalSourcePath
+    : legacySourcePath;
 
   if (!fs.existsSync(sourcePath)) {
-    throw new Error(`Missing env template: ${sourcePath}`);
+    throw new Error(
+      `Missing env template. Expected one of: ${canonicalSourcePath}, ${legacySourcePath}`,
+    );
   }
 
   const force = options?.force || false;
@@ -55,6 +62,7 @@ export function initializeRootEnv(options?: { force?: boolean }): InitEnvResult 
     repoRoot,
     envPath,
     created: shouldCreate,
+    sourcePath,
   };
 }
 
@@ -62,7 +70,7 @@ function runCli(): void {
   const force = process.argv.includes("--force");
   const result = initializeRootEnv({ force });
   if (result.created) {
-    console.log(`[env:init] created ${result.envPath}`);
+    console.log(`[env:init] created ${result.envPath} from ${result.sourcePath}`);
   } else {
     console.log(`[env:init] already exists ${result.envPath}`);
   }

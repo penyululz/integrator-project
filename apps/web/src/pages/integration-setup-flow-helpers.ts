@@ -48,6 +48,38 @@ export function getWizardStepOrder(): ConnectionWizardStep[] {
   return ["overview", "requirements", "input", "test", "success"];
 }
 
+export function toWizardStepLabel(step: ConnectionWizardStep): string {
+  if (step === "overview") {
+    return "Overview";
+  }
+  if (step === "requirements") {
+    return "Requirements";
+  }
+  if (step === "input") {
+    return "Input";
+  }
+  if (step === "test") {
+    return "Test";
+  }
+  return "Success";
+}
+
+export function toWizardStepDescription(step: ConnectionWizardStep): string {
+  if (step === "overview") {
+    return "Understand what this app will do in your workflows.";
+  }
+  if (step === "requirements") {
+    return "Confirm prerequisites before entering credentials.";
+  }
+  if (step === "input") {
+    return "Fill required values, then save the connection.";
+  }
+  if (step === "test") {
+    return "Run a connection check before enabling production automations.";
+  }
+  return "Move directly into templates and your first live run.";
+}
+
 export function getNextWizardStep(
   currentStep: ConnectionWizardStep,
   canMoveForward: boolean,

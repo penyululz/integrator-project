@@ -301,7 +301,7 @@ async function createTestRuntime() {
   };
 
   return {
-    app: createApp(runtime),
+    app: await createApp(runtime),
     runtime,
     pool,
     workflow,
@@ -328,7 +328,7 @@ describe("Webhook -> Queue -> Workflow integration", () => {
         workspaceSlug: "default",
       });
 
-      const response = await request(app)
+      const response = await request(app.server)
         .post("/api/v1/webhook/webhook/http_post")
         .set("authorization", `Bearer ${login.accessToken}`)
         .send({

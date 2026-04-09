@@ -12,18 +12,9 @@ export function ValidationErrorPanel({
   }
 
   return (
-    <div
-      style={{
-        border: "1px solid #f5c2c7",
-        background: "#fff5f5",
-        color: "#8a1c1c",
-        borderRadius: 8,
-        padding: 12,
-        marginTop: 12,
-      }}
-    >
+    <div className="callout danger">
       <strong>{title || "Validation errors"}</strong>
-      <ul style={{ marginTop: 8 }}>
+      <ul style={{ margin: "8px 0 0", paddingLeft: 18 }}>
         {errors.map((error, index) => (
           <li key={`${error}-${index}`}>{error}</li>
         ))}

@@ -2,6 +2,9 @@ import type { AdapterMetadata, WorkflowTemplate, WorkflowTemplateSummary } from 
 import {
   collectStepIds,
   createEmptyActionStep,
+  createEmptyBranchStep,
+  createEmptyDelayStep,
+  generateStepId,
   isBranchStep,
   isDelayStep,
   type WorkflowDefinition,
@@ -505,6 +508,62 @@ export function buildStepSummary(step: WorkflowStep): string {
     return `${step.adapter}.${step.action || "run"} action`;
   }
   return "Step";
+}
+
+export function duplicateWorkflowStepAsType(input: {
+  source: WorkflowStep;
+  nextType: "action" | "branch" | "delay";
+  adapters: AdapterMetadata[];
+  existingStepIds: string[];
+}): WorkflowStep {
+  const existing = [...input.existingStepIds];
+  const sourcePrefix = input.source.id.split("_")[0] || "step";
+  const nextId = generateStepId(`${sourcePrefix}_${input.nextType}`, existing);
+
+  if (input.nextType === "branch") {
+    if (isBranchStep(input.source)) {
+      return {
+        ...input.source,
+        id: nextId,
+      };
+    }
+    const nextBranch = createEmptyBranchStep(nextId);
+    return nextBranch;
+  }
+
+  if (input.nextType === "delay") {
+    if (isDelayStep(input.source)) {
+      return {
+        ...input.source,
+        id: nextId,
+      };
+    }
+    const nextDelay = createEmptyDelayStep(nextId);
+    if (!isBranchStep(input.source) && !isDelayStep(input.source)) {
+      nextDelay.condition = input.source.condition;
+    }
+    return nextDelay;
+  }
+
+  const fallbackAdapter =
+    input.adapters.find((adapter) => adapter.supportedActions.length > 0) || input.adapters[0];
+  const nextAction = createEmptyActionStep(
+    nextId,
+    fallbackAdapter?.key || "webhook",
+  );
+  nextAction.action = fallbackAdapter?.supportedActions?.[0] || "";
+
+  if (!isBranchStep(input.source) && !isDelayStep(input.source)) {
+    nextAction.adapter = input.source.adapter || nextAction.adapter;
+    nextAction.action = input.source.action || nextAction.action;
+    nextAction.config = { ...(input.source.config || {}) };
+    nextAction.input = { ...(input.source.input || {}) };
+    nextAction.onError = input.source.onError;
+    nextAction.retryPolicy = input.source.retryPolicy;
+    nextAction.condition = input.source.condition;
+  }
+
+  return nextAction;
 }
 
 export function validateWorkflowStructure(definition: WorkflowDefinition): {

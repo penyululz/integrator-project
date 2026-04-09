@@ -17,6 +17,14 @@ For launch-facing product documentation, quick start, smoke path, limitations, a
 - observability, alerts, and retention services
 - repositories and migrations
 
+## Phase 2 Experience Layer Context
+
+Phase 2 adds usability and guided flows in `apps/web` while preserving core runtime semantics.
+
+- `packages/core` remains the source of truth for workflow execution, retries, waits, approvals, and observability
+- `Prototype Mode` continues to provide contract-compatible behavior for first-success demos
+- `Live Mode` continues to enforce real credentials, scoped auth, and real runtime execution
+
 ## Architecture Docs
 
 - system architecture: [`docs/architecture.md`](../../docs/architecture.md)
@@ -35,12 +43,21 @@ npm run reencrypt:credentials -w @integration/core
 
 ## Environment Reference
 
+- Root `.env` is the active runtime file for `Prototype Mode` and `Live Mode`.
+- Initialize root `.env` with `npm run env:init` from repository root.
 - [`packages/core/.env.example`](./.env.example)
 
 ### Platform vs Workspace Configuration
 
 - Keep `.env` limited to platform runtime and OAuth app registration values.
 - Store workspace-specific app connection settings through API/web UI (`/apps` + `/integrations`) so credentials are encrypted and tenant-scoped.
+
+### Queue Runtime Notes
+
+- `QUEUE: Redis + BullMQ` is the official ingress queue transport.
+- Incoming trigger events use BullMQ by default (`INTEGRATOR_QUEUE_DRIVER=bullmq`).
+- Compatibility fallback remains available with `INTEGRATOR_QUEUE_DRIVER=legacy`.
+- Durable retry and wait lifecycles stay DB-backed in `retry_queue` and `scheduled_waits` for now.
 
 ## Package-level Checks
 

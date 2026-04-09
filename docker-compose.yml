@@ -1,6 +1,49 @@
-version: "3.9"
+# DEPLOY: Docker Compose + Traefik
+# MODE: Prototype Mode | Live Mode
+# PROTOTYPE MODE SUPPORT: run core services quickly for local validation.
+# LIVE MODE SUPPORT: add real secrets, real credentials, and Traefik routing.
+# SAFE TO EXTEND LATER: this Compose layout is intentionally simple and VPS-friendly.
+# NOTE: Compose expects repository-root `.env` to exist (`npm run env:init`).
+
+name: integrator-platform
+
+x-integrator-runtime-env: &integrator-runtime-env
+  # MODE: Prototype Mode | Live Mode
+  APP_ENV: ${APP_ENV:-development}
+  DATABASE_URL: ${DATABASE_URL:-postgres://integration:integration@postgres:5432/integration}
+  REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+  INTEGRATOR_QUEUE_DRIVER: ${INTEGRATOR_QUEUE_DRIVER:-bullmq}
+  INTEGRATOR_EVENT_QUEUE_KEY: ${INTEGRATOR_EVENT_QUEUE_KEY:-integration:events}
+  INTEGRATOR_BULLMQ_PREFIX: ${INTEGRATOR_BULLMQ_PREFIX:-integrator}
+  INTEGRATOR_BULLMQ_WORKER_CONCURRENCY: ${INTEGRATOR_BULLMQ_WORKER_CONCURRENCY:-1}
+  INTEGRATOR_BULLMQ_REMOVE_ON_COMPLETE_COUNT: ${INTEGRATOR_BULLMQ_REMOVE_ON_COMPLETE_COUNT:-1000}
+  INTEGRATOR_BULLMQ_REMOVE_ON_FAIL_COUNT: ${INTEGRATOR_BULLMQ_REMOVE_ON_FAIL_COUNT:-2000}
+  INTEGRATOR_BULLMQ_JOB_NAME: ${INTEGRATOR_BULLMQ_JOB_NAME:-incoming-event}
 
 services:
+  # SERVICE: Traefik edge router
+  # ROUTING: Traefik entrypoint for `web` and `api` services.
+  # Optional in local Prototype Mode; useful for VPS and realistic Live Mode routing.
+  traefik:
+    profiles: ["proxy"]
+    image: traefik:v3.1
+    command:
+      - --api.dashboard=true
+      - --api.insecure=true
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:80
+      - --entrypoints.traefik.address=:8080
+    ports:
+      - "${TRAEFIK_WEB_PORT:-80}:80"
+      - "${TRAEFIK_DASHBOARD_PORT:-8080}:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - edge
+
+  # SERVICE: PostgreSQL primary datastore
+  # POSTGRES REQUIRED FOR LIVE DATA
   postgres:
     image: postgres:16
     environment:
@@ -11,14 +54,32 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-integration} -d ${POSTGRES_DB:-integration}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
 
+  # SERVICE: Redis queue/cache
+  # REDIS REQUIRED FOR QUEUE FEATURES
   redis:
     image: redis:7
     ports:
       - "6379:6379"
     volumes:
       - redis_data:/data
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
 
+  # SERVICE: API control plane
+  # USED BY API (runtime + migrations)
   api:
     build:
       context: .
@@ -26,17 +87,36 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: ${DATABASE_URL}
-      REDIS_URL: ${REDIS_URL}
+      <<: *integrator-runtime-env
       API_PORT: 4000
-      APP_ENV: ${APP_ENV:-development}
     depends_on:
-      - postgres
-      - redis
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     ports:
       - "4000:4000"
     command: sh -c "npm run migrate -w @integration/core && npm run start -w @integration/api"
+    networks:
+      - internal
+      - edge
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=integrator_edge"
+      # ROUTING: api.localhost -> API (easy VPS-hostname migration path)
+      - "traefik.http.routers.integrator-api-host.rule=Host(`${TRAEFIK_API_HOST:-api.localhost}`)"
+      - "traefik.http.routers.integrator-api-host.entrypoints=web"
+      - "traefik.http.routers.integrator-api-host.priority=120"
+      - "traefik.http.routers.integrator-api-host.service=integrator-api"
+      # ROUTING: localhost/api + localhost/metrics -> API
+      - "traefik.http.routers.integrator-api-path.rule=Host(`${TRAEFIK_WEB_HOST:-localhost}`) && (PathPrefix(`/api`) || PathPrefix(`/metrics`))"
+      - "traefik.http.routers.integrator-api-path.entrypoints=web"
+      - "traefik.http.routers.integrator-api-path.priority=110"
+      - "traefik.http.routers.integrator-api-path.service=integrator-api"
+      - "traefik.http.services.integrator-api.loadbalancer.server.port=4000"
 
+  # SERVICE: background worker
+  # Worker responsibilities: queue consumers, retries, durable waits, alerts, retention jobs.
   worker:
     build:
       context: .
@@ -44,26 +124,50 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: ${DATABASE_URL}
-      REDIS_URL: ${REDIS_URL}
-      APP_ENV: ${APP_ENV:-development}
+      <<: *integrator-runtime-env
     depends_on:
-      - postgres
-      - redis
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     command: npm run worker -w @integration/api
+    networks:
+      - internal
 
+  # SERVICE: frontend app
+  # USED BY WEB
   web:
     build:
       context: .
       dockerfile: apps/web/Dockerfile
     environment:
+      # PROTOTYPE MODE SUPPORT: direct API route without reverse proxy.
+      # LIVE MODE SUPPORT: set this to `http://localhost/api/v1` when proxy profile is enabled.
       VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:4000/api/v1}
     depends_on:
       - api
     ports:
       - "3000:3000"
+    networks:
+      - edge
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=integrator_edge"
+      - "traefik.http.routers.integrator-web.rule=Host(`${TRAEFIK_WEB_HOST:-localhost}`)"
+      - "traefik.http.routers.integrator-web.entrypoints=web"
+      - "traefik.http.routers.integrator-web.priority=10"
+      - "traefik.http.routers.integrator-web.service=integrator-web"
+      - "traefik.http.services.integrator-web.loadbalancer.server.port=3000"
+
+networks:
+  # Shared assumptions:
+  # - `internal`: data plane (api/worker/postgres/redis)
+  # - `edge`: routing plane (traefik/api/web)
+  internal:
+    name: integrator_internal
+  edge:
+    name: integrator_edge
 
 volumes:
   postgres_data:
   redis_data:
-

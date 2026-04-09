@@ -1,4 +1,5 @@
 import type { AdapterMetadata, EventLogRecord, RunRecord } from "../api";
+import { MarkerType, Position, type Edge, type Node } from "@xyflow/react";
 import {
   isActionStep,
   isBranchStep,
@@ -16,6 +17,9 @@ export type BuilderPaletteItem = {
   adapterKey?: string;
   actionKey?: string;
   advanced?: boolean;
+  readinessTier?: "ready" | "advanced" | "coming_soon" | "developer";
+  supportModel?: "native" | "generic" | "community";
+  setupHint?: string;
 };
 
 export type BuilderPaletteSection = {
@@ -23,6 +27,7 @@ export type BuilderPaletteSection = {
   title: string;
   description: string;
   items: BuilderPaletteItem[];
+  defaultExpanded?: boolean;
 };
 
 export type BuilderCanvasNodeKind =
@@ -76,6 +81,11 @@ export type BuilderCanvasEdge = {
 export type BuilderCanvasModel = {
   nodes: BuilderCanvasNode[];
   edges: BuilderCanvasEdge[];
+};
+
+export type ReactFlowProjection = {
+  nodes: Node[];
+  edges: Edge[];
 };
 
 export type BuilderCanvasBounds = {
@@ -197,18 +207,27 @@ export function getBuilderPaletteSections(adapters: AdapterMetadata[]): BuilderP
       label: "Action step",
       description: "Run an app action using mapped inputs.",
       stepType: "action",
+      readinessTier: "ready",
+      supportModel: "native",
+      setupHint: "Use for most app and connector calls.",
     },
     {
       id: "branch",
       label: "Branch",
       description: "Route flow with if/else conditions.",
       stepType: "branch",
+      readinessTier: "ready",
+      supportModel: "native",
+      setupHint: "Add rule-based routing in then/else paths.",
     },
     {
       id: "delay",
       label: "Delay",
       description: "Pause workflow until a future time.",
       stepType: "delay",
+      readinessTier: "ready",
+      supportModel: "native",
+      setupHint: "Use for waits, scheduling, and cooldown windows.",
     },
   ];
 
@@ -227,6 +246,14 @@ export function getBuilderPaletteSections(adapters: AdapterMetadata[]): BuilderP
       adapterKey: adapter.key,
       actionKey: adapter.supportedActions[0],
       advanced: adapter.readinessTier === "advanced" || adapter.readinessTier === "coming_soon",
+      readinessTier: adapter.readinessTier,
+      supportModel: adapter.supportModel,
+      setupHint:
+        adapter.readinessTier === "advanced"
+          ? "Advanced connector: validate fields before saving."
+          : adapter.readinessTier === "coming_soon"
+            ? "Limited readiness: test carefully before production use."
+            : "Ready connector with broad integration coverage.",
     });
   }
 
@@ -243,6 +270,9 @@ export function getBuilderPaletteSections(adapters: AdapterMetadata[]): BuilderP
         stepType: "action",
         adapterKey: aiAdapter.key,
         actionKey: "generateContent",
+        readinessTier: aiAdapter.readinessTier,
+        supportModel: aiAdapter.supportModel,
+        setupHint: "Best for drafting text from mapped prompt inputs.",
       });
     }
     if (hasAiAction("rewriteContent")) {
@@ -253,6 +283,9 @@ export function getBuilderPaletteSections(adapters: AdapterMetadata[]): BuilderP
         stepType: "action",
         adapterKey: aiAdapter.key,
         actionKey: "rewriteContent",
+        readinessTier: aiAdapter.readinessTier,
+        supportModel: aiAdapter.supportModel,
+        setupHint: "Use when your flow already has content that needs polishing.",
       });
     }
     if (hasAiAction("summarizeText")) {
@@ -263,6 +296,9 @@ export function getBuilderPaletteSections(adapters: AdapterMetadata[]): BuilderP
         stepType: "action",
         adapterKey: aiAdapter.key,
         actionKey: "summarizeText",
+        readinessTier: aiAdapter.readinessTier,
+        supportModel: aiAdapter.supportModel,
+        setupHint: "Great for digest alerts and support summaries.",
       });
     }
     if (hasAiAction("transformContent")) {
@@ -273,6 +309,9 @@ export function getBuilderPaletteSections(adapters: AdapterMetadata[]): BuilderP
         stepType: "action",
         adapterKey: aiAdapter.key,
         actionKey: "transformContent",
+        readinessTier: aiAdapter.readinessTier,
+        supportModel: aiAdapter.supportModel,
+        setupHint: "Convert output for downstream channels.",
       });
     }
     if (hasAiAction("runAgent")) {
@@ -284,6 +323,9 @@ export function getBuilderPaletteSections(adapters: AdapterMetadata[]): BuilderP
         adapterKey: aiAdapter.key,
         actionKey: "runAgent",
         advanced: true,
+        readinessTier: "advanced",
+        supportModel: aiAdapter.supportModel,
+        setupHint: "Advanced: configure tool permissions and approval constraints.",
       });
     }
   }
@@ -307,6 +349,16 @@ export function getBuilderPaletteSections(adapters: AdapterMetadata[]): BuilderP
         adapter.readinessTier === "advanced" ||
         adapter.readinessTier === "coming_soon" ||
         adapter.readinessTier === "developer",
+      readinessTier: adapter.readinessTier,
+      supportModel: adapter.supportModel,
+      setupHint:
+        adapter.readinessTier === "ready"
+          ? "Ready for starter automations."
+          : adapter.readinessTier === "advanced"
+            ? "Needs more setup validation before production use."
+            : adapter.readinessTier === "developer"
+              ? "Developer-focused connector with advanced setup expectations."
+              : "Coming soon: use with caution.",
     }))
     .sort((left, right) => left.label.localeCompare(right.label));
 
@@ -316,24 +368,28 @@ export function getBuilderPaletteSections(adapters: AdapterMetadata[]): BuilderP
       title: "Core flow nodes",
       description: "Trigger -> steps -> result foundation for every automation.",
       items: coreItems,
+      defaultExpanded: true,
     },
     {
       id: "ai",
       title: "AI nodes",
       description: "Creator and content-focused AI actions with simple and advanced paths.",
       items: aiNodeItems,
+      defaultExpanded: true,
     },
     {
       id: "power",
       title: "Power connectors",
       description: "Generic connectors for APIs, schedules, code, and advanced patterns.",
       items: powerConnectorItems,
+      defaultExpanded: false,
     },
     {
       id: "apps",
       title: "App connectors",
       description: "Native and messaging apps ready for fast insertion.",
       items: nativeAppItems,
+      defaultExpanded: true,
     },
   ];
 }
@@ -1114,4 +1170,64 @@ export function getCanvasNodeById(
     return null;
   }
   return model.nodes.find((node) => node.id === nodeId) || null;
+}
+
+export function toReactFlowProjection(input: {
+  model: BuilderCanvasModel;
+  positions?: BuilderNodePositionMap;
+}): ReactFlowProjection {
+  const nodes: Node[] = input.model.nodes.map((node) => {
+    const position = input.positions?.[node.id] || {
+      x: node.presentation.x,
+      y: node.presentation.y,
+    };
+
+    return {
+      id: node.id,
+      type: "default",
+      position,
+      data: {
+        label: node.label,
+        summary: node.summary,
+        kind: node.kind,
+        dataRef: node.dataRef,
+      },
+      draggable: true,
+      selectable: true,
+      targetPosition: Position.Left,
+      sourcePosition: Position.Right,
+      className: `builder-rf-node kind-${node.kind}`,
+      style: {
+        width: node.presentation.width,
+        minHeight: node.presentation.height,
+      },
+    };
+  });
+
+  const edges: Edge[] = input.model.edges.map((edge) => ({
+    id: edge.id,
+    source: edge.from,
+    target: edge.to,
+    label: edge.label,
+    type: edge.kind === "branch" ? "smoothstep" : "default",
+    animated: false,
+    selectable: true,
+    className: `builder-rf-edge kind-${toEdgeVisualKind(edge)} ${
+      edge.id === "edge:draft" ? "draft" : ""
+    }`,
+    markerEnd: {
+      type: MarkerType.ArrowClosed,
+      color: "#7c90a8",
+    },
+    data: {
+      kind: edge.kind,
+      branchRole: edge.branchRole || "default",
+      connectRef: edge.connectRef,
+    },
+  }));
+
+  return {
+    nodes,
+    edges,
+  };
 }

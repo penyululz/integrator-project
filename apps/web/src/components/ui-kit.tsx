@@ -4,6 +4,9 @@ type Tone = "info" | "success" | "warning" | "danger";
 
 export type StatusTone = Tone;
 
+// STYLING: Tailwind utility layer + product.css tokens (shared path).
+// SHARED BETWEEN PROTOTYPE AND LIVE
+
 export function PageHeader(props: {
   eyebrow?: string;
   title: string;
@@ -11,12 +14,54 @@ export function PageHeader(props: {
   actions?: ReactNode;
 }) {
   return (
-    <header className="page-header">
+    <header className="page-header space-y-2">
       {props.eyebrow ? <div className="page-eyebrow">{props.eyebrow}</div> : null}
       <div className="page-title">{props.title}</div>
       {props.subtitle ? <p className="page-subtitle">{props.subtitle}</p> : null}
       {props.actions ? <div className="inline-actions">{props.actions}</div> : null}
     </header>
+  );
+}
+
+export function ShellContextStrip(props: {
+  title: string;
+  description: string;
+  meta?: ReactNode;
+  actions?: ReactNode;
+}) {
+  return (
+    <section className="shell-context-strip">
+      <div className="stack-sm">
+        <h2 className="shell-context-title">{props.title}</h2>
+        <p className="shell-context-description">{props.description}</p>
+      </div>
+      <div className="shell-context-actions">
+        {props.meta ? <div className="inline-actions">{props.meta}</div> : null}
+        {props.actions ? <div className="inline-actions">{props.actions}</div> : null}
+      </div>
+    </section>
+  );
+}
+
+export function PageSection(props: {
+  title?: string;
+  subtitle?: string;
+  actions?: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <section className="page-section">
+      {props.title || props.subtitle || props.actions ? (
+        <header className="page-section-header">
+          <div className="stack-sm">
+            {props.title ? <h3 className="page-section-title">{props.title}</h3> : null}
+            {props.subtitle ? <p className="page-section-subtitle">{props.subtitle}</p> : null}
+          </div>
+          {props.actions ? <div className="inline-actions">{props.actions}</div> : null}
+        </header>
+      ) : null}
+      <div className="page-section-body">{props.children}</div>
+    </section>
   );
 }
 
@@ -36,7 +81,7 @@ export function SurfaceCard(props: {
   }
 
   return (
-    <section className={classNames.join(" ")}>
+    <section className={`${classNames.join(" ")} rounded-xl`}>
       {props.title ? <h3 className="card-title">{props.title}</h3> : null}
       {props.subtitle ? <p className="card-subtitle">{props.subtitle}</p> : null}
       {props.children}
@@ -77,7 +122,7 @@ export function StatusPill(props: {
   tone: Tone;
   children: ReactNode;
 }) {
-  return <span className={`status-pill ${props.tone}`}>{props.children}</span>;
+  return <span className={`status-pill inline-flex items-center ${props.tone}`}>{props.children}</span>;
 }
 
 export function DemoHint(props: {
@@ -124,7 +169,7 @@ export function EmptyStatePanel(props: {
   secondaryAction?: ReactNode;
 }) {
   return (
-    <div className="empty-state-panel">
+    <div className="empty-state-panel space-y-2">
       <h4 className="empty-state-title">{props.title}</h4>
       <p className="empty-state-description">{props.description}</p>
       {props.primaryAction || props.secondaryAction ? (
@@ -134,6 +179,28 @@ export function EmptyStatePanel(props: {
         </div>
       ) : null}
     </div>
+  );
+}
+
+export function PrimaryActionPanel(props: {
+  title: string;
+  description: string;
+  primaryAction: ReactNode;
+  secondaryActions?: ReactNode;
+  meta?: ReactNode;
+}) {
+  return (
+    <section className="primary-action-panel">
+      <div className="stack-sm">
+        <h3 className="primary-action-title">{props.title}</h3>
+        <p className="primary-action-description">{props.description}</p>
+      </div>
+      {props.meta ? <div className="inline-actions">{props.meta}</div> : null}
+      <div className="inline-actions">
+        {props.primaryAction}
+        {props.secondaryActions}
+      </div>
+    </section>
   );
 }
 
@@ -192,7 +259,7 @@ export function PrimaryCTA(props: {
   return (
     <button
       type={props.type || "button"}
-      className="button-primary"
+      className="button-primary inline-flex items-center justify-center gap-2"
       onClick={props.onClick}
       disabled={props.disabled}
     >

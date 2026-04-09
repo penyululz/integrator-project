@@ -1,9 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { AgentToolRecord } from "../api";
 import {
-  createEmptyActionStep,
-  createEmptyBranchStep,
-  createEmptyDelayStep,
   isActionStep,
   isBranchStep,
   isDelayStep,
@@ -73,31 +70,6 @@ function normalizeActionStep(
   };
 }
 
-function convertStepType(
-  step: WorkflowStep,
-  nextType: "action" | "branch" | "delay",
-  adapters: AdapterMetadata[],
-): WorkflowStep {
-  if (nextType === "action") {
-    const fallbackAdapter = adapters[0]?.key || "webhook";
-    const fallbackAction = adapters[0]?.supportedActions?.[0] || "";
-    return {
-      ...createEmptyActionStep(step.id, fallbackAdapter),
-      action: fallbackAction,
-    };
-  }
-
-  if (nextType === "branch") {
-    return {
-      ...createEmptyBranchStep(step.id),
-    };
-  }
-
-  return {
-    ...createEmptyDelayStep(step.id),
-  };
-}
-
 function updateMappedInput(
   step: WorkflowActionStep,
   key: string,
@@ -149,6 +121,8 @@ export function StepCardEditor({
   onMoveUp,
   onMoveDown,
   createStep,
+  onDuplicateAs,
+  showAdvancedSections = true,
 }: {
   step: WorkflowStep;
   adapters: AdapterMetadata[];
@@ -160,7 +134,10 @@ export function StepCardEditor({
   onMoveUp?: () => void;
   onMoveDown?: () => void;
   createStep: (type: "action" | "branch" | "delay") => WorkflowStep;
+  onDuplicateAs?: (nextType: "action" | "branch" | "delay") => void;
+  showAdvancedSections?: boolean;
 }) {
+  const selectedType = isBranchStep(step) ? "branch" : isDelayStep(step) ? "delay" : "action";
   const [configText, setConfigText] = useState(
     isActionStep(step) ? toJson(step.config) : "{}",
   );
@@ -170,15 +147,15 @@ export function StepCardEditor({
   const [curlDraft, setCurlDraft] = useState("");
   const [curlMessage, setCurlMessage] = useState<string | null>(null);
   const [codeInputDraft, setCodeInputDraft] = useState("{}");
+  const [duplicateType, setDuplicateType] = useState<"action" | "branch" | "delay">(selectedType);
 
   useEffect(() => {
     if (isActionStep(step)) {
       setConfigText(toJson(step.config));
       setConfigError(null);
     }
-  }, [step]);
-
-  const selectedType = isBranchStep(step) ? "branch" : isDelayStep(step) ? "delay" : "action";
+    setDuplicateType(selectedType);
+  }, [step, selectedType]);
 
   const actionStep = isActionStep(step) ? normalizeActionStep(step, adapters) : null;
   const actionAdapter = actionStep
@@ -246,21 +223,36 @@ export function StepCardEditor({
             </button>
           ) : null}
           <span className="tag">Drag to reorder</span>
-          <label>
-            Type
-            <select
-              value={selectedType}
-              onChange={(event) => {
-                const nextType = event.target.value as "action" | "branch" | "delay";
-                onChange(convertStepType(step, nextType, adapters));
-              }}
-              style={{ marginLeft: 8 }}
-            >
-              <option value="action">Action</option>
-              <option value="branch">Branch</option>
-              <option value="delay">Delay</option>
-            </select>
-          </label>
+          <span className="tag">Type: {selectedType}</span>
+          {onDuplicateAs ? (
+            <>
+              <label>
+                Duplicate as
+                <select
+                  value={duplicateType}
+                  onChange={(event) =>
+                    setDuplicateType(event.target.value as "action" | "branch" | "delay")
+                  }
+                  style={{ marginLeft: 8 }}
+                >
+                  <option value="action">Action</option>
+                  <option value="branch">Branch</option>
+                  <option value="delay">Delay</option>
+                </select>
+              </label>
+              <button
+                type="button"
+                disabled={duplicateType === selectedType}
+                onClick={() => {
+                  if (duplicateType !== selectedType) {
+                    onDuplicateAs(duplicateType);
+                  }
+                }}
+              >
+                Create converted copy
+              </button>
+            </>
+          ) : null}
 
           <button type="button" onClick={onDelete}>Remove</button>
         </div>
@@ -792,31 +784,33 @@ export function StepCardEditor({
             </div>
           ) : null}
 
-          <details>
-            <summary>Static config (advanced)</summary>
-            <div className="stack-sm" style={{ marginTop: 8 }}>
-              <textarea
-                value={configText}
-                rows={5}
-                onChange={(event) => {
-                  setConfigText(event.target.value);
-                  setConfigError(null);
-                }}
-                onBlur={() => {
-                  const parsed = parseConfig(configText);
-                  if (!parsed) {
-                    setConfigError("Config must be a valid JSON object.");
-                    return;
-                  }
-                  onChange({
-                    ...actionStep,
-                    config: parsed,
-                  });
-                }}
-              />
-              {configError ? <div style={{ color: "#b42318" }}>{configError}</div> : null}
-            </div>
-          </details>
+          {showAdvancedSections ? (
+            <details>
+              <summary>Static config (advanced)</summary>
+              <div className="stack-sm" style={{ marginTop: 8 }}>
+                <textarea
+                  value={configText}
+                  rows={5}
+                  onChange={(event) => {
+                    setConfigText(event.target.value);
+                    setConfigError(null);
+                  }}
+                  onBlur={() => {
+                    const parsed = parseConfig(configText);
+                    if (!parsed) {
+                      setConfigError("Config must be a valid JSON object.");
+                      return;
+                    }
+                    onChange({
+                      ...actionStep,
+                      config: parsed,
+                    });
+                  }}
+                />
+                {configError ? <div style={{ color: "#b42318" }}>{configError}</div> : null}
+              </div>
+            </details>
+          ) : null}
 
           <div className="stack">
             <div className="inline-actions" style={{ justifyContent: "space-between" }}>
@@ -903,21 +897,23 @@ export function StepCardEditor({
             ))}
           </div>
 
-          <details>
-            <summary>Optional condition</summary>
-            <div style={{ marginTop: 8 }}>
-              <ConditionEditor
-                value={actionStep.condition}
-                referenceHints={referenceHints}
-                onChange={(condition) => {
-                  onChange({
-                    ...actionStep,
-                    condition,
-                  });
-                }}
-              />
-            </div>
-          </details>
+          {showAdvancedSections ? (
+            <details>
+              <summary>Optional condition</summary>
+              <div style={{ marginTop: 8 }}>
+                <ConditionEditor
+                  value={actionStep.condition}
+                  referenceHints={referenceHints}
+                  onChange={(condition) => {
+                    onChange({
+                      ...actionStep,
+                      condition,
+                    });
+                  }}
+                />
+              </div>
+            </details>
+          ) : null}
         </div>
       ) : null}
 

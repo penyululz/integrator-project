@@ -2,6 +2,98 @@
 
 Self-hostable, enterprise-oriented AI automation platform for teams that want visual workflow orchestration, governed agent execution, and operational reliability.
 
+## Official Tech Stack (Phase 1.5A Lock)
+
+- `STACK: React + TypeScript + Vite`
+- `STATE: TanStack Query for server state, Zustand for local UI state`
+- `BUILDER: React Flow / XYFlow`
+- `API: Fastify + Zod`
+- `DATA: PostgreSQL`
+- `QUEUE: Redis + BullMQ`
+- `DEPLOY: Docker Compose + Traefik`
+- `CI/CD: GitHub Actions`
+- `MODE: Prototype Mode | Live Mode`
+
+## Development Modes
+
+- `Prototype Mode`: fake seeded data and simulated flows for local testing, UI review, and demos without real external setup.
+- `Live Mode`: real backend, real credentials, real integrations, and real runtime behavior.
+
+## Phase 2 Experience Layer (Current)
+
+Phase 2 improves product usability on top of the locked stack and existing architecture.
+
+- beginner-first UX with one dominant action per major surface
+- guided onboarding and first-success flow (`connect -> build -> test -> observe`)
+- canvas-first workflow builder with progressive disclosure for advanced options
+- template and simulator flows for fast local success in `Prototype Mode`
+- improved app connection clarity (trust states, setup guidance, retry-oriented feedback)
+- cross-surface continuity between builder, runs, alerts, audit, and approvals
+
+Architecture note:
+- the Experience Layer is a UI/interaction layer on top of existing API/runtime contracts
+- it reuses shared schemas, query contracts, and state boundaries rather than replacing them
+
+### Run Each Mode
+
+- `Prototype Mode`:
+  1. Set `INTEGRATOR_MODE="Prototype Mode"` and `VITE_INTEGRATOR_MODE="Prototype Mode"`.
+  2. Start infra (`PostgreSQL`, `Redis`), run migrations/seed, then start API/worker/web.
+  3. Use seeded first-success flow (no external OAuth required).
+- `Live Mode`:
+  1. Set `INTEGRATOR_MODE="Live Mode"` and `VITE_INTEGRATOR_MODE="Live Mode"`.
+  2. Configure required runtime secrets (`JWT_SECRET`, `MASTER_ENCRYPTION_KEY`) and integration registration values.
+  3. Start API/worker/web and connect real apps from the UI.
+
+### Mode Source Of Truth
+
+- `INTEGRATOR_MODE` is the canonical runtime selector for API, worker, and core runtime boundaries.
+- `VITE_INTEGRATOR_MODE` controls web boot mode labeling before API handshake.
+- Web then reads `/api/v1/health` and uses API mode as the authoritative runtime mode.
+- `APP_ENV` is compatibility fallback only and should not be treated as the primary mode switch.
+- `DO NOT MIX PROTOTYPE STATUS WITH LIVE RUNTIME STATUS`.
+
+### Prototype Mode Scope
+
+- Simulates:
+  - seeded local workspace/user data
+  - guided setup and first-run UX without real third-party credentials
+  - local workflow exploration with safe defaults
+  - onboarding path and template-driven first automation run
+  - linked demo records across runs, alerts, approvals, and audit
+- Does not simulate:
+  - production credential guarantees
+  - external provider uptime/rate-limit behavior
+  - full Live Mode security/compliance posture
+
+### Why Prototype Mode Exists (Architecture Note)
+
+- `Prototype Mode` keeps route shapes, response envelopes, and list/query contracts aligned with `Live Mode`.
+- It allows fast UI/UX iteration and teammate review before external integration setup is complete.
+- It is a prerequisite for cleaner Phase 2 and Phase 3 work:
+  - Phase 2 can harden runtime/governance without breaking onboarding usability.
+  - Phase 3 can extend integrations/AI workflows while preserving a stable first-success demo path.
+
+### Current Repository Status vs Locked Stack
+
+The stack above is the official direction for contributors. Current implementation status in this repository:
+
+- Frontend runtime is React + TypeScript + Vite, with TanStack Query + Zustand + Tailwind foundations active.
+- Backend runtime now boots on Fastify and mounts existing Express routes through a compatibility layer while contracts remain stable.
+- Queue transport is BullMQ-first with automatic Redis legacy fallback (`INTEGRATOR_QUEUE_DRIVER=legacy`) to avoid runtime breakage.
+- Docker Compose and GitHub Actions are present.
+- Traefik routing foundation is wired in Compose via an optional `proxy` profile.
+
+## Why These Choices
+
+- `React + TypeScript + Vite`: fast iteration with strong typing and predictable builds.
+- `TanStack Query + Zustand`: clear split between server-state orchestration and local UI state.
+- `React Flow / XYFlow`: proven workflow-canvas ergonomics for visual automation.
+- `Fastify + Zod`: high-performance API surface with explicit runtime validation.
+- `PostgreSQL + Redis + BullMQ`: durable system-of-record + fast queueing primitives + production queue semantics.
+- `Docker Compose + Traefik`: simple self-host bootstrap with a clean reverse-proxy edge.
+- `GitHub Actions`: lightweight default CI/CD path for OSS contribution flow.
+
 ## What Integrator Is
 
 Integrator is a TypeScript monorepo product similar in category to Zapier, n8n, and Make, focused on:
@@ -64,13 +156,13 @@ Integrator is a TypeScript monorepo product similar in category to Zapier, n8n, 
 - first-success onboarding and goal-first flow
 - in-app simulator and guided test path for webhook-led starts
 
-## Architecture
+## Project Architecture
 
 See detailed architecture and runtime flow in [`docs/architecture.md`](./docs/architecture.md).
 
 At a glance:
 
-- `apps/api`: Express control plane + webhook ingress + worker entrypoint
+- `apps/api`: API control plane + webhook ingress + worker entrypoint (Fastify runtime with Express-route compatibility bridge)
 - `apps/web`: React product UI (catalog, builder, runs, approvals, alerts, audit)
 - `packages/core`: workflow engine, auth, queue/retry/scheduler, approvals, memory, observability
 - `packages/shared`: typed contracts, shared utilities, AI utility layer
@@ -127,29 +219,167 @@ Read [`docs/SETUP_GUIDE_SYSTEM.md`](./docs/SETUP_GUIDE_SYSTEM.md) for:
 
 ## Quick Start
 
-1. Install:
+### Bootstrap Source Of Truth
+
+- Root `.env` is the active runtime file.
+- Root `.env` is used by API, worker, and local tooling.
+- Root `.env` is also used by Docker Compose.
+- `npm run env:init` creates root `.env` from root `.env.example` when missing.
+
+### Services By Mode
+
+- `Prototype Mode`:
+  - required services: PostgreSQL + Redis
+  - seeded users/workspaces/workflows available after `npm run setup:local`
+  - real external app credentials are optional
+- `Live Mode`:
+  - required services: PostgreSQL + Redis
+  - required secrets: `JWT_SECRET`, `MASTER_ENCRYPTION_KEY`
+  - real integration registration values and app credentials required
+- queue driver:
+  - default: `BullMQ` (`INTEGRATOR_QUEUE_DRIVER=bullmq`)
+  - compatibility fallback: `INTEGRATOR_QUEUE_DRIVER=legacy`
+
+### Mode Switching
+
+- `Prototype Mode`:
+  - set `INTEGRATOR_MODE="Prototype Mode"`
+  - set `VITE_INTEGRATOR_MODE="Prototype Mode"` for web startup clarity
+- `Live Mode`:
+  - set `INTEGRATOR_MODE="Live Mode"`
+  - set `VITE_INTEGRATOR_MODE="Live Mode"` for web startup clarity
+- `APP_ENV` may remain for compatibility (`development` / `production`), but mode intent should come from `INTEGRATOR_MODE`.
+
+### Docker Compose + Traefik Roles
+
+- `SERVICE: frontend app` -> `web` (Vite preview container on port `3000`)
+- `SERVICE: API control plane` -> `api` (port `4000`, migrations + API runtime)
+- `SERVICE: background worker` -> `worker` (queue consumers, retries, durable waits, alerts, retention jobs)
+- `SERVICE: PostgreSQL primary datastore` -> `postgres`
+- `SERVICE: Redis queue/cache` -> `redis`
+- `ROUTING: Traefik entrypoint` -> `traefik` (optional profile `proxy`)
+- `DEPLOY: Docker Compose + Traefik` is the official self-host direction.
+
+### Compose Topology
+
+- `integrator_internal` network: API, worker, PostgreSQL, Redis.
+- `integrator_edge` network: Traefik, API, web.
+- Traefik labels are preconfigured for:
+  - web host route (`TRAEFIK_WEB_HOST`, default `localhost`)
+  - api host route (`TRAEFIK_API_HOST`, default `api.localhost`)
+- api path route (`/api` and `/metrics` under `TRAEFIK_WEB_HOST`)
+
+### Compose Profiles
+
+- `PROTOTYPE MODE SUPPORT`:
+  - start without proxy for minimal setup
+  - API on `http://localhost:4000`, web on `http://localhost:3000`
+- `LIVE MODE SUPPORT`:
+  - enable `proxy` profile and route through Traefik
+  - web on `http://localhost` and API on `http://localhost/api/v1` (or `http://api.localhost/api/v1`)
+
+### Prototype Mode Startup (recommended first run)
+
+1. Install dependencies:
 
 ```bash
 npm install
 ```
 
-2. Run one-time local setup:
+2. Initialize environment file:
+
+```bash
+npm run env:init
+```
+
+3. Start infrastructure dependencies:
+
+```bash
+npm run infra:up
+```
+
+4. Run one-time bootstrap (verify + migrate + seed):
 
 ```bash
 npm run setup:local
 ```
 
-3. Start API + worker + web:
+5. Start API + worker + web:
 
 ```bash
 npm run dev:local
 ```
 
-4. Open:
+6. Open:
 
 - Web: `http://localhost:3000`
 - API health: `http://localhost:4000/api/v1/health`
 - Metrics: `http://localhost:4000/metrics`
+
+### Compose-Only Startup (local or VPS-friendly)
+
+Without Traefik:
+
+```bash
+npm run env:init
+npm run stack:up
+```
+
+With Traefik (optional profile):
+
+```bash
+npm run env:init
+npm run stack:up:proxy
+```
+
+Routing with Traefik profile:
+
+- web: `http://localhost` (or `TRAEFIK_WEB_HOST`)
+- api: `http://localhost/api/v1` (or `http://api.localhost/api/v1`)
+- Traefik dashboard: `http://localhost:8080`
+
+When using Traefik routing in containers, set:
+
+- `VITE_API_BASE_URL=http://localhost/api/v1`
+
+VPS baseline expectations for Live Mode:
+
+1. Keep the same Compose stack and enable the `proxy` profile.
+2. Point DNS records to your VPS and set `TRAEFIK_WEB_HOST` / `TRAEFIK_API_HOST`.
+3. Keep secrets in `.env` (or external secret injection) and rotate defaults.
+4. Add TLS/cert and hardening as a follow-up phase (not required for local Prototype Mode).
+
+### Live Mode Startup (same bootstrap, real credentials)
+
+1. Copy root `.env.example` to `.env` (or run `npm run env:init` then edit values).
+2. Set `INTEGRATOR_MODE="Live Mode"` and configure required live secrets:
+   - `JWT_SECRET`
+   - `MASTER_ENCRYPTION_KEY`
+3. Keep `APP_ENV=production` for compatibility with existing runtime checks.
+4. Configure platform OAuth registration values as needed:
+   - `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`
+   - `SHOPIFY_CLIENT_ID` / `SHOPIFY_CLIENT_SECRET`
+   - `SLACK_CLIENT_ID` / `SLACK_CLIENT_SECRET`
+5. Start PostgreSQL + Redis, run migrations, then start API + worker + web.
+
+### Environment Variable Groups
+
+- `REQUIRED FOR PROTOTYPE MODE AND LIVE MODE`:
+  - `INTEGRATOR_MODE`
+  - `DATABASE_URL`
+  - `REDIS_URL`
+- `REQUIRED FOR LIVE MODE`:
+  - `JWT_SECRET`
+  - `MASTER_ENCRYPTION_KEY`
+- `OPTIONAL IN PROTOTYPE MODE`:
+  - OAuth registration values (`GOOGLE_*`, `SHOPIFY_*`, `SLACK_*`)
+  - adapter allow/deny toggles (`ENABLED_ADAPTER_KEYS`, `DISABLED_ADAPTER_KEYS`)
+  - thresholds and tuning (`ALERT_*`, `SCALE_*`, `RETENTION_*`)
+- `USED BY WEB`:
+  - `VITE_INTEGRATOR_MODE`
+  - `VITE_API_BASE_URL`
+- `USED BY API / WORKER`:
+  - core runtime + security + scheduler + integration registration variables in root `.env.example`
 
 ## First Success Path
 
@@ -159,6 +389,8 @@ npm run dev:local
 4. Choose a starter template.
 5. Run simulator/test event.
 6. Inspect Runs, Audit, and Alerts.
+
+For local review in `Prototype Mode`, this path requires no external OAuth or provider secrets.
 
 ## Reference Alignment (Inspiration, Not Copying)
 

@@ -14,6 +14,18 @@ React operational UI for:
 - runs/logs
 - dashboard, alerts, and audit views
 
+## Phase 2 Experience Layer
+
+Current UX direction in web app:
+
+- beginner-first flows with one primary next action per page
+- guided onboarding and first automation path
+- canvas-first builder with advanced controls secondary
+- app setup guidance and clearer connection trust states
+- simulator/test handoff into runs, alerts, and audit views
+
+This layer sits on top of existing API contracts and mode boundaries (`Prototype Mode` / `Live Mode`).
+
 ## Product UX Docs
 
 - UI/UX system: [`docs/UI_SYSTEM.md`](../../docs/UI_SYSTEM.md)
@@ -36,6 +48,17 @@ npm run dev -w @integration/web
 
 - Most app setup now happens in the web UI (`/integrations`) per workspace.
 - `.env` remains only for platform-level runtime settings and OAuth app registration values.
+
+### Prototype Mode First-Success
+
+In `Prototype Mode`, a reviewer can:
+
+1. sign in with seeded credentials
+2. follow onboarding
+3. create/test a starter automation
+4. inspect resulting run timeline and linked operational signals
+
+No real third-party app setup is required for this guided path.
 
 ## Demo Assets
 

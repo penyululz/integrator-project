@@ -1,4 +1,5 @@
 import type { CoreEnv } from "../db/env";
+import { PLATFORM_MODES } from "@integration/shared";
 import {
   AuthRepository,
   type LoginAccountRecord,
@@ -42,7 +43,8 @@ export class AuthService {
   ) {}
 
   isDevLoginEnabled(): boolean {
-    return this.env.APP_ENV !== "production";
+    // PROTOTYPE MODE ONLY: development login shortcut.
+    return this.env.INTEGRATOR_MODE !== PLATFORM_MODES.LIVE;
   }
 
   async login(input: LoginInput): Promise<LoginResponse> {

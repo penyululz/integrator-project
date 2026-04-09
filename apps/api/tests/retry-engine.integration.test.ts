@@ -359,7 +359,7 @@ async function createRetryRuntime(input: {
     runtime,
     workflow,
     retryAdapter,
-    app: createApp(runtime),
+    app: await createApp(runtime),
     context: {
       tenantId,
       organizationId,
@@ -370,7 +370,7 @@ async function createRetryRuntime(input: {
 }
 
 async function enqueueWorkflowTrigger(
-  app: ReturnType<typeof createApp>,
+  app: Awaited<ReturnType<typeof createApp>>,
   runtime: CoreRuntime,
 ) {
   const login = await runtime.authService.login({
@@ -380,7 +380,7 @@ async function enqueueWorkflowTrigger(
     workspaceSlug: "default",
   });
 
-  const response = await request(app)
+  const response = await request(app.server)
     .post("/api/v1/webhook/webhook/http_post")
     .set("authorization", `Bearer ${login.accessToken}`)
     .send({

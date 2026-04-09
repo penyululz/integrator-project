@@ -52,6 +52,37 @@ const workflowSchema: Record<string, unknown> = {
       type: "object",
       nullable: true,
       required: [],
+      properties: {
+        source: {
+          type: "string",
+          nullable: true,
+          enum: ["builder", "template", "api", "import", null],
+        },
+        paletteVersion: { type: "string", nullable: true },
+        inspectorVersion: { type: "string", nullable: true },
+        createdFromTemplateId: { type: "string", nullable: true },
+        nodeLayout: {
+          type: "array",
+          nullable: true,
+          items: {
+            type: "object",
+            properties: {
+              stepId: { type: "string", minLength: 1 },
+              kind: {
+                type: "string",
+                enum: ["trigger", "action", "branch", "delay", "result"],
+              },
+              x: { type: "number", nullable: true },
+              y: { type: "number", nullable: true },
+              lane: { type: "string", nullable: true },
+              collapsed: { type: "boolean", nullable: true },
+              notes: { type: "string", nullable: true },
+            },
+            required: ["stepId", "kind"],
+            additionalProperties: true,
+          },
+        },
+      },
       additionalProperties: true,
     },
   },

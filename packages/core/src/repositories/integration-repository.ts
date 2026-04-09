@@ -1,10 +1,23 @@
 import { Pool } from "pg";
-import { redactSensitiveRecord, splitSensitiveFields } from "@integration/shared";
+import {
+  redactSensitiveRecord,
+  splitSensitiveFields,
+  type StandardListResult,
+} from "@integration/shared";
 import {
   type CredentialEncryptionEnvelope,
   CredentialCrypto,
   createCredentialCryptoFromEnv,
 } from "../security/credential-crypto";
+import {
+  appendFilterGroupClause,
+  buildOrderByClause,
+  encodeOffsetCursor,
+  normalizeSortDirectives,
+  resolvePaginationState,
+  type SqlListQueryInput,
+  type SqlColumnMap,
+} from "./list-query";
 
 const ENCRYPTED_CONFIG_KEY = "__encrypted_sensitive_config";
 
@@ -21,6 +34,9 @@ export type IntegrationRecord = {
   created_at: string;
   updated_at: string;
 };
+
+export type IntegrationListQuery = SqlListQueryInput;
+export type IntegrationListResult = StandardListResult<IntegrationRecord>;
 
 type IntegrationStorageRecord = {
   id: string;
@@ -92,6 +108,102 @@ export class IntegrationRepository {
         has_sensitive_config: config.hasSensitiveConfig,
       };
     });
+  }
+
+  async listWithQuery(input: {
+    tenantId: string;
+    organizationId: string;
+    workspaceId: string;
+    query: IntegrationListQuery;
+  }): Promise<IntegrationListResult> {
+    const predicates = [
+      "tenant_id = $1",
+      "organization_id = $2",
+      "workspace_id = $3",
+    ];
+    const values: unknown[] = [
+      input.tenantId,
+      input.organizationId,
+      input.workspaceId,
+    ];
+
+    if (input.query.search) {
+      values.push(`%${input.query.search}%`);
+      const position = values.length;
+      predicates.push(
+        `(name ILIKE $${position} OR adapter_key ILIKE $${position} OR status ILIKE $${position} OR id::text ILIKE $${position})`,
+      );
+    }
+
+    const filterColumns: SqlColumnMap = {
+      id: "id::text",
+      name: "name",
+      status: "status",
+      adapterKey: "adapter_key",
+      createdAt: "created_at",
+      updatedAt: "updated_at",
+    };
+    appendFilterGroupClause({
+      predicates,
+      values,
+      filterGroup: input.query.filterGroup,
+      allowedColumns: filterColumns,
+    });
+
+    const pagination = resolvePaginationState(input.query, {
+      limit: 25,
+      maxLimit: 100,
+    });
+    const appliedSorts = normalizeSortDirectives(
+      input.query.sort,
+      filterColumns,
+      [{ field: "createdAt", direction: "desc" }],
+    );
+    const orderBy = buildOrderByClause(appliedSorts, filterColumns);
+
+    const countResult = await this.pool.query<{ total: string }>(
+      `SELECT COUNT(*)::bigint AS total
+       FROM integrations
+       WHERE ${predicates.join("\n         AND ")}`,
+      values,
+    );
+
+    const pagedValues = [...values, pagination.limit, pagination.offset];
+    const limitPosition = pagedValues.length - 1;
+    const offsetPosition = pagedValues.length;
+    const rowsResult = await this.pool.query<IntegrationStorageRecord>(
+      `SELECT *
+       FROM integrations
+       WHERE ${predicates.join("\n         AND ")}
+       ${orderBy}
+       LIMIT $${limitPosition}
+       OFFSET $${offsetPosition}`,
+      pagedValues,
+    );
+
+    const rows = rowsResult.rows.map((row) => {
+      const config = toApiConfig(row.config_json || {});
+      return {
+        ...row,
+        config_json: config.config,
+        has_sensitive_config: config.hasSensitiveConfig,
+      };
+    });
+
+    const totalApprox = Number(countResult.rows[0]?.total || 0);
+    const hasMore = pagination.offset + rows.length < totalApprox;
+    return {
+      rows,
+      nextCursor: hasMore
+        ? encodeOffsetCursor(pagination.offset + rows.length)
+        : null,
+      totalApprox,
+      appliedFilters: input.query.filterGroup || null,
+      appliedSorts,
+      page: pagination.page,
+      limit: pagination.limit,
+      hasMore,
+    };
   }
 
   async findByAdapter(input: {

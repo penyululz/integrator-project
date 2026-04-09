@@ -1,12 +1,24 @@
-import {
+﻿import {
   FormEvent,
   MouseEvent as ReactMouseEvent,
   WheelEvent as ReactWheelEvent,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
+import {
+  Background,
+  Controls,
+  MiniMap,
+  ReactFlow,
+  applyEdgeChanges,
+  applyNodeChanges,
+  type Connection,
+  type EdgeChange,
+  type NodeChange,
+} from "@xyflow/react";
 import { Link, useSearchParams } from "react-router-dom";
 import {
   createWorkflow,
@@ -39,7 +51,6 @@ import {
   DemoHint,
   EmptyStatePanel,
   FilterPills,
-  PrimaryCTA,
   LoadingInline,
   PageHeader,
   StatusPill,
@@ -50,6 +61,7 @@ import {
   buildDefaultWorkflow,
   buildReferenceHints,
   buildWorkflowFromTemplate,
+  duplicateWorkflowStepAsType,
   filterWorkflowTemplates,
   generateWorkflowFromGoal,
   getTemplateStatus,
@@ -71,11 +83,21 @@ import {
   removeBuilderEdge,
   reorderWorkflowSteps,
   rewireBuilderEdge,
+  toReactFlowProjection,
   zoomBuilderViewport,
   type BuilderCanvasEdge,
   type BuilderEdgeDraft,
+  type BuilderPaletteSection,
   type BuilderNodePositionMap,
 } from "./builder-evolution-helpers";
+import {
+  getBuilderSetupStages,
+  runBuilderNodeSetupTest,
+  validateTriggerSetup,
+  validateWorkflowStepSetup,
+  type BuilderSetupStageId,
+  type BuilderNodeTestResult,
+} from "./builder-node-setup-helpers";
 import { buildOnboardingSteps, getNextPendingStep } from "./onboarding-helpers";
 import { buildTemplateCategoryOptions } from "./product-pattern-helpers";
 import {
@@ -87,6 +109,65 @@ import {
   type WorkflowDefinition,
   type WorkflowStep,
 } from "../types/workflow";
+import { useBuilderUiStore } from "../state/builder-ui-store";
+
+type BuilderActivityEventKind =
+  | "create"
+  | "edit"
+  | "reorder"
+  | "test"
+  | "save"
+  | "delete";
+
+type BuilderActivityEvent = {
+  kind: BuilderActivityEventKind;
+  message: string;
+};
+
+type BuilderPaletteDisplaySection = BuilderPaletteSection & {
+  starterItems: BuilderPaletteSection["items"];
+  advancedItems: BuilderPaletteSection["items"];
+  visibleItems: BuilderPaletteSection["items"];
+};
+
+function toBuilderActivityTone(
+  kind: BuilderActivityEventKind,
+): "info" | "success" | "warning" | "danger" {
+  if (kind === "delete") {
+    return "warning";
+  }
+  if (kind === "test" || kind === "save") {
+    return "success";
+  }
+  return "info";
+}
+
+function toReadinessLabel(
+  tier: "ready" | "advanced" | "coming_soon" | "developer" | undefined,
+): string {
+  if (tier === "advanced") {
+    return "Advanced setup";
+  }
+  if (tier === "coming_soon") {
+    return "Coming soon";
+  }
+  if (tier === "developer") {
+    return "Developer";
+  }
+  return "Ready now";
+}
+
+function toSupportModelLabel(
+  supportModel: "native" | "generic" | "community" | undefined,
+): string {
+  if (supportModel === "generic") {
+    return "Power connector";
+  }
+  if (supportModel === "community") {
+    return "Community";
+  }
+  return "Native app";
+}
 
 export function WorkflowsPage() {
   const session = getAuthSession();
@@ -120,7 +201,6 @@ export function WorkflowsPage() {
     }),
   );
   const [editorMode, setEditorMode] = useState<"form" | "json">("form");
-  const [showAdvancedBuilder, setShowAdvancedBuilder] = useState(false);
   const [jsonDraft, setJsonDraft] = useState("{}");
   const [jsonError, setJsonError] = useState<string | null>(null);
   const [triggerConfigDraft, setTriggerConfigDraft] = useState("{}");
@@ -129,7 +209,6 @@ export function WorkflowsPage() {
   const [serverError, setServerError] = useState<string | null>(null);
   const [infoMessage, setInfoMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [selectedNodeId, setSelectedNodeId] = useState<string>("node:trigger");
   const [runRecords, setRunRecords] = useState<RunRecord[]>([]);
   const [selectedRunId, setSelectedRunId] = useState<string>("");
   const [selectedRunLogs, setSelectedRunLogs] = useState<EventLogRecord[]>([]);
@@ -145,10 +224,28 @@ export function WorkflowsPage() {
   const [canvasViewport, setCanvasViewport] = useState(() => createBuilderViewport());
   const [canvasEdges, setCanvasEdges] = useState<BuilderCanvasEdge[]>([]);
   const [edgeDraft, setEdgeDraft] = useState<BuilderEdgeDraft | null>(null);
-  const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
   const [quickInsertNodeId, setQuickInsertNodeId] = useState<string | null>(null);
   const [quickInsertQuery, setQuickInsertQuery] = useState("");
   const [quickInsertIndex, setQuickInsertIndex] = useState<number | null>(null);
+  const [paletteSearch, setPaletteSearch] = useState("");
+  const [inspectorStageByNode, setInspectorStageByNode] = useState<
+    Record<string, BuilderSetupStageId>
+  >({});
+  const [nodeSetupTestResults, setNodeSetupTestResults] = useState<
+    Record<string, BuilderNodeTestResult>
+  >({});
+  const [builderActivity, setBuilderActivity] = useState<BuilderActivityEvent | null>(null);
+  const selectedNodeId = useBuilderUiStore((state) => state.selectedNodeId);
+  const setSelectedNodeId = useBuilderUiStore((state) => state.setSelectedNodeId);
+  const selectedEdgeId = useBuilderUiStore((state) => state.selectedEdgeId);
+  const setSelectedEdgeId = useBuilderUiStore((state) => state.setSelectedEdgeId);
+  const showAdvancedBuilder = useBuilderUiStore((state) => state.showAdvancedBuilder);
+  const setShowAdvancedBuilder = useBuilderUiStore((state) => state.setShowAdvancedBuilder);
+  const showAdvancedPalette = useBuilderUiStore((state) => state.showAdvancedPalette);
+  const setShowAdvancedPalette = useBuilderUiStore((state) => state.setShowAdvancedPalette);
+  const showBuilderSupport = useBuilderUiStore((state) => state.showBuilderSupport);
+  const setShowBuilderSupport = useBuilderUiStore((state) => state.setShowBuilderSupport);
+  const resetBuilderUi = useBuilderUiStore((state) => state.resetBuilderUi);
   const canvasViewportRef = useRef<HTMLDivElement | null>(null);
   const canvasPanStateRef = useRef<{
     startX: number;
@@ -296,8 +393,10 @@ export function WorkflowsPage() {
   }
 
   useEffect(() => {
+    // STATE: Zustand local builder state should reset when entering the editor.
+    resetBuilderUi();
     void load();
-  }, []);
+  }, [resetBuilderUi]);
 
   useEffect(() => {
     if (!selectedTemplateId) {
@@ -416,6 +515,23 @@ export function WorkflowsPage() {
     setInfoMessage(null);
   }
 
+  function pushBuilderActivity(kind: BuilderActivityEventKind, message: string) {
+    setBuilderActivity({
+      kind,
+      message,
+    });
+  }
+
+  function updateSelectedNodeStage(nextStage: BuilderSetupStageId) {
+    if (!selectedCanvasNode) {
+      return;
+    }
+    setInspectorStageByNode((current) => ({
+      ...current,
+      [selectedCanvasNode.id]: nextStage,
+    }));
+  }
+
   function createStep(
     type: "action" | "branch" | "delay",
     preset?: {
@@ -461,6 +577,11 @@ export function WorkflowsPage() {
       steps: nextSteps,
     });
     setSelectedNodeId(`node:step:${step.id}`);
+    pushBuilderActivity("create", `Created ${step.type || "action"} node ${step.id}.`);
+    setInspectorStageByNode((current) => ({
+      ...current,
+      [`node:step:${step.id}`]: "required",
+    }));
   }
 
   function updateStepAtIndex(index: number, step: WorkflowStep) {
@@ -470,9 +591,20 @@ export function WorkflowsPage() {
       ...definition,
       steps: nextSteps,
     });
+    pushBuilderActivity("edit", `Updated ${step.id}.`);
   }
 
   function removeStepAtIndex(index: number) {
+    const step = definition.steps[index];
+    if (!step) {
+      return;
+    }
+    const confirmed = window.confirm(
+      `Remove ${step.id}? This action cannot be undone from the builder.`,
+    );
+    if (!confirmed) {
+      return;
+    }
     const nextSteps = definition.steps.filter((_, currentIndex) => currentIndex !== index);
     updateDefinition({
       ...definition,
@@ -480,6 +612,28 @@ export function WorkflowsPage() {
     });
     const nextSelected = nextSteps[index] || nextSteps[index - 1];
     setSelectedNodeId(nextSelected ? `node:step:${nextSelected.id}` : "node:trigger");
+    pushBuilderActivity("delete", `Removed ${step.id}.`);
+  }
+
+  function duplicateStepAtIndex(
+    index: number,
+    nextType: "action" | "branch" | "delay",
+  ) {
+    const source = definition.steps[index];
+    if (!source) {
+      return;
+    }
+    const duplicated = duplicateWorkflowStepAsType({
+      source,
+      nextType,
+      adapters,
+      existingStepIds: collectStepIds(definition.steps),
+    });
+    addStepAtIndex(duplicated, index + 1);
+    pushBuilderActivity(
+      "create",
+      `Created ${duplicated.id} as ${nextType} copy from ${source.id}.`,
+    );
   }
 
   function openQuickInsert(input: {
@@ -509,6 +663,27 @@ export function WorkflowsPage() {
     setQuickInsertQuery("");
   }
 
+  function onPaletteInsert(item: {
+    label: string;
+    stepType: "action" | "branch" | "delay";
+    adapterKey?: string;
+    actionKey?: string;
+  }) {
+    const nextStep = createStep(item.stepType, {
+      adapterKey: item.adapterKey,
+      actionKey: item.actionKey,
+    });
+    const targetIndex =
+      selectedCanvasNode?.dataRef.type === "step"
+        ? selectedCanvasNode.dataRef.stepIndex + 1
+        : undefined;
+    addStepAtIndex(nextStep, targetIndex);
+    pushBuilderActivity(
+      "create",
+      `Added ${item.label} ${targetIndex !== undefined ? "after selected step" : "to workflow"}.`,
+    );
+  }
+
   function onInsertNodeOnSelectedEdge() {
     if (!selectedEdge) {
       return;
@@ -517,7 +692,7 @@ export function WorkflowsPage() {
     const targetIndex =
       targetNode?.dataRef.type === "step" ? targetNode.dataRef.stepIndex : undefined;
     addStepAtIndex(createStep("action"), targetIndex);
-    setInfoMessage("Inserted a step on selected edge.");
+    pushBuilderActivity("create", "Inserted a new action node on selected edge.");
   }
 
   function onCanvasWheel(event: ReactWheelEvent<HTMLDivElement>) {
@@ -611,6 +786,7 @@ export function WorkflowsPage() {
       setCanvasEdges(rewired.edges);
       setInfoMessage("Connection updated.");
       setServerError(null);
+      pushBuilderActivity("edit", "Updated node connection.");
     } else if (rewired.reason) {
       setServerError(rewired.reason);
     }
@@ -657,6 +833,10 @@ export function WorkflowsPage() {
     () => getBuilderEdgeInteractionHints(mergedCanvasModel),
     [mergedCanvasModel],
   );
+  const reactFlowProjection = useMemo(
+    () => toReactFlowProjection({ model: mergedCanvasModel, positions: nodePositions }),
+    [mergedCanvasModel, nodePositions],
+  );
   const nodeRuntimeMap = useMemo(
     () =>
       buildBuilderNodeRuntimeMap({
@@ -676,9 +856,186 @@ export function WorkflowsPage() {
       : -1;
   const selectedStep =
     selectedStepIndex >= 0 ? definition.steps[selectedStepIndex] : null;
+  const setupStages = useMemo(() => getBuilderSetupStages(), []);
+  const selectedInspectorStage: BuilderSetupStageId =
+    (selectedCanvasNode && inspectorStageByNode[selectedCanvasNode.id]) || "overview";
+  const selectedNodeValidation = useMemo(() => {
+    if (!selectedCanvasNode) {
+      return null;
+    }
+    if (selectedCanvasNode.dataRef.type === "trigger") {
+      return validateTriggerSetup({
+        definition,
+        adapters,
+      });
+    }
+    if (selectedCanvasNode.dataRef.type === "step" && selectedStep) {
+      return validateWorkflowStepSetup({
+        step: selectedStep,
+        adapters,
+      });
+    }
+    return null;
+  }, [selectedCanvasNode, selectedStep, definition, adapters]);
+  const selectedNodeTestResult = selectedCanvasNode
+    ? nodeSetupTestResults[selectedCanvasNode.id]
+    : null;
+  const selectedNodeSetupProgress = useMemo(() => {
+    if (!selectedNodeValidation) {
+      return {
+        complete: 0,
+        total: 0,
+      };
+    }
+    const total = selectedNodeValidation.requiredFields.length;
+    const complete = selectedNodeValidation.requiredFields.filter((field) => field.complete).length;
+    return {
+      complete,
+      total,
+    };
+  }, [selectedNodeValidation]);
+  const selectedEdgePreview = useMemo(() => {
+    if (!selectedEdge) {
+      return null;
+    }
+    const fromNode = canvasModel.nodes.find((node) => node.id === selectedEdge.from);
+    const toNode = canvasModel.nodes.find((node) => node.id === selectedEdge.to);
+    if (!fromNode || !toNode) {
+      return null;
+    }
+    return {
+      fromLabel: fromNode.label,
+      toLabel: toNode.label,
+      role: selectedEdge.branchRole || "primary",
+    };
+  }, [selectedEdge, canvasModel]);
+  const reactFlowNodes = useMemo(
+    () =>
+      reactFlowProjection.nodes.map((node) => ({
+        ...node,
+        selected: node.id === selectedNodeId,
+        data: {
+          ...(node.data as Record<string, unknown>),
+          label: (
+            <div className="builder-rf-node-content">
+              <div className="builder-rf-node-head">
+                <strong>{String((node.data as Record<string, unknown>).label || node.id)}</strong>
+                <span className={`tag runtime ${(nodeRuntimeMap[node.id] || { status: "idle" }).status}`}>
+                  {(nodeRuntimeMap[node.id] || { status: "idle" }).status}
+                </span>
+              </div>
+              <p>{String((node.data as Record<string, unknown>).summary || "")}</p>
+              {(node.data as Record<string, unknown>).kind === "branch" ? (
+                <div className="builder-branch-paths">
+                  <span className="tag builder-branch-tag then">then</span>
+                  <span className="tag builder-branch-tag else">else</span>
+                </div>
+              ) : null}
+              {(nodeRuntimeMap[node.id] || { status: "idle" }).preview ? (
+                <p className="builder-runtime-preview">
+                  {(nodeRuntimeMap[node.id] || { status: "idle" }).preview}
+                </p>
+              ) : null}
+            </div>
+          ),
+          runtime: nodeRuntimeMap[node.id] || { status: "idle" as const },
+        },
+      })),
+    [reactFlowProjection.nodes, selectedNodeId, nodeRuntimeMap],
+  );
+  const reactFlowEdges = useMemo(
+    () =>
+      reactFlowProjection.edges.map((edge) => ({
+        ...edge,
+        selected: edge.id === selectedEdgeId,
+      })),
+    [reactFlowProjection.edges, selectedEdgeId],
+  );
+  const onReactFlowNodesChange = useCallback(
+    (changes: NodeChange[]) => {
+      const nextNodes = applyNodeChanges(changes, reactFlowNodes);
+      setNodePositions((current) => {
+        const next = { ...current };
+        for (const node of nextNodes) {
+          next[node.id] = {
+            x: node.position.x,
+            y: node.position.y,
+          };
+        }
+        return next;
+      });
+    },
+    [reactFlowNodes],
+  );
+  const onReactFlowEdgesChange = useCallback(
+    (changes: EdgeChange[]) => {
+      const nextEdges = applyEdgeChanges(changes, reactFlowEdges);
+      const nextEdgeIds = new Set(nextEdges.map((edge) => edge.id));
+      setCanvasEdges((current) => current.filter((edge) => nextEdgeIds.has(edge.id)));
+      if (selectedEdgeId && !nextEdgeIds.has(selectedEdgeId)) {
+        setSelectedEdgeId(null);
+      }
+    },
+    [reactFlowEdges, selectedEdgeId, setSelectedEdgeId],
+  );
+  const onReactFlowConnect = useCallback(
+    (connection: Connection) => {
+      if (!connection.source || !connection.target) {
+        return;
+      }
+      const rewired = rewireBuilderEdge({
+        model: canvasModel,
+        edges: canvasEdges,
+        draft: {
+          fromNodeId: connection.source,
+          fromHandle: connection.sourceHandle || "out",
+        },
+        toNodeId: connection.target,
+        toHandle: connection.targetHandle || "in",
+      });
+      if (rewired.changed) {
+        setCanvasEdges(rewired.edges);
+        setSelectedEdgeId(rewired.edges[rewired.edges.length - 1]?.id || null);
+        setInfoMessage("Connection updated.");
+        setServerError(null);
+        pushBuilderActivity("edit", "Updated node connection.");
+      } else if (rewired.reason) {
+        setServerError(rewired.reason);
+      }
+    },
+    [canvasModel, canvasEdges, setSelectedEdgeId],
+  );
+  const paletteDisplaySections = useMemo<BuilderPaletteDisplaySection[]>(() => {
+    const normalizedSearch = paletteSearch.trim().toLowerCase();
+    return builderPalette
+      .map((section) => {
+        const starterItems = section.items.filter((item) => !item.advanced);
+        const advancedItems = section.items.filter((item) => item.advanced);
+        const visibleAdvancedItems = showAdvancedPalette ? advancedItems : [];
+        const visibleItems = [...starterItems, ...visibleAdvancedItems].filter((item) => {
+          if (!normalizedSearch) {
+            return true;
+          }
+          const haystack =
+            `${item.label} ${item.description} ${item.adapterKey || ""} ${item.actionKey || ""}`.toLowerCase();
+          return haystack.includes(normalizedSearch);
+        });
+        return {
+          ...section,
+          starterItems,
+          advancedItems,
+          visibleItems,
+        };
+      })
+      .filter((section) => section.visibleItems.length > 0 || section.advancedItems.length > 0);
+  }, [builderPalette, paletteSearch, showAdvancedPalette]);
   const quickInsertItems = useMemo(() => {
     const normalizedQuery = quickInsertQuery.trim().toLowerCase();
-    const flattened = builderPalette.flatMap((section) => section.items);
+    const flattened = builderPalette.flatMap((section) => {
+      const starterItems = section.items.filter((item) => !item.advanced);
+      const advancedItems = showAdvancedPalette ? section.items.filter((item) => item.advanced) : [];
+      return [...starterItems, ...advancedItems];
+    });
     return flattened.filter((item) => {
       if (!normalizedQuery) {
         return true;
@@ -686,7 +1043,7 @@ export function WorkflowsPage() {
       const haystack = `${item.label} ${item.description} ${item.adapterKey || ""}`.toLowerCase();
       return haystack.includes(normalizedQuery);
     });
-  }, [builderPalette, quickInsertQuery]);
+  }, [builderPalette, quickInsertQuery, showAdvancedPalette]);
   const minimapGeometry = useMemo(() => {
     const mapWidth = 220;
     const mapHeight = 136;
@@ -722,6 +1079,11 @@ export function WorkflowsPage() {
       x: (clientX - rect.left - canvasViewport.panX) / canvasViewport.zoom,
       y: (clientY - rect.top - canvasViewport.panY) / canvasViewport.zoom,
     };
+  }
+
+  function snapCanvasPosition(value: number): number {
+    const grid = 12;
+    return Math.round(value / grid) * grid;
   }
 
   function getNodePosition(nodeId: string): { x: number; y: number } {
@@ -803,8 +1165,8 @@ export function WorkflowsPage() {
         setNodePositions((current) => ({
           ...current,
           [nodeId]: {
-            x: nextX,
-            y: nextY,
+            x: snapCanvasPosition(nextX),
+            y: snapCanvasPosition(nextY),
           },
         }));
       }
@@ -847,6 +1209,65 @@ export function WorkflowsPage() {
     const fallbackStepNode = canvasModel.nodes.find((node) => node.dataRef.type === "step");
     setSelectedNodeId(fallbackStepNode?.id || "node:trigger");
   }, [canvasModel, selectedNodeId]);
+
+  useEffect(() => {
+    if (!selectedCanvasNode) {
+      return;
+    }
+    setInspectorStageByNode((current) => {
+      if (current[selectedCanvasNode.id]) {
+        return current;
+      }
+      return {
+        ...current,
+        [selectedCanvasNode.id]: "overview",
+      };
+    });
+  }, [selectedCanvasNode]);
+
+  async function runSelectedNodeSetupTest() {
+    if (!selectedCanvasNode || !selectedNodeValidation) {
+      return;
+    }
+    const result = runBuilderNodeSetupTest({
+      nodeLabel: selectedCanvasNode.label,
+      validation: selectedNodeValidation,
+    });
+    setNodeSetupTestResults((current) => ({
+      ...current,
+      [selectedCanvasNode.id]: result,
+    }));
+    if (result.status === "passed") {
+      setServerError(null);
+      setInfoMessage(result.message);
+      pushBuilderActivity("test", result.message);
+      setInspectorStageByNode((current) => ({
+        ...current,
+        [selectedCanvasNode.id]: "save",
+      }));
+      return;
+    }
+    setServerError(result.message);
+  }
+
+  async function saveSelectedNodeSetup() {
+    if (!selectedCanvasNode || !selectedNodeValidation) {
+      return;
+    }
+    if (!selectedNodeValidation.valid) {
+      setValidationErrors(selectedNodeValidation.issues);
+      setServerError("Finish required setup fields before saving this node.");
+      return;
+    }
+    const valid = await validateCurrentDefinition();
+    if (!valid) {
+      return;
+    }
+    setServerError(null);
+    setInfoMessage(`${selectedCanvasNode.label} setup saved to workflow draft.`);
+    pushBuilderActivity("save", `${selectedCanvasNode.label} setup saved.`);
+    updateSelectedNodeStage("save");
+  }
 
   async function validateCurrentDefinition(candidate?: WorkflowDefinition): Promise<boolean> {
     const subject = candidate || definition;
@@ -987,6 +1408,14 @@ export function WorkflowsPage() {
         run a simulator test from <Link to="/runs">Runs</Link>.
       </DemoHint>
 
+      <details
+        open={showBuilderSupport}
+        onToggle={(event) =>
+          setShowBuilderSupport((event.currentTarget as HTMLDetailsElement).open)
+        }
+      >
+        <summary>Starter resources: templates, goal drafts, and workflow memory</summary>
+        <div className="stack" style={{ marginTop: 12 }}>
       <SurfaceCard
         title="Choose your starting path"
         subtitle="Start with templates for faster results, or switch to advanced mode when you need full control."
@@ -1016,7 +1445,7 @@ export function WorkflowsPage() {
             <div className="inline-actions">
               <button
                 type="button"
-                onClick={() => setShowAdvancedBuilder((current) => !current)}
+                onClick={() => setShowAdvancedBuilder(!showAdvancedBuilder)}
               >
                 {showAdvancedBuilder ? "Hide advanced controls" : "Enable advanced controls"}
               </button>
@@ -1277,6 +1706,8 @@ export function WorkflowsPage() {
           </details>
         </div>
       </SurfaceCard>
+        </div>
+      </details>
 
       <form onSubmit={onCreate} className="stack">
         <SurfaceCard
@@ -1300,7 +1731,7 @@ export function WorkflowsPage() {
             >
               Guided mode
             </button>
-            <button type="button" onClick={() => setShowAdvancedBuilder((current) => !current)}>
+            <button type="button" onClick={() => setShowAdvancedBuilder(!showAdvancedBuilder)}>
               {showAdvancedBuilder ? "Hide advanced options" : "Show advanced options"}
             </button>
           </div>
@@ -1338,16 +1769,115 @@ export function WorkflowsPage() {
         </SurfaceCard>
 
         {editorMode === "form" ? (
-                    <SurfaceCard
-            title="Visual builder canvas (phase 4)"
-            subtitle="Free-form nodes, zoom/pan, minimap, rewiring, and inline execution signals."
+          <SurfaceCard
+            title="Visual builder canvas"
+            subtitle="Canvas first: add nodes from the palette, wire flow in the center, then finish setup in the inspector."
           >
             <div className="builder-workspace-grid phase4">
+              <aside className="builder-palette-surface">
+                <div className="inline-actions" style={{ justifyContent: "space-between" }}>
+                  <h4>Node palette</h4>
+                  <button
+                    type="button"
+                    onClick={() => setShowAdvancedPalette(!showAdvancedPalette)}
+                  >
+                    {showAdvancedPalette ? "Hide advanced nodes" : "Show advanced nodes"}
+                  </button>
+                </div>
+                <p>
+                  Add a node after the selected step, or append it to the end when no step is
+                  selected.
+                </p>
+                <label>
+                  Search palette
+                  <input
+                    value={paletteSearch}
+                    onChange={(event) => setPaletteSearch(event.target.value)}
+                    placeholder="Search app, action, or node type"
+                    style={{ marginTop: 4, width: "100%" }}
+                  />
+                </label>
+                <div className="tag-row">
+                  <span className="tag">
+                    Insert target:{" "}
+                    {selectedCanvasNode?.dataRef.type === "step"
+                      ? `after ${selectedCanvasNode.label}`
+                      : "end of flow"}
+                  </span>
+                  <span className="tag">Starter first</span>
+                </div>
+                {paletteDisplaySections.length === 0 ? (
+                  <EmptyStatePanel
+                    title="No matching nodes"
+                    description="Try another search term or show advanced nodes."
+                    primaryAction={
+                      <button type="button" onClick={() => setPaletteSearch("")}>
+                        Clear search
+                      </button>
+                    }
+                  />
+                ) : null}
+                <div className="builder-palette-sections">
+                  {paletteDisplaySections.map((section) => (
+                    <article key={section.id} className="builder-palette-section">
+                      <div className="inline-actions" style={{ justifyContent: "space-between" }}>
+                        <strong>{section.title}</strong>
+                        <span className="tag">
+                          {section.visibleItems.length}
+                          {section.advancedItems.length > 0 && !showAdvancedPalette
+                            ? ` +${section.advancedItems.length} advanced`
+                            : ""}
+                        </span>
+                      </div>
+                      <p>{section.description}</p>
+                      {section.visibleItems.length === 0 ? (
+                        <div className="empty-state">
+                          <p>No visible nodes in this section.</p>
+                        </div>
+                      ) : (
+                        <div className="builder-palette-item-list">
+                          {section.visibleItems.map((item) => (
+                            <article key={item.id} className="builder-palette-item">
+                              <div className="inline-actions" style={{ justifyContent: "space-between" }}>
+                                <strong>{item.label}</strong>
+                                <span className={`tag readiness-${item.readinessTier || "ready"}`}>
+                                  {toReadinessLabel(item.readinessTier)}
+                                </span>
+                              </div>
+                              <p>{item.description}</p>
+                              <div className="tag-row">
+                                <span className="tag">{item.stepType}</span>
+                                <span className="tag">{toSupportModelLabel(item.supportModel)}</span>
+                              </div>
+                              {item.setupHint ? (
+                                <p className="builder-palette-hint">{item.setupHint}</p>
+                              ) : null}
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  onPaletteInsert({
+                                    label: item.label,
+                                    stepType: item.stepType,
+                                    adapterKey: item.adapterKey,
+                                    actionKey: item.actionKey,
+                                  })
+                                }
+                              >
+                                Add node
+                              </button>
+                            </article>
+                          ))}
+                        </div>
+                      )}
+                    </article>
+                  ))}
+                </div>
+              </aside>
+
               <section className="builder-canvas-surface">
                 <div className="inline-actions">
                   <span className="tag">Nodes: {mergedCanvasModel.nodes.length}</span>
                   <span className="tag">Edges: {canvasEdges.length}</span>
-                  <span className="tag">Zoom: {(canvasViewport.zoom * 100).toFixed(0)}%</span>
                   <label>
                     Inspect run
                     <select
@@ -1365,6 +1895,23 @@ export function WorkflowsPage() {
                   </label>
                 </div>
 
+                {builderActivity ? (
+                  <Callout
+                    tone={toBuilderActivityTone(builderActivity.kind)}
+                    title="Builder activity"
+                  >
+                    <p>{builderActivity.message}</p>
+                  </Callout>
+                ) : null}
+
+                {selectedEdgePreview ? (
+                  <div className="builder-insert-target">
+                    Insertion preview: {selectedEdgePreview.fromLabel} {"->"} {selectedEdgePreview.toLabel}
+                    {" "}
+                    ({selectedEdgePreview.role})
+                  </div>
+                ) : null}
+
                 {!structureValidation.valid ? (
                   <Callout tone="warning" title="Structure needs attention">
                     <ul>
@@ -1379,9 +1926,12 @@ export function WorkflowsPage() {
                   <div className="builder-free-canvas-toolbar inline-actions">
                     <button
                       type="button"
-                      onClick={() => setCanvasViewport(createBuilderViewport())}
+                      onClick={() => {
+                        setNodePositions(createBuilderNodePositionMap(canvasModel));
+                        setSelectedEdgeId(null);
+                      }}
                     >
-                      Reset view
+                      Reset layout
                     </button>
                     <button
                       type="button"
@@ -1397,8 +1947,15 @@ export function WorkflowsPage() {
                         if (!selectedEdgeId) {
                           return;
                         }
+                        const confirmed = window.confirm(
+                          "Remove selected connection edge?",
+                        );
+                        if (!confirmed) {
+                          return;
+                        }
                         setCanvasEdges((current) => removeBuilderEdge(current, selectedEdgeId));
                         setSelectedEdgeId(null);
+                        pushBuilderActivity("delete", "Removed selected edge.");
                       }}
                       disabled={!selectedEdgeId}
                     >
@@ -1412,212 +1969,40 @@ export function WorkflowsPage() {
                       + Insert on selected edge
                     </button>
                     {selectedRunLogsLoading ? <span className="tag">Loading run logs...</span> : null}
+                    <span className="tag">
+                      XYFlow ready: {reactFlowProjection.nodes.length} nodes /{" "}
+                      {reactFlowProjection.edges.length} edges
+                    </span>
                   </div>
 
                   <div
-                    ref={canvasViewportRef}
-                    className="builder-free-canvas-viewport"
-                    onWheel={onCanvasWheel}
-                    onMouseDown={onCanvasMouseDown}
+                    className="builder-reactflow-viewport"
+                    data-reactflow-node-count={reactFlowProjection.nodes.length}
+                    data-reactflow-edge-count={reactFlowProjection.edges.length}
                   >
-                    <div
-                      className="builder-free-canvas-stage"
-                      style={{
-                        width: canvasBounds.width,
-                        height: canvasBounds.height,
-                        transform: `translate(${canvasViewport.panX}px, ${canvasViewport.panY}px) scale(${canvasViewport.zoom})`,
-                        transformOrigin: "0 0",
+                    {/* BUILDER: React Flow / XYFlow canonical canvas runtime */}
+                    <ReactFlow
+                      nodes={reactFlowNodes}
+                      edges={reactFlowEdges}
+                      onNodesChange={onReactFlowNodesChange}
+                      onEdgesChange={onReactFlowEdgesChange}
+                      onConnect={onReactFlowConnect}
+                      onNodeClick={(_, node) => {
+                        setSelectedNodeId(node.id);
                       }}
+                      onEdgeClick={(_, edge) => {
+                        setSelectedEdgeId(edge.id);
+                      }}
+                      onPaneClick={() => {
+                        setSelectedEdgeId(null);
+                      }}
+                      fitView
+                      fitViewOptions={{ padding: 0.2 }}
                     >
-                      <svg
-                        className="builder-edge-map-svg free"
-                        viewBox={`${canvasBounds.minX} ${canvasBounds.minY} ${canvasBounds.width} ${canvasBounds.height}`}
-                        role="img"
-                        aria-label="Workflow flow graph"
-                      >
-                        <defs>
-                          <marker
-                            id="builder-edge-arrow"
-                            markerWidth="10"
-                            markerHeight="8"
-                            refX="8"
-                            refY="4"
-                            orient="auto-start-reverse"
-                          >
-                            <path d="M 0 0 L 10 4 L 0 8 z" fill="#7c90a8" />
-                          </marker>
-                        </defs>
-                        {renderableEdges.map((edge) => (
-                          <g key={edge.id}>
-                            <path
-                              d={edge.path}
-                              className={`builder-edge-path kind-${edge.kind} ${
-                                edge.id === selectedEdgeId ? "active" : ""
-                              } ${edge.id === "edge:draft" ? "draft" : ""}`}
-                              markerEnd={edge.id === "edge:draft" ? undefined : "url(#builder-edge-arrow)"}
-                              onClick={() => edge.id !== "edge:draft" && setSelectedEdgeId(edge.id)}
-                            />
-                            {edge.label ? (
-                              <text
-                                className={`builder-edge-label kind-${edge.kind}`}
-                                x={edge.labelPosition?.x}
-                                y={edge.labelPosition?.y}
-                              >
-                                {edge.label}
-                              </text>
-                            ) : null}
-                          </g>
-                        ))}
-                      </svg>
-
-                      {mergedCanvasModel.nodes.map((node) => {
-                        const position = getNodePosition(node.id);
-                        const runtime = nodeRuntimeMap[node.id] || { status: "idle" as const };
-                        const isSelected = selectedNodeId === node.id;
-                        const isStepNode = node.dataRef.type === "step";
-                        const stepIndex =
-                          node.dataRef.type === "step" ? node.dataRef.stepIndex : -1;
-                        return (
-                          <article
-                            key={node.id}
-                            className={`builder-node-card free kind-${node.kind} ${isSelected ? "selected" : ""}`}
-                            style={{
-                              left: position.x,
-                              top: position.y,
-                              width: node.presentation.width,
-                              minHeight: node.presentation.height,
-                            }}
-                            onMouseDown={(event) => onNodeDragStart(event, node.id)}
-                            onClick={() => setSelectedNodeId(node.id)}
-                          >
-                            <button
-                              type="button"
-                              className="builder-handle in"
-                              onMouseUp={(event) =>
-                                onCompleteEdgeDraft(event, {
-                                  nodeId: node.id,
-                                  handle: "in",
-                                })
-                              }
-                              title="Connect edge here"
-                            />
-
-                            <button
-                              type="button"
-                              className="builder-handle out"
-                              onMouseDown={(event) =>
-                                onStartEdgeDraft(event, {
-                                  nodeId: node.id,
-                                  handle: "out",
-                                })
-                              }
-                              title="Start connection"
-                            />
-
-                            {node.kind === "branch" ? (
-                              <>
-                                <button
-                                  type="button"
-                                  className="builder-handle out then"
-                                  onMouseDown={(event) =>
-                                    onStartEdgeDraft(event, {
-                                      nodeId: node.id,
-                                      handle: "then",
-                                    })
-                                  }
-                                  title="Connect then branch"
-                                />
-                                <button
-                                  type="button"
-                                  className="builder-handle out else"
-                                  onMouseDown={(event) =>
-                                    onStartEdgeDraft(event, {
-                                      nodeId: node.id,
-                                      handle: "else",
-                                    })
-                                  }
-                                  title="Connect else branch"
-                                />
-                              </>
-                            ) : null}
-
-                            <div className="builder-node-head">
-                              <strong>{node.label}</strong>
-                              <span className={`tag runtime ${runtime.status}`}>
-                                {runtime.status}
-                              </span>
-                            </div>
-                            <p>{node.summary}</p>
-                            {node.kind === "branch" ? (
-                              <div className="builder-branch-paths">
-                                <span className="tag builder-branch-tag then">then</span>
-                                <span className="tag builder-branch-tag else">else</span>
-                              </div>
-                            ) : null}
-                            {runtime.preview ? <p className="builder-runtime-preview">{runtime.preview}</p> : null}
-                            <div className="inline-actions">
-                              <button type="button" onClick={() => setSelectedNodeId(node.id)}>
-                                Inspect
-                              </button>
-                              {isStepNode ? (
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    openQuickInsert({
-                                      nodeId: node.id,
-                                      afterIndex: stepIndex,
-                                    })
-                                  }
-                                >
-                                  + Add after
-                                </button>
-                              ) : null}
-                              {isStepNode ? (
-                                <button type="button" onClick={() => removeStepAtIndex(stepIndex)}>
-                                  Remove
-                                </button>
-                              ) : null}
-                            </div>
-                          </article>
-                        );
-                      })}
-                    </div>
-
-                    <div className="builder-canvas-minimap">
-                      <svg
-                        viewBox={`0 0 ${minimapGeometry.mapWidth} ${minimapGeometry.mapHeight}`}
-                        role="img"
-                        aria-label="Canvas minimap"
-                      >
-                        <rect
-                          x={0}
-                          y={0}
-                          width={minimapGeometry.mapWidth}
-                          height={minimapGeometry.mapHeight}
-                          className="builder-minimap-bg"
-                        />
-                        {mergedCanvasModel.nodes.map((node) => {
-                          const pos = getNodePosition(node.id);
-                          return (
-                            <rect
-                              key={`mini-${node.id}`}
-                              x={(pos.x - canvasBounds.minX) * minimapGeometry.scale}
-                              y={(pos.y - canvasBounds.minY) * minimapGeometry.scale}
-                              width={Math.max(20, node.presentation.width * minimapGeometry.scale)}
-                              height={Math.max(12, node.presentation.height * minimapGeometry.scale)}
-                              className={`builder-minimap-node kind-${node.kind}`}
-                            />
-                          );
-                        })}
-                        <rect
-                          x={minimapGeometry.viewportX}
-                          y={minimapGeometry.viewportY}
-                          width={Math.max(18, minimapGeometry.viewportWidth)}
-                          height={Math.max(12, minimapGeometry.viewportHeight)}
-                          className="builder-minimap-viewport"
-                        />
-                      </svg>
-                    </div>
+                      <Background gap={20} size={1} />
+                      <MiniMap pannable zoomable />
+                      <Controls position="bottom-right" />
+                    </ReactFlow>
                   </div>
                 </div>
 
@@ -1625,7 +2010,14 @@ export function WorkflowsPage() {
                   <div className="builder-quick-insert-panel stack-sm">
                     <div className="inline-actions" style={{ justifyContent: "space-between" }}>
                       <strong>Quick insert step</strong>
-                      <button type="button" onClick={() => setQuickInsertNodeId(null)}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setQuickInsertNodeId(null);
+                          setQuickInsertIndex(null);
+                          setQuickInsertQuery("");
+                        }}
+                      >
                         Close
                       </button>
                     </div>
@@ -1657,7 +2049,7 @@ export function WorkflowsPage() {
                   <span className="tag">Primary flow</span>
                   <span className="tag builder-branch-tag then">Then path</span>
                   <span className="tag builder-branch-tag else">Else path</span>
-                  <span className="tag">Shift to pan using blank canvas drag</span>
+                  <span className="tag">Drag blank canvas to pan</span>
                 </div>
 
                 <details>
@@ -1676,11 +2068,159 @@ export function WorkflowsPage() {
 
               <aside className="builder-inspector-surface">
                 <div className="inline-actions" style={{ justifyContent: "space-between" }}>
-                  <h4>Node inspector</h4>
+                  <h4>Node setup inspector</h4>
                   <span className="tag">
                     {selectedCanvasNode ? `${selectedCanvasNode.kind} node` : "none selected"}
                   </span>
                 </div>
+
+                {selectedCanvasNode ? (
+                  <>
+                    <div className="builder-setup-stage-row">
+                      {setupStages.map((stage) => {
+                        const isActive = selectedInspectorStage === stage.id;
+                        const isCompleted =
+                          stage.id === "overview"
+                            ? true
+                            : stage.id === "required"
+                              ? Boolean(selectedNodeValidation?.valid)
+                              : stage.id === "test"
+                                ? selectedNodeTestResult?.status === "passed"
+                                : Boolean(selectedNodeValidation?.valid) &&
+                                  selectedNodeTestResult?.status === "passed";
+                        return (
+                          <button
+                            key={stage.id}
+                            type="button"
+                            className={`builder-stage-pill ${isActive ? "active" : ""}`}
+                            onClick={() => updateSelectedNodeStage(stage.id)}
+                          >
+                            <span>{stage.title}</span>
+                            {isCompleted ? <span className="tag">Done</span> : null}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <div className="tag-row">
+                      <span className="tag">
+                        Required fields: {selectedNodeSetupProgress.complete}/
+                        {selectedNodeSetupProgress.total}
+                      </span>
+                      {selectedNodeValidation?.valid ? (
+                        <span className="tag">Ready to test</span>
+                      ) : (
+                        <span className="tag">Required setup incomplete</span>
+                      )}
+                    </div>
+                    {selectedInspectorStage === "overview" ? (
+                      <Callout tone="info" title="Setup sequence">
+                        <p>
+                          Complete required fields first, run a setup test, then save this node.
+                          Advanced settings stay secondary until Save.
+                        </p>
+                      </Callout>
+                    ) : null}
+                    {selectedInspectorStage === "required" && selectedNodeValidation ? (
+                      <div className="stack-sm">
+                        <ul className="setup-checklist">
+                          {selectedNodeValidation.requiredFields.map((field, index) => (
+                            <li
+                              key={`${field.key}-${index}`}
+                              className={`setup-checklist-item ${field.complete ? "done" : "active"}`}
+                            >
+                              <span className="setup-checklist-index">{index + 1}</span>
+                              <div className="stack-sm">
+                                <strong>{field.label}</strong>
+                                <p>{field.helpText || "Required before testing this node."}</p>
+                              </div>
+                            </li>
+                          ))}
+                        </ul>
+                        {selectedNodeValidation.issues.length > 0 ? (
+                          <Callout tone="danger" title="Missing required fields">
+                            <ul>
+                              {selectedNodeValidation.issues.map((issue) => (
+                                <li key={issue}>{issue}</li>
+                              ))}
+                            </ul>
+                          </Callout>
+                        ) : null}
+                        {selectedNodeValidation.warnings.length > 0 ? (
+                          <Callout tone="warning" title="Readiness hints">
+                            <ul>
+                              {selectedNodeValidation.warnings.map((warning) => (
+                                <li key={warning}>{warning}</li>
+                              ))}
+                            </ul>
+                          </Callout>
+                        ) : null}
+                      </div>
+                    ) : null}
+                    {selectedInspectorStage === "test" ? (
+                      <div className="stack-sm">
+                        <Callout tone="info" title="Node setup test">
+                          <p>Run a dry setup test to verify required inputs before saving.</p>
+                        </Callout>
+                        <div className="inline-actions">
+                          <button
+                            type="button"
+                            className="button-primary"
+                            onClick={() => void runSelectedNodeSetupTest()}
+                            disabled={!selectedNodeValidation?.valid}
+                          >
+                            Run setup test
+                          </button>
+                          <button type="button" onClick={() => updateSelectedNodeStage("required")}>
+                            Back to required
+                          </button>
+                        </div>
+                        {selectedNodeTestResult ? (
+                          <Callout
+                            tone={selectedNodeTestResult.status === "passed" ? "success" : "danger"}
+                            title={selectedNodeTestResult.status === "passed" ? "Test passed" : "Test failed"}
+                          >
+                            <p>{selectedNodeTestResult.message}</p>
+                            {selectedNodeTestResult.warnings.length > 0 ? (
+                              <ul>
+                                {selectedNodeTestResult.warnings.map((warning) => (
+                                  <li key={warning}>{warning}</li>
+                                ))}
+                              </ul>
+                            ) : null}
+                          </Callout>
+                        ) : null}
+                      </div>
+                    ) : null}
+                    {selectedInspectorStage === "save" ? (
+                      <div className="stack-sm">
+                        <Callout tone="success" title="Ready to save">
+                          <p>
+                            Save this node setup to the workflow draft after required fields and
+                            test pass.
+                          </p>
+                        </Callout>
+                        <div className="inline-actions">
+                          <button
+                            type="button"
+                            className="button-primary"
+                            onClick={() => void saveSelectedNodeSetup()}
+                            disabled={!selectedNodeValidation?.valid}
+                          >
+                            Save node setup
+                          </button>
+                          <button type="button" onClick={() => updateSelectedNodeStage("test")}>
+                            Re-run test
+                          </button>
+                        </div>
+                      </div>
+                    ) : null}
+                  </>
+                ) : (
+                  <EmptyStatePanel
+                    title="Select a node"
+                    description="Pick a trigger or step in the canvas to configure it."
+                  />
+                )}
 
                 {selectedCanvasNode ? (
                   <Callout tone="info" title="Inline execution feedback">
@@ -1710,6 +2250,11 @@ export function WorkflowsPage() {
                               trigger: adapter?.supportedTriggers[0] || definition.trigger.trigger,
                             },
                           });
+                          pushBuilderActivity("edit", "Updated trigger app.");
+                          setInspectorStageByNode((current) => ({
+                            ...current,
+                            ["node:trigger"]: "required",
+                          }));
                         }}
                         style={{ marginTop: 4, width: "100%" }}
                       >
@@ -1733,6 +2278,11 @@ export function WorkflowsPage() {
                               trigger: event.target.value,
                             },
                           });
+                          pushBuilderActivity("edit", "Updated trigger event.");
+                          setInspectorStageByNode((current) => ({
+                            ...current,
+                            ["node:trigger"]: "required",
+                          }));
                         }}
                         style={{ marginTop: 4, width: "100%" }}
                       >
@@ -1746,53 +2296,62 @@ export function WorkflowsPage() {
                       </select>
                     </label>
 
-                    <details>
-                      <summary>Trigger and context JSON</summary>
-                      <div className="form-grid" style={{ marginTop: 8 }}>
-                        <label>
-                          Trigger config
-                          <textarea
-                            rows={4}
-                            value={triggerConfigDraft}
-                            onChange={(event) => setTriggerConfigDraft(event.target.value)}
-                            onBlur={() => {
-                              const parsed = parseJsonObject(triggerConfigDraft);
-                              if (!parsed) {
-                                setServerError("Trigger config must be valid JSON object.");
-                                return;
-                              }
-                              updateDefinition({
-                                ...definition,
-                                trigger: {
-                                  ...definition.trigger,
-                                  config: parsed,
-                                },
-                              });
-                            }}
-                          />
-                        </label>
+                    {showAdvancedBuilder || selectedInspectorStage === "save" ? (
+                      <details>
+                        <summary>Trigger and context JSON (advanced)</summary>
+                        <div className="form-grid" style={{ marginTop: 8 }}>
+                          <label>
+                            Trigger config
+                            <textarea
+                              rows={4}
+                              value={triggerConfigDraft}
+                              onChange={(event) => setTriggerConfigDraft(event.target.value)}
+                              onBlur={() => {
+                                const parsed = parseJsonObject(triggerConfigDraft);
+                                if (!parsed) {
+                                  setServerError("Trigger config must be valid JSON object.");
+                                  return;
+                                }
+                                updateDefinition({
+                                  ...definition,
+                                  trigger: {
+                                    ...definition.trigger,
+                                    config: parsed,
+                                  },
+                                });
+                                pushBuilderActivity("edit", "Updated trigger config.");
+                              }}
+                            />
+                          </label>
 
-                        <label>
-                          Workflow context
-                          <textarea
-                            rows={4}
-                            value={contextDraft}
-                            onChange={(event) => setContextDraft(event.target.value)}
-                            onBlur={() => {
-                              const parsed = parseJsonObject(contextDraft);
-                              if (!parsed) {
-                                setServerError("Context must be valid JSON object.");
-                                return;
-                              }
-                              updateDefinition({
-                                ...definition,
-                                context: parsed,
-                              });
-                            }}
-                          />
-                        </label>
-                      </div>
-                    </details>
+                          <label>
+                            Workflow context
+                            <textarea
+                              rows={4}
+                              value={contextDraft}
+                              onChange={(event) => setContextDraft(event.target.value)}
+                              onBlur={() => {
+                                const parsed = parseJsonObject(contextDraft);
+                                if (!parsed) {
+                                  setServerError("Context must be valid JSON object.");
+                                  return;
+                                }
+                                updateDefinition({
+                                  ...definition,
+                                  context: parsed,
+                                });
+                                pushBuilderActivity("edit", "Updated workflow context.");
+                              }}
+                            />
+                          </label>
+                        </div>
+                      </details>
+                    ) : (
+                      <p>
+                        Advanced trigger JSON is available in the Save stage or when advanced mode
+                        is enabled.
+                      </p>
+                    )}
                   </div>
                 ) : null}
 
@@ -1804,6 +2363,8 @@ export function WorkflowsPage() {
                     agentTools={agentTools}
                     referenceHints={referenceHints}
                     createStep={createStep}
+                    showAdvancedSections={showAdvancedBuilder || selectedInspectorStage === "save"}
+                    onDuplicateAs={(nextType) => duplicateStepAtIndex(selectedStepIndex, nextType)}
                     onMoveUp={
                       selectedStepIndex > 0
                         ? () => {
@@ -1817,6 +2378,7 @@ export function WorkflowsPage() {
                               steps: reordered,
                             });
                             setSelectedNodeId(`node:step:${selectedStep.id}`);
+                            pushBuilderActivity("reorder", `Moved ${selectedStep.id} up.`);
                           }
                         : undefined
                     }
@@ -1833,11 +2395,18 @@ export function WorkflowsPage() {
                               steps: reordered,
                             });
                             setSelectedNodeId(`node:step:${selectedStep.id}`);
+                            pushBuilderActivity("reorder", `Moved ${selectedStep.id} down.`);
                           }
                         : undefined
                     }
                     onDelete={() => removeStepAtIndex(selectedStepIndex)}
-                    onChange={(updatedStep) => updateStepAtIndex(selectedStepIndex, updatedStep)}
+                    onChange={(updatedStep) => {
+                      updateStepAtIndex(selectedStepIndex, updatedStep);
+                      setInspectorStageByNode((current) => ({
+                        ...current,
+                        [selectedCanvasNode.id]: "required",
+                      }));
+                    }}
                   />
                 ) : null}
 
@@ -1856,59 +2425,6 @@ export function WorkflowsPage() {
                   </div>
                 ) : null}
               </aside>
-            </div>
-
-            <div className="section-divider stack">
-              <h4>Step palette</h4>
-              <p>Add from core, app connectors, and power connectors.</p>
-              <div className="template-grid">
-                {builderPalette.map((section) => (
-                  <article key={section.id} className="template-card">
-                    <div className="template-title">{section.title}</div>
-                    <p>{section.description}</p>
-                    <div className="stack-sm">
-                      {section.items.length === 0 ? (
-                        <span className="tag">No connectors available in this workspace.</span>
-                      ) : (
-                        section.items.map((item) => (
-                          <div key={item.id} className="inline-actions">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                const nextStep = createStep(item.stepType, {
-                                  adapterKey: item.adapterKey,
-                                  actionKey: item.actionKey,
-                                });
-                                addStepAtIndex(nextStep);
-                              }}
-                            >
-                              Add {item.label}
-                            </button>
-                            <span className="tag">
-                              {item.advanced ? "Advanced" : "Starter"}
-                            </span>
-                          </div>
-                        ))
-                      )}
-                    </div>
-                  </article>
-                ))}
-              </div>
-
-              <div className="inline-actions">
-                <button type="button" onClick={() => addStepAtIndex(createStep("action"))}>
-                  Add action step
-                </button>
-                <button type="button" onClick={() => addStepAtIndex(createStep("branch"))}>
-                  Add branch step
-                </button>
-                <button type="button" onClick={() => addStepAtIndex(createStep("delay"))}>
-                  Add delay step
-                </button>
-              </div>
-              <PrimaryCTA onClick={() => addStepAtIndex(createStep("action"))}>
-                Add next step
-              </PrimaryCTA>
             </div>
           </SurfaceCard>
         ) : (
@@ -1981,6 +2497,11 @@ export function WorkflowsPage() {
     </div>
   );
 }
+
+
+
+
+
 
 
 

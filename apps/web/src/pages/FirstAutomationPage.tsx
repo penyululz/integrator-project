@@ -1,7 +1,8 @@
-﻿import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   createWorkflow,
+  getApiRuntimeMode,
   getAuthSession,
   getWorkflowTemplate,
   listApps,
@@ -10,19 +11,23 @@ import {
   listWorkflowTemplates,
   listWorkflows,
   triggerWorkflowTestRun,
+  upsertAppConnection,
   type AppConnectionRecord,
   type EventLogRecord,
   type RunRecord,
   type WorkflowRecord,
   type WorkflowTemplateSummary,
 } from "../api";
+import { PLATFORM_MODES } from "../platform-mode";
 import { RunStatusBadge } from "../components/RunStatusBadge";
 import {
   Callout,
+  ChecklistSteps,
   DemoHint,
+  EmptyStatePanel,
   LoadingInline,
   PageHeader,
-  ProgressSteps,
+  PrimaryActionPanel,
   StatusPill,
   SurfaceCard,
 } from "../components/ui-kit";
@@ -33,6 +38,7 @@ import {
   buildWebhookUrl,
   findFirstAutomationWorkflow,
   findLatestRunForWorkflow,
+  getFirstAutomationPrimaryAction,
   getFirstAutomationStepStatus,
 } from "./first-automation-helpers";
 import { buildWorkflowFromTemplate } from "./workflow-builder-helpers";
@@ -42,6 +48,8 @@ const API_BASE_URL =
 
 export function FirstAutomationPage() {
   const session = getAuthSession();
+  const runtimeMode = getApiRuntimeMode();
+  const isPrototypeMode = runtimeMode === PLATFORM_MODES.PROTOTYPE;
   const isOperator =
     session?.scope.orgRole === "owner" ||
     session?.scope.orgRole === "admin" ||
@@ -51,9 +59,9 @@ export function FirstAutomationPage() {
   const [loading, setLoading] = useState(false);
   const [creating, setCreating] = useState(false);
   const [testing, setTesting] = useState(false);
+  const [prototypeRunning, setPrototypeRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
-  const [showManualTestTools, setShowManualTestTools] = useState(false);
 
   const [apps, setApps] = useState<AppConnectionRecord[]>([]);
   const [templates, setTemplates] = useState<WorkflowTemplateSummary[]>([]);
@@ -63,6 +71,7 @@ export function FirstAutomationPage() {
   const [lastTestPayload, setLastTestPayload] = useState<Record<string, unknown>>(
     buildFirstAutomationPayload(),
   );
+  const [lastRefreshedAt, setLastRefreshedAt] = useState<string | null>(null);
 
   const selectedTemplate = useMemo(
     () =>
@@ -97,8 +106,12 @@ export function FirstAutomationPage() {
     [slackConnection, selectedTemplate, selectedWorkflow, latestRun],
   );
 
-  const webhookUrl = useMemo(() => buildWebhookUrl(API_BASE_URL), []);
+  const primaryAction = useMemo(
+    () => getFirstAutomationPrimaryAction(stepStatus),
+    [stepStatus],
+  );
 
+  const webhookUrl = useMemo(() => buildWebhookUrl(API_BASE_URL), []);
   const webhookCurl = useMemo(
     () =>
       buildWebhookCurlCommand({
@@ -130,6 +143,7 @@ export function FirstAutomationPage() {
       setTemplates(nextTemplates);
       setWorkflows(nextWorkflows);
       setRuns(nextRuns);
+      setLastRefreshedAt(new Date().toISOString());
     } catch (loadError) {
       setError((loadError as Error).message || "Failed to load first automation data.");
     } finally {
@@ -157,26 +171,61 @@ export function FirstAutomationPage() {
     })();
   }, [latestRun?.id]);
 
+  async function createStarterWorkflow(options?: {
+    silent?: boolean;
+  }): Promise<WorkflowRecord> {
+    const template = await getWorkflowTemplate(FIRST_AUTOMATION_TEMPLATE_ID);
+    const definition = buildWorkflowFromTemplate(template, {
+      workspaceId: session?.scope.workspaceId || "",
+      organizationId: session?.scope.organizationId || "",
+    });
+
+    const created = await createWorkflow({
+      name: `${template.title} (${new Date().toISOString().slice(0, 10)})`,
+      definition,
+    });
+
+    if (!options?.silent) {
+      setMessage(
+        `Automation created: ${created.name}. Next: send one test run to confirm end-to-end behavior.`,
+      );
+    }
+    return created;
+  }
+
+  async function queueTestRunForWorkflow(
+    workflowId: string,
+    options?: {
+      silent?: boolean;
+    },
+  ): Promise<void> {
+    const payload = buildFirstAutomationPayload();
+    setLastTestPayload(payload);
+    const response = await triggerWorkflowTestRun({
+      workflowId,
+      payload,
+    });
+
+    if (!options?.silent) {
+      setMessage(
+        `Test run queued for ${response.workflowKey}. Open Runs to watch status and logs.`,
+      );
+    }
+
+    await load();
+    await new Promise((resolve) => {
+      setTimeout(resolve, 700);
+    });
+    await load();
+  }
+
   async function onCreateFromTemplate() {
     setCreating(true);
     setError(null);
     setMessage(null);
 
     try {
-      const template = await getWorkflowTemplate(FIRST_AUTOMATION_TEMPLATE_ID);
-      const definition = buildWorkflowFromTemplate(template, {
-        workspaceId: session?.scope.workspaceId || "",
-        organizationId: session?.scope.organizationId || "",
-      });
-
-      const created = await createWorkflow({
-        name: `${template.title} (${new Date().toISOString().slice(0, 10)})`,
-        definition,
-      });
-
-      setMessage(
-        `Automation created: ${created.name}. Next step: send a test run to confirm end-to-end success.`,
-      );
+      await createStarterWorkflow();
       await load();
     } catch (createError) {
       setError((createError as Error).message || "Failed to create automation from template.");
@@ -195,22 +244,7 @@ export function FirstAutomationPage() {
     setMessage(null);
 
     try {
-      const payload = buildFirstAutomationPayload();
-      setLastTestPayload(payload);
-      const response = await triggerWorkflowTestRun({
-        workflowId: selectedWorkflow.id,
-        payload,
-      });
-
-      setMessage(
-        `Test run queued for ${response.workflowKey}. Open Runs to watch status and logs.`,
-      );
-
-      await load();
-      await new Promise((resolve) => {
-        setTimeout(resolve, 700);
-      });
-      await load();
+      await queueTestRunForWorkflow(selectedWorkflow.id);
     } catch (testError) {
       setError((testError as Error).message || "Failed to queue test run.");
     } finally {
@@ -218,40 +252,292 @@ export function FirstAutomationPage() {
     }
   }
 
+  async function onPrototypeConnectSlack() {
+    try {
+      setError(null);
+      setMessage(null);
+      await upsertAppConnection({
+        appKey: "slack",
+        integrationName: "Prototype Slack connection",
+        credential: {
+          authType: "oauth2",
+          accessToken: "prototype-slack-token",
+          metadata: {
+            source: "prototype-first-success",
+          },
+        },
+      });
+      await load();
+      setMessage("Slack is now connected in Prototype Mode.");
+    } catch (connectError) {
+      setError((connectError as Error).message || "Failed to connect Slack in Prototype Mode.");
+    }
+  }
+
+  async function onRunPrototypeDemoPath() {
+    // PROTOTYPE DEMO PATH
+    // FIRST-SUCCESS DEMO
+    // NO REAL EXTERNAL SETUP REQUIRED
+    setPrototypeRunning(true);
+    setError(null);
+    setMessage(null);
+
+    try {
+      if (!stepStatus.connectedSlack) {
+        await upsertAppConnection({
+          appKey: "slack",
+          integrationName: "Prototype Slack connection",
+          credential: {
+            authType: "oauth2",
+            accessToken: "prototype-slack-token",
+            metadata: {
+              source: "prototype-first-success",
+            },
+          },
+        });
+      }
+
+      const workflow =
+        selectedWorkflow || (await createStarterWorkflow({ silent: true }));
+      await queueTestRunForWorkflow(workflow.id, { silent: true });
+
+      setMessage(
+        "FIRST-SUCCESS DEMO complete. Open Runs for timeline, then review related Alerts, Audit, and Approvals.",
+      );
+    } catch (demoError) {
+      setError((demoError as Error).message || "Prototype demo run failed.");
+    } finally {
+      setPrototypeRunning(false);
+    }
+  }
+
+  const checklist = [
+    {
+      id: "connect",
+      title: "Connect Slack",
+      description: isPrototypeMode
+        ? "Prototype Mode can connect Slack instantly with seeded demo credentials."
+        : "Authorize Slack so this starter automation can send one message.",
+      done: stepStatus.connectedSlack,
+      active: primaryAction.stage === "connect",
+      actions: (
+        <>
+          {isPrototypeMode ? (
+            <button
+              type="button"
+              className="button-primary"
+              onClick={() => void onPrototypeConnectSlack()}
+              disabled={prototypeRunning || stepStatus.connectedSlack}
+            >
+              {stepStatus.connectedSlack ? "Slack connected" : "Use prototype connection"}
+            </button>
+          ) : null}
+          <Link to={connectSlackPath}>Connect Slack</Link>
+          <Link to="/integrations">Open Apps</Link>
+        </>
+      ),
+    },
+    {
+      id: "build",
+      title: "Create starter automation",
+      description: "Create workflow from template with webhook trigger and Slack action.",
+      done: stepStatus.hasWorkflow,
+      active: primaryAction.stage === "build",
+      actions: (
+        <>
+          <button
+            type="button"
+            className="button-primary"
+            onClick={() => void onCreateFromTemplate()}
+            disabled={creating || !stepStatus.connectedSlack || !stepStatus.hasTemplate}
+          >
+            {creating ? "Creating..." : "Create automation"}
+          </button>
+          <Link to={`/workflows?templateId=${encodeURIComponent(FIRST_AUTOMATION_TEMPLATE_ID)}`}>
+            Open template editor
+          </Link>
+        </>
+      ),
+    },
+    {
+      id: "test",
+      title: "Send test run",
+      description: "Trigger one sample payload from this page and confirm run execution.",
+      done: stepStatus.hasRun,
+      active: primaryAction.stage === "test",
+      actions: (
+        <>
+          <button
+            type="button"
+            className="button-primary"
+            onClick={() => void onSendTestRun()}
+            disabled={testing || !selectedWorkflow}
+          >
+            {testing ? "Sending..." : "Send test run"}
+          </button>
+          {isPrototypeMode ? (
+            <button
+              type="button"
+              className="button-secondary"
+              onClick={() => void onRunPrototypeDemoPath()}
+              disabled={prototypeRunning}
+            >
+              {prototypeRunning ? "Running demo..." : "Run full prototype demo"}
+            </button>
+          ) : null}
+          <Link to="/runs">Open runs</Link>
+        </>
+      ),
+    },
+    {
+      id: "observe",
+      title: "Observe run result",
+      description: "Inspect timeline and logs, then iterate your automation confidently.",
+      done: stepStatus.hasRun,
+      active: primaryAction.stage === "observe",
+      actions: (
+        <>
+          <Link to={latestRun ? `/runs?runId=${encodeURIComponent(latestRun.id)}` : "/runs"}>
+            Inspect run
+          </Link>
+          {isPrototypeMode ? <Link to="/approvals">Approvals</Link> : null}
+          {isOperator ? <Link to="/audit-logs">Audit</Link> : null}
+          {isOperator ? <Link to="/alerts">Alerts</Link> : null}
+        </>
+      ),
+    },
+  ];
+
   return (
     <div className="stack">
       <PageHeader
-        eyebrow="First-Time Success"
-        title="Build Your First Automation"
-        subtitle="Connect Slack, create a starter automation, send a test run, and confirm results in minutes."
-        actions={
+        eyebrow="First Automation"
+        title="Guided First Success"
+        subtitle={
+          isPrototypeMode
+            ? "Prototype-first journey: connect seeded app, create starter automation, run simulation, inspect outcomes."
+            : "Connect app -> build automation -> send test -> observe result."
+        }
+      />
+
+      {isPrototypeMode ? (
+        <Callout
+          tone="info"
+          title="PROTOTYPE DEMO PATH"
+          actions={
+            <>
+              <Link to="/runs">Open Runs</Link>
+              <Link to="/approvals">Open Approvals</Link>
+            </>
+          }
+        >
+          <p>FIRST-SUCCESS DEMO: NO REAL EXTERNAL SETUP REQUIRED.</p>
+          <p>SWITCH TO LIVE MODE FOR REAL INTEGRATIONS.</p>
+        </Callout>
+      ) : null}
+
+      <PrimaryActionPanel
+        title={
+          isPrototypeMode && !stepStatus.hasRun
+            ? "Run first-success demo now"
+            : primaryAction.label
+        }
+        description={
+          isPrototypeMode && !stepStatus.hasRun
+            ? "One click will connect Slack (simulated), create the starter automation if needed, and queue a demo run."
+            : primaryAction.description
+        }
+        meta={
           <>
+            <StatusPill tone={isPrototypeMode ? "info" : "warning"}>
+              {runtimeMode}
+            </StatusPill>
             <StatusPill tone={stepStatus.connectedSlack ? "success" : "info"}>
               Slack {stepStatus.connectedSlack ? "connected" : "not connected"}
             </StatusPill>
             <StatusPill tone={stepStatus.hasWorkflow ? "success" : "info"}>
-              {stepStatus.hasWorkflow ? "automation ready" : "automation not created"}
+              {stepStatus.hasWorkflow ? "automation created" : "automation pending"}
             </StatusPill>
             <StatusPill tone={stepStatus.hasRun ? "success" : "warning"}>
-              {stepStatus.hasRun ? "test run found" : "test run pending"}
+              {stepStatus.hasRun ? "run observed" : "run pending"}
             </StatusPill>
+            <span className="tag">
+              Refreshed {lastRefreshedAt ? new Date(lastRefreshedAt).toLocaleTimeString() : "not yet"}
+            </span>
           </>
+        }
+        primaryAction={
+          isPrototypeMode && !stepStatus.hasRun ? (
+            <button
+              type="button"
+              className="button-primary"
+              onClick={() => void onRunPrototypeDemoPath()}
+              disabled={prototypeRunning}
+            >
+              {prototypeRunning ? "Running demo..." : "Run first-success demo"}
+            </button>
+          ) : primaryAction.stage === "connect" ? (
+            <Link className="button-link-primary" to={connectSlackPath}>
+              Connect Slack
+            </Link>
+          ) : primaryAction.stage === "build" ? (
+            <button
+              type="button"
+              className="button-primary"
+              onClick={() => void onCreateFromTemplate()}
+              disabled={creating || !stepStatus.connectedSlack || !stepStatus.hasTemplate}
+            >
+              {creating ? "Creating..." : "Create automation"}
+            </button>
+          ) : primaryAction.stage === "test" ? (
+            <button
+              type="button"
+              className="button-primary"
+              onClick={() => void onSendTestRun()}
+              disabled={testing || !selectedWorkflow}
+            >
+              {testing ? "Sending..." : "Send test run"}
+            </button>
+          ) : (
+            <Link
+              className="button-link-primary"
+              to={latestRun ? `/runs?runId=${encodeURIComponent(latestRun.id)}` : "/runs"}
+            >
+              Inspect run result
+            </Link>
+          )
+        }
+        secondaryActions={
+          <button type="button" onClick={() => void load()} disabled={loading}>
+            {loading ? "Refreshing..." : "Refresh status"}
+          </button>
         }
       />
 
       <DemoHint>
-        Beginner flow: Connect Slack → Create starter automation → Send test run → Check results.
+        {isPrototypeMode
+          ? "PROTOTYPE DEMO PATH: run one guided simulation, then inspect Runs, Alerts, Audit, and Approvals."
+          : "One-click test is the default. Manual webhook tools are available below if you need deeper debugging."}
       </DemoHint>
 
       {loading ? <LoadingInline label="Loading first automation status..." /> : null}
 
       {message ? (
-        <Callout tone="success" title="Great progress">
+        <Callout
+          tone="success"
+          title="Progress updated"
+          actions={
+            isPrototypeMode ? (
+              <>
+                <Link to="/runs">Runs</Link>
+                <Link to="/alerts">Alerts</Link>
+                <Link to="/audit-logs">Audit</Link>
+                <Link to="/approvals">Approvals</Link>
+              </>
+            ) : undefined
+          }
+        >
           <p>{message}</p>
-          <div className="inline-actions">
-            <Link to="/runs">Inspect run logs</Link>
-            <Link to="/workflows">Edit automation</Link>
-          </div>
         </Callout>
       ) : null}
 
@@ -261,182 +547,85 @@ export function FirstAutomationPage() {
         </Callout>
       ) : null}
 
-      <SurfaceCard title="Guided Steps" subtitle="Complete these in order for your first end-to-end success.">
-        <ProgressSteps
-          steps={[
-            {
-              id: "connect",
-              done: stepStatus.connectedSlack,
-              title: "Connect Slack",
-              description:
-                "Set up Slack once so automations can send messages to your chosen channel.",
-              actions: (
-                <>
-                  <Link to={connectSlackPath}>Connect Slack</Link>
-                  <Link to="/integrations">Open apps</Link>
-                </>
-              ),
-            },
-            {
-              id: "template",
-              done: stepStatus.hasWorkflow,
-              title: "Create from template",
-              description:
-                "Use the starter template so you don’t need to configure every workflow detail manually.",
-              actions: (
-                <>
-                  <button
-                    type="button"
-                    className="button-primary"
-                    onClick={() => void onCreateFromTemplate()}
-                    disabled={creating || !stepStatus.connectedSlack || !stepStatus.hasTemplate}
-                  >
-                    {creating ? "Creating..." : "Create automation"}
-                  </button>
-                  <Link to={`/workflows?templateId=${encodeURIComponent(FIRST_AUTOMATION_TEMPLATE_ID)}`}>
-                    Open template editor
-                  </Link>
-                </>
-              ),
-            },
-            {
-              id: "test",
-              done: stepStatus.hasRun,
-              title: "Send a test run",
-              description:
-                "Queue a test payload directly from the UI and verify the automation end-to-end.",
-              actions: (
-                <>
-                  <button
-                    type="button"
-                    className="button-primary"
-                    onClick={() => void onSendTestRun()}
-                    disabled={testing || !selectedWorkflow}
-                  >
-                    {testing ? "Sending test..." : "Send test run"}
-                  </button>
-                  <Link to="/runs">Open runs</Link>
-                </>
-              ),
-            },
-            {
-              id: "verify",
-              done: stepStatus.hasRun,
-              title: "Review result and next steps",
-              description:
-                "Check run logs, adjust message mapping, and expand your automation from this baseline.",
-              actions: (
-                <>
-                  <Link to="/runs">Run details</Link>
-                  <Link to="/dashboard">Dashboard</Link>
-                  {isOperator ? <Link to="/audit-logs">Audit</Link> : null}
-                  {isOperator ? <Link to="/alerts">Alerts</Link> : null}
-                </>
-              ),
-            },
-          ]}
-        />
+      <SurfaceCard title="Step-by-step flow" subtitle="Use this path for a fast first success.">
+        <ChecklistSteps steps={checklist} />
       </SurfaceCard>
 
-      <div className="template-grid">
-        <SurfaceCard
-          title="Test options"
-          subtitle="Use one-click test first. Manual tools are available if needed."
-        >
+      <SurfaceCard title="Latest run result" subtitle="Observe exactly what happened after your test.">
+        {!latestRun ? (
+          <EmptyStatePanel
+            title="No run found yet"
+            description={
+              isPrototypeMode
+                ? "Run the prototype first-success journey to populate run status and linked diagnostics instantly."
+                : "Send one test run to populate run status and event diagnostics."
+            }
+            primaryAction={
+              isPrototypeMode ? (
+                <button
+                  type="button"
+                  className="button-primary"
+                  onClick={() => void onRunPrototypeDemoPath()}
+                  disabled={prototypeRunning}
+                >
+                  {prototypeRunning ? "Running demo..." : "Run first-success demo"}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="button-primary"
+                  onClick={() => void onSendTestRun()}
+                  disabled={testing || !selectedWorkflow}
+                >
+                  {testing ? "Sending..." : "Send test run"}
+                </button>
+              )
+            }
+          />
+        ) : (
           <div className="stack-sm">
-            <p>
-              <strong>Webhook URL:</strong> <code>{webhookUrl}</code>
-            </p>
             <div className="inline-actions">
-              <button
-                type="button"
-                onClick={() => setShowManualTestTools((current) => !current)}
-              >
-                {showManualTestTools ? "Hide manual tools" : "Show manual payload/cURL"}
-              </button>
+              <strong>Run:</strong> <code>{latestRun.id}</code>
             </div>
-
-            {showManualTestTools ? (
-              <>
-                <p>
-                  <strong>Sample payload</strong>
-                </p>
-                <pre
-                  style={{
-                    background: "#f8fbff",
-                    border: "1px solid #d2def1",
-                    borderRadius: 10,
-                    padding: 10,
-                    overflowX: "auto",
-                    margin: 0,
-                  }}
-                >
-{JSON.stringify(lastTestPayload, null, 2)}
-                </pre>
-                <p>
-                  <strong>Sample cURL</strong>
-                </p>
-                <pre
-                  style={{
-                    background: "#f8fbff",
-                    border: "1px solid #d2def1",
-                    borderRadius: 10,
-                    padding: 10,
-                    overflowX: "auto",
-                    margin: 0,
-                  }}
-                >
-{webhookCurl}
-                </pre>
-              </>
-            ) : (
-              <p>Manual test helpers are available when you need custom payloads.</p>
-            )}
+            <div className="inline-actions">
+              <strong>Status:</strong> <RunStatusBadge status={latestRun.status} />
+            </div>
+            <div><strong>Created:</strong> {latestRun.created_at}</div>
+            <div className="inline-actions">
+              <Link to={`/runs?runId=${encodeURIComponent(latestRun.id)}`}>Open run detail</Link>
+              <Link to="/workflows">Edit automation</Link>
+              {isPrototypeMode ? <Link to="/approvals">Related approvals</Link> : null}
+              {isPrototypeMode ? <Link to="/audit-logs">Related audit</Link> : null}
+              {isPrototypeMode ? <Link to="/alerts">Related alerts</Link> : null}
+            </div>
+            {latestRunLogs.length > 0 ? (
+              <div className="section-divider">
+                <strong>Recent events</strong>
+                <ul>
+                  {latestRunLogs.map((event) => (
+                    <li key={event.id}>
+                      {event.created_at} | {event.event_type}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
           </div>
-        </SurfaceCard>
+        )}
+      </SurfaceCard>
 
-        <SurfaceCard
-          title="Latest run result"
-          subtitle="Use this to confirm your first automation worked."
-          highlight
-        >
-          {!latestRun ? (
-            <div className="empty-state">
-              <p>No run found yet. Send a test run after creating your automation.</p>
-            </div>
-          ) : (
-            <div className="stack-sm">
-              <div>
-                <strong>Run ID:</strong> <code>{latestRun.id}</code>
-              </div>
-              <div>
-                <strong>Status:</strong> <RunStatusBadge status={latestRun.status} />
-              </div>
-              <div>
-                <strong>Created:</strong> {latestRun.created_at}
-              </div>
-
-              <div className="inline-actions">
-                <Link to={`/runs?runId=${encodeURIComponent(latestRun.id)}`}>Inspect run</Link>
-                <Link to="/workflows">Edit automation</Link>
-              </div>
-
-              {latestRunLogs.length > 0 ? (
-                <div className="section-divider">
-                  <strong>Recent run events</strong>
-                  <ul>
-                    {latestRunLogs.map((event) => (
-                      <li key={event.id}>
-                        {event.created_at} - {event.event_type}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              ) : null}
-            </div>
-          )}
-        </SurfaceCard>
-      </div>
+      <details>
+        <summary>Manual webhook test tools</summary>
+        <div className="stack-sm" style={{ marginTop: 8 }}>
+          <p>
+            <strong>Webhook URL:</strong> <code>{webhookUrl}</code>
+          </p>
+          <p><strong>Sample payload</strong></p>
+          <pre className="json-preview">{JSON.stringify(lastTestPayload, null, 2)}</pre>
+          <p><strong>Sample cURL</strong></p>
+          <pre className="json-preview">{webhookCurl}</pre>
+        </div>
+      </details>
 
       {selectedTemplate ? (
         <SurfaceCard title="Starter template" subtitle={selectedTemplate.description} muted>
@@ -456,4 +645,3 @@ export function FirstAutomationPage() {
     </div>
   );
 }
-

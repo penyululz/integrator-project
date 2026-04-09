@@ -1,8 +1,9 @@
 import "dotenv/config";
+import { resolvePlatformModeFromEnv } from "@integration/shared";
 import { closePostgresPool, getPostgresPool } from "../db/postgres";
 import { closeRedisClient, getRedisClient } from "../db/redis";
 
-type EnvImportance = "required" | "optional" | "dev_only";
+type EnvImportance = "required" | "optional" | "prototype_optional";
 
 type EnvSpec = {
   name: string;
@@ -13,13 +14,20 @@ type EnvSpec = {
 
 export type SetupVerificationSummary = {
   appEnv: string;
+  integratorMode: string;
+  modeSource: string;
   missingRequired: string[];
   missingOptional: string[];
-  missingDevOnly: string[];
+  missingPrototypeOptional: string[];
   warnings: string[];
 };
 
 const ENV_SPECS: EnvSpec[] = [
+  {
+    name: "INTEGRATOR_MODE",
+    importance: "required",
+    description: "MODE: Prototype Mode | Live Mode (runtime source of truth).",
+  },
   {
     name: "DATABASE_URL",
     importance: "required",
@@ -58,6 +66,41 @@ const ENV_SPECS: EnvSpec[] = [
     description: "Override adapter manifest discovery location.",
   },
   {
+    name: "INTEGRATOR_QUEUE_DRIVER",
+    importance: "optional",
+    description: "Queue driver selector (`bullmq` default, `legacy` for Redis list compatibility).",
+  },
+  {
+    name: "INTEGRATOR_EVENT_QUEUE_KEY",
+    importance: "optional",
+    description: "BullMQ queue key for incoming workflow trigger events.",
+  },
+  {
+    name: "INTEGRATOR_BULLMQ_PREFIX",
+    importance: "optional",
+    description: "BullMQ Redis key prefix (defaults to `integrator`).",
+  },
+  {
+    name: "INTEGRATOR_BULLMQ_WORKER_CONCURRENCY",
+    importance: "optional",
+    description: "BullMQ worker concurrency for incoming event consumption.",
+  },
+  {
+    name: "INTEGRATOR_BULLMQ_REMOVE_ON_COMPLETE_COUNT",
+    importance: "optional",
+    description: "BullMQ completed-job retention count for incoming events.",
+  },
+  {
+    name: "INTEGRATOR_BULLMQ_REMOVE_ON_FAIL_COUNT",
+    importance: "optional",
+    description: "BullMQ failed-job retention count for incoming events.",
+  },
+  {
+    name: "INTEGRATOR_BULLMQ_JOB_NAME",
+    importance: "optional",
+    description: "BullMQ job name used for queued incoming events.",
+  },
+  {
     name: "VITE_API_BASE_URL",
     importance: "optional",
     description: "Frontend API endpoint (used by apps/web).",
@@ -65,17 +108,17 @@ const ENV_SPECS: EnvSpec[] = [
   {
     name: "APP_ENV",
     importance: "optional",
-    description: "Set to production/staging/development.",
+    description: "Runtime environment selector (use production for Live Mode).",
   },
   {
     name: "ENABLED_ADAPTER_KEYS",
-    importance: "dev_only",
-    description: "Optional adapter allow-list for local/demo runs.",
+    importance: "prototype_optional",
+    description: "Optional adapter allow-list for Prototype Mode runs.",
   },
   {
     name: "DISABLED_ADAPTER_KEYS",
-    importance: "dev_only",
-    description: "Optional adapter deny-list for local/demo runs.",
+    importance: "prototype_optional",
+    description: "Optional adapter deny-list for Prototype Mode runs.",
   },
 ];
 
@@ -86,11 +129,14 @@ function hasValue(value: string | undefined): boolean {
 export function evaluateSetupEnvironment(
   env: NodeJS.ProcessEnv = process.env,
 ): SetupVerificationSummary {
+  const modeResolution = resolvePlatformModeFromEnv(
+    env as Record<string, string | undefined>,
+  );
   const appEnv = env.APP_ENV || "development";
-  const isProduction = appEnv === "production";
+  const isLiveMode = modeResolution.mode === "Live Mode";
   const missingRequired: string[] = [];
   const missingOptional: string[] = [];
-  const missingDevOnly: string[] = [];
+  const missingPrototypeOptional: string[] = [];
   const warnings: string[] = [];
 
   for (const spec of ENV_SPECS) {
@@ -104,14 +150,14 @@ export function evaluateSetupEnvironment(
       continue;
     }
 
-    if (spec.importance === "dev_only") {
-      missingDevOnly.push(spec.name);
+    if (spec.importance === "prototype_optional") {
+      missingPrototypeOptional.push(spec.name);
       continue;
     }
 
-    if (spec.requiredInProduction && !isProduction) {
+    if (spec.requiredInProduction && !isLiveMode) {
       warnings.push(
-        `${spec.name} is not set. Development fallback behavior may be used.`,
+        `${spec.name} is not set. Prototype Mode fallback behavior may be used.`,
       );
       continue;
     }
@@ -121,9 +167,11 @@ export function evaluateSetupEnvironment(
 
   return {
     appEnv,
+    integratorMode: modeResolution.mode,
+    modeSource: modeResolution.source,
     missingRequired,
     missingOptional,
-    missingDevOnly,
+    missingPrototypeOptional,
     warnings,
   };
 }
@@ -142,10 +190,15 @@ export async function verifySetup(options?: {
   const logger = options?.logger || console;
   const summary = evaluateSetupEnvironment(env);
 
+  logger.info(`[setup] MODE=${summary.integratorMode} (source=${summary.modeSource})`);
   logger.info(`[setup] APP_ENV=${summary.appEnv}`);
-  logger.info(`[setup] missing required vars: ${formatList(summary.missingRequired)}`);
+  logger.info(
+    `[setup] missing REQUIRED FOR PROTOTYPE MODE + LIVE MODE vars: ${formatList(summary.missingRequired)}`,
+  );
   logger.info(`[setup] missing optional vars: ${formatList(summary.missingOptional)}`);
-  logger.info(`[setup] missing dev-only vars: ${formatList(summary.missingDevOnly)}`);
+  logger.info(
+    `[setup] missing OPTIONAL IN PROTOTYPE MODE vars: ${formatList(summary.missingPrototypeOptional)}`,
+  );
   for (const warning of summary.warnings) {
     logger.warn(`[setup] warning: ${warning}`);
   }

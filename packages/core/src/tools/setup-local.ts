@@ -75,9 +75,9 @@ async function waitForInfra(repoRoot: string, env: NodeJS.ProcessEnv): Promise<v
 }
 
 async function runSetup(): Promise<void> {
-  const { repoRoot, envPath, created } = initializeRootEnv();
+  const { repoRoot, envPath, created, sourcePath } = initializeRootEnv();
   if (created) {
-    console.log(`[setup:local] initialized .env from apps/api/.env.example`);
+    console.log(`[setup:local] initialized .env from ${sourcePath}`);
   } else {
     console.log(`[setup:local] using existing .env`);
   }
@@ -103,14 +103,14 @@ async function runSetup(): Promise<void> {
     env,
   });
 
-  console.log("[setup:local] seeding demo data...");
+  console.log("[setup:local] seeding Prototype Mode data...");
   await runCommand(npm.command, [...npm.prefixArgs, "run", "seed", "-w", "@integration/core"], {
     cwd: repoRoot,
     env,
   });
 
   console.log("[setup:local] done.");
-  console.log("[setup:local] next: npm run dev:local");
+  console.log("[setup:local] next: npm run dev:prototype (alias: npm run dev:local)");
 }
 
 runSetup().catch((error) => {

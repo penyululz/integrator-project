@@ -8,6 +8,8 @@ import {
   getWizardStepOrder,
   saveConnection,
   testConnection,
+  toWizardStepDescription,
+  toWizardStepLabel,
   validateConnectionInput,
 } from "./integration-setup-flow-helpers";
 
@@ -124,5 +126,8 @@ describe("integration-setup-flow-helpers", () => {
     await expect(saveConnection(async () => ({ saved: true }))).resolves.toEqual({
       saved: true,
     });
+
+    expect(toWizardStepLabel("overview")).toBe("Overview");
+    expect(toWizardStepDescription("test")).toContain("connection check");
   });
 });

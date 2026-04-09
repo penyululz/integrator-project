@@ -2,8 +2,10 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   getAuthSession,
+  getApiRuntimeMode,
   listApps,
   listRuns,
+  listWorkflows,
   getWorkspaceQuotas,
   getWorkspaceUsage,
   getRetentionPolicy,
@@ -22,13 +24,16 @@ import {
   type AppConnectionRecord,
   type RunRecord,
 } from "../api";
+import { PLATFORM_MODES } from "../platform-mode";
 import {
   Callout,
+  ChecklistSteps,
   DemoHint,
   EmptyStatePanel,
   LoadingInline,
   MetricTile,
   PageHeader,
+  PrimaryActionPanel,
   StatusPill,
   SurfaceCard,
 } from "../components/ui-kit";
@@ -36,6 +41,7 @@ import {
   buildWindowFilter,
   formatDurationSeconds,
   formatPercent,
+  getDashboardPrimaryAction,
   getFailureRate,
   getRecentFailingAdapters,
   getRecentFailingWorkflows,
@@ -48,40 +54,31 @@ import {
   getWorkspaceSetupProgress,
   toRunWorkspaceTone,
 } from "./workspace-activity-helpers";
-import {
-  getLiveRefreshIntervalMs,
-  type LiveRefreshMode,
-  type ViewDensity,
-} from "./workspace-view-helpers";
+import { getLiveRefreshIntervalMs, type LiveRefreshMode } from "./workspace-view-helpers";
 
 export function DashboardPage() {
   const session = getAuthSession();
+  const runtimeMode = getApiRuntimeMode();
+  const isPrototypeMode = runtimeMode === PLATFORM_MODES.PROTOTYPE;
   const isOperator =
     session?.scope.orgRole === "owner" ||
     session?.scope.orgRole === "admin" ||
     session?.scope.workspaceRole === "owner" ||
     session?.scope.workspaceRole === "admin";
+
   const [timeWindow, setTimeWindow] = useState<DashboardWindow>("24h");
   const [overview, setOverview] = useState<AnalyticsOverview | null>(null);
   const [alerts, setAlerts] = useState<AnalyticsAlertSignal[]>([]);
   const [workflowRows, setWorkflowRows] = useState<WorkflowAnalyticsRow[]>([]);
   const [adapterRows, setAdapterRows] = useState<AdapterAnalyticsRow[]>([]);
-  const [quotaSnapshot, setQuotaSnapshot] = useState<WorkspaceQuotaResponse | null>(
-    null,
-  );
-  const [usageSnapshot, setUsageSnapshot] = useState<WorkspaceUsageResponse | null>(
-    null,
-  );
-  const [retentionPolicy, setRetentionPolicy] = useState<RetentionPolicySummary | null>(
-    null,
-  );
-  const [retentionStatus, setRetentionStatus] = useState<RetentionStatusSummary | null>(
-    null,
-  );
+  const [quotaSnapshot, setQuotaSnapshot] = useState<WorkspaceQuotaResponse | null>(null);
+  const [usageSnapshot, setUsageSnapshot] = useState<WorkspaceUsageResponse | null>(null);
+  const [retentionPolicy, setRetentionPolicy] = useState<RetentionPolicySummary | null>(null);
+  const [retentionStatus, setRetentionStatus] = useState<RetentionStatusSummary | null>(null);
   const [recentRuns, setRecentRuns] = useState<RunRecord[]>([]);
   const [appConnections, setAppConnections] = useState<AppConnectionRecord[]>([]);
+  const [workflowsCount, setWorkflowsCount] = useState(0);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<string | null>(null);
-  const [viewDensity, setViewDensity] = useState<ViewDensity>("comfortable");
   const [liveRefreshMode, setLiveRefreshMode] = useState<LiveRefreshMode>("30s");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -91,15 +88,15 @@ export function DashboardPage() {
     [overview],
   );
   const failingWorkflows = useMemo(
-    () => getRecentFailingWorkflows(workflowRows, 6),
+    () => getRecentFailingWorkflows(workflowRows, 5),
     [workflowRows],
   );
   const topRetryingWorkflows = useMemo(
-    () => getTopRetryingWorkflows(workflowRows, 6),
+    () => getTopRetryingWorkflows(workflowRows, 5),
     [workflowRows],
   );
   const failingAdapters = useMemo(
-    () => getRecentFailingAdapters(adapterRows, 6),
+    () => getRecentFailingAdapters(adapterRows, 5),
     [adapterRows],
   );
   const workspaceSetup = useMemo(
@@ -109,6 +106,16 @@ export function DashboardPage() {
   const workspaceRecentRuns = useMemo(
     () => getRecentWorkspaceRuns(recentRuns, 6),
     [recentRuns],
+  );
+  const primaryAction = useMemo(
+    () =>
+      getDashboardPrimaryAction({
+        connectedReadyApps: workspaceSetup.connectedReadyApps,
+        workflowsCount,
+        totalRuns: overview?.totalRuns || 0,
+        mode: runtimeMode,
+      }),
+    [workspaceSetup.connectedReadyApps, workflowsCount, overview?.totalRuns, runtimeMode],
   );
 
   async function loadAnalytics(selectedWindow: DashboardWindow) {
@@ -126,6 +133,7 @@ export function DashboardPage() {
         retentionStatusPayload,
         runsPayload,
         appsPayload,
+        workflowsPayload,
       ] = await Promise.all([
         getAnalyticsOverview(filters),
         getWorkflowAnalytics({
@@ -142,6 +150,7 @@ export function DashboardPage() {
         isOperator ? getRetentionStatus() : Promise.resolve(null),
         listRuns(),
         listApps(),
+        listWorkflows(),
       ]);
       setOverview(overviewPayload.overview);
       setAlerts(overviewPayload.alerts);
@@ -153,9 +162,10 @@ export function DashboardPage() {
       setRetentionStatus(retentionStatusPayload);
       setRecentRuns(runsPayload);
       setAppConnections(appsPayload);
+      setWorkflowsCount(workflowsPayload.length);
       setLastUpdatedAt(new Date().toISOString());
     } catch (loadError) {
-      setError((loadError as Error).message || "Failed to load analytics.");
+      setError((loadError as Error).message || "Failed to load dashboard.");
     } finally {
       setLoading(false);
     }
@@ -180,12 +190,41 @@ export function DashboardPage() {
     };
   }, [liveRefreshMode, timeWindow]);
 
+  const setupChecklist = [
+    {
+      id: "connect",
+      title: "Connect at least one ready app",
+      description: isPrototypeMode
+        ? "Prototype setup uses seeded app data. You can still connect Slack in one click from the guided first-success flow."
+        : "Use Apps to connect Slack, Email, Webhook, or Sheets.",
+      done: workspaceSetup.connectedReadyApps > 0,
+      active: workspaceSetup.connectedReadyApps <= 0,
+      actions: <Link to="/integrations">Open Apps</Link>,
+    },
+    {
+      id: "build",
+      title: "Create your first automation",
+      description: "Use the guided first automation flow to create a starter workflow.",
+      done: workflowsCount > 0,
+      active: workspaceSetup.connectedReadyApps > 0 && workflowsCount <= 0,
+      actions: <Link to="/first-automation">Open First Automation</Link>,
+    },
+    {
+      id: "test",
+      title: "Send a test run",
+      description: "Run one test event and confirm results in the Runs console.",
+      done: (overview?.totalRuns || 0) > 0,
+      active: workflowsCount > 0 && (overview?.totalRuns || 0) <= 0,
+      actions: <Link to="/runs">Open Runs</Link>,
+    },
+  ];
+
   return (
     <div className="stack">
       <PageHeader
         eyebrow="Dashboard"
-        title="Automation Health Dashboard"
-        subtitle="Track setup progress, run reliability, and app performance in one place."
+        title="Workspace Home"
+        subtitle="Your fastest path from setup to reliable automation outcomes."
         actions={
           <>
             <label>
@@ -198,17 +237,6 @@ export function DashboardPage() {
                 <option value="24h">Last 24h</option>
                 <option value="7d">Last 7 days</option>
                 <option value="30d">Last 30 days</option>
-              </select>
-            </label>
-            <label>
-              View
-              <select
-                value={viewDensity}
-                onChange={(event) => setViewDensity(event.target.value as ViewDensity)}
-                style={{ marginLeft: 8 }}
-              >
-                <option value="comfortable">Comfortable</option>
-                <option value="compact">Compact</option>
               </select>
             </label>
             <label>
@@ -227,298 +255,219 @@ export function DashboardPage() {
             <button type="button" onClick={() => void loadAnalytics(timeWindow)}>
               Refresh
             </button>
-            <Link to="/first-automation">First automation</Link>
           </>
         }
       />
 
-      {loading ? <LoadingInline label="Loading analytics..." /> : null}
-      {error ? <Callout tone="danger" title="Unable to load dashboard"><p>{error}</p></Callout> : null}
+      {isPrototypeMode ? (
+        <Callout
+          tone="info"
+          title="PROTOTYPE DEMO PATH"
+          actions={
+            <>
+              <Link to="/onboarding">Start guided demo</Link>
+              <Link to="/first-automation">Open first automation</Link>
+            </>
+          }
+        >
+          <p>FIRST-SUCCESS DEMO: NO REAL EXTERNAL SETUP REQUIRED.</p>
+          <p>SWITCH TO LIVE MODE FOR REAL INTEGRATIONS.</p>
+        </Callout>
+      ) : null}
 
-      <DemoHint>
-        New here? Start with <Link to="/first-automation">First Automation</Link>, then come back to
-        watch your first run metrics here.
-      </DemoHint>
+      <PrimaryActionPanel
+        title={primaryAction.label}
+        description={primaryAction.description}
+        meta={
+          <>
+            <StatusPill tone="info">Setup {workspaceSetup.percent}%</StatusPill>
+            <StatusPill tone={liveRefreshMode === "off" ? "warning" : "success"}>
+              {liveRefreshMode === "off" ? "Live refresh off" : `Auto-refresh ${liveRefreshMode}`}
+            </StatusPill>
+            <span className="tag">
+              Last update {lastUpdatedAt ? formatRelativeTime(lastUpdatedAt) : "not yet"}
+            </span>
+          </>
+        }
+        primaryAction={
+          <Link className="button-link-primary" to={primaryAction.path}>
+            {primaryAction.label}
+          </Link>
+        }
+        secondaryActions={
+          <>
+            <Link to="/integrations">Apps</Link>
+            <Link to="/workflows">Automations</Link>
+            <Link to="/runs">Runs</Link>
+          </>
+        }
+      />
 
-      <div className="inline-actions">
-        <StatusPill tone="info">Workspace mode: {viewDensity}</StatusPill>
-        <StatusPill tone={liveRefreshMode === "off" ? "warning" : "success"}>
-          {liveRefreshMode === "off" ? "Live refresh off" : `Auto-refresh ${liveRefreshMode}`}
-        </StatusPill>
-        <span className="tag">
-          Last updated {lastUpdatedAt ? formatRelativeTime(lastUpdatedAt) : "not yet"}
-        </span>
-      </div>
+      {loading ? <LoadingInline label="Loading workspace data..." /> : null}
+      {error ? (
+        <Callout tone="danger" title="Unable to load dashboard">
+          <p>{error}</p>
+        </Callout>
+      ) : null}
 
-      {overview ? (
-        <>
-          {overview.totalRuns === 0 ? (
-            <EmptyStatePanel
-              title="Your dashboard activates after the first run"
-              description="Connect an app, launch a starter automation, and send one test event to unlock health metrics."
-              primaryAction={
-                <Link className="button-link-primary" to="/first-automation">
-                  Start first automation
-                </Link>
-              }
-              secondaryAction={<Link to="/integrations">Connect apps</Link>}
+      {overview && overview.totalRuns === 0 ? (
+        <EmptyStatePanel
+          title="This dashboard becomes more useful after your first run"
+          description="Start with one guided automation and one test run to unlock reliability and operations insights."
+          primaryAction={
+            <Link className="button-link-primary" to="/first-automation">
+              Start first automation
+            </Link>
+          }
+          secondaryAction={<Link to="/integrations">Connect apps</Link>}
+        />
+      ) : null}
+
+      <SurfaceCard title="Recent activity" subtitle="What happened most recently in this workspace.">
+        {workspaceRecentRuns.length === 0 ? (
+          <EmptyStatePanel
+            title="No recent runs yet"
+            description="After you send a test run, recent activity appears here automatically."
+            primaryAction={
+              <Link className="button-link-primary" to="/first-automation">
+                Send first test run
+              </Link>
+            }
+          />
+        ) : (
+          <div className="activity-list">
+            {workspaceRecentRuns.map((run) => (
+              <div key={run.id} className="activity-item">
+                <div className="inline-actions">
+                  <StatusPill tone={toRunWorkspaceTone(run.status)}>
+                    {run.status.replace(/_/g, " ")}
+                  </StatusPill>
+                  <code>{run.id.slice(0, 8)}</code>
+                  <span className="tag">{formatRelativeTime(run.created_at)}</span>
+                </div>
+                <p>
+                  Workflow <code>{run.workflow_id.slice(0, 8)}</code> executed.
+                </p>
+                <div className="inline-actions">
+                  <Link to={`/runs?runId=${encodeURIComponent(run.id)}`}>Open run</Link>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </SurfaceCard>
+
+      <SurfaceCard title="Health snapshot" subtitle="Core reliability signals for the selected window.">
+        {overview ? (
+          <div className="metric-grid">
+            <MetricTile label="Runs" value={String(overview.totalRuns)} />
+            <MetricTile label="Success" value={String(overview.successRuns)} />
+            <MetricTile label="Failed" value={String(overview.failedRuns)} />
+            <MetricTile label="Dead-lettered" value={String(overview.deadLetterRuns)} />
+            <MetricTile label="Failure rate" value={formatPercent(failureRate)} />
+            <MetricTile
+              label="Avg run duration"
+              value={formatDurationSeconds(overview.avgRunDurationSeconds)}
             />
+          </div>
+        ) : (
+          <p>Health metrics load after analytics are available.</p>
+        )}
+      </SurfaceCard>
+
+      <SurfaceCard title="Setup progress" subtitle="Finish these steps to reach repeatable first-success outcomes.">
+        <ChecklistSteps steps={setupChecklist} />
+      </SurfaceCard>
+
+      <details>
+        <summary>Advanced operator insights</summary>
+        <div className="stack-sm" style={{ marginTop: 8 }}>
+          <DemoHint>
+            Advanced mode focuses on capacity, alert signals, and reliability hotspots.
+          </DemoHint>
+
+          {overview ? (
+            <SurfaceCard title="Queue and usage" subtitle="Backpressure and quota posture.">
+              <p>
+                Queue pending {overview.queuePendingJobs} | due {overview.queueDueJobs} | lag{" "}
+                {formatDurationSeconds(overview.queueLagSeconds)}
+              </p>
+              {quotaSnapshot ? (
+                <p>
+                  Active runs {quotaSnapshot.usage.activeWorkflowRuns}/
+                  {quotaSnapshot.limits.maxActiveWorkflowRunsPerWorkspace} | queued jobs{" "}
+                  {quotaSnapshot.usage.queuedJobs}/
+                  {quotaSnapshot.limits.maxQueuedJobsPerWorkspace}
+                </p>
+              ) : null}
+              {usageSnapshot ? (
+                <p>
+                  Window started {usageSnapshot.usage.workflowRunsStarted}, completed{" "}
+                  {usageSnapshot.usage.workflowRunsCompleted}, retries{" "}
+                  {usageSnapshot.usage.workflowRetries}
+                </p>
+              ) : null}
+            </SurfaceCard>
           ) : null}
 
-          <div className="workspace-home-grid">
-            <SurfaceCard
-              title="Workspace pulse"
-              subtitle="Recent automation activity and setup progress for your shared workspace."
-              highlight
-            >
-              <div className="metric-grid">
-                <MetricTile label="Ready apps" value={String(workspaceSetup.readyApps)} />
-                <MetricTile
-                  label="Connected ready apps"
-                  value={String(workspaceSetup.connectedReadyApps)}
-                />
-                <MetricTile label="Setup completion" value={`${workspaceSetup.percent}%`} />
-              </div>
-              {workspaceRecentRuns.length === 0 ? (
-                <p>No recent runs yet. Create a starter automation and run one test event.</p>
-              ) : (
-                <div className="activity-list">
-                  {workspaceRecentRuns.map((run) => (
-                    <div key={run.id} className="activity-item">
-                      <div className="inline-actions">
-                        <StatusPill tone={toRunWorkspaceTone(run.status)}>
-                          {run.status.replace(/_/g, " ")}
-                        </StatusPill>
-                        <code>{run.id.slice(0, 8)}</code>
-                      </div>
-                      <p>
-                        Workflow {run.workflow_id.slice(0, 8)} updated{" "}
-                        {formatRelativeTime(run.created_at)}.
-                      </p>
-                    </div>
-                  ))}
+          <SurfaceCard title="Signals and hotspots" subtitle="Where operators should look first.">
+            {alerts.length === 0 ? <p>No active alert signals in this window.</p> : null}
+            {alerts.map((alert) => (
+              <div key={alert.key} className="card-muted" style={{ borderRadius: 10, padding: 10 }}>
+                <div className="inline-actions">
+                  <StatusPill tone={alert.severity === "critical" ? "danger" : "warning"}>
+                    {alert.severity}
+                  </StatusPill>
+                  <strong>{alert.key}</strong>
                 </div>
-              )}
-              <div className="inline-actions">
-                <Link to="/first-automation">Create first automation</Link>
-                <Link to="/runs">Open run explorer</Link>
-                <Link to="/integrations">Manage apps</Link>
+                <p>{alert.message}</p>
               </div>
-            </SurfaceCard>
-
-            <SurfaceCard
-              title="Workspace continuity"
-              subtitle="Keep app setup, run validation, alerts, and audits connected for your team."
-              muted
-            >
-              <div className="steps-progress">
-                <div className="step-row">
-                  <span className="step-index">1</span>
-                  <div className="stack-sm">
-                    <strong>Connect the apps your team needs</strong>
-                    <p>Start with Slack, Webhook, Email, or Sheets to unlock starter templates.</p>
-                  </div>
-                </div>
-                <div className="step-row">
-                  <span className="step-index">2</span>
-                  <div className="stack-sm">
-                    <strong>Launch a test automation run</strong>
-                    <p>Use the in-app simulator to test without leaving your workspace.</p>
-                  </div>
-                </div>
-                <div className="step-row">
-                  <span className="step-index">3</span>
-                  <div className="stack-sm">
-                    <strong>Share outcomes with operators</strong>
-                    <p>Runs, alerts, and audit logs help teams confirm behavior quickly.</p>
-                  </div>
-                </div>
-              </div>
-              <div className="inline-actions">
-                <Link to="/workflows">Build automation</Link>
-                <Link to="/runs">Inspect timeline</Link>
-                {isOperator ? <Link to="/audit-logs">Audit actions</Link> : null}
-              </div>
-            </SurfaceCard>
-          </div>
-
-          <SurfaceCard title="Execution health" subtitle="Core run, retry, and failure signals.">
-            <div className="metric-grid">
-              <MetricTile label="Runs" value={String(overview.totalRuns)} />
-              <MetricTile label="Success" value={String(overview.successRuns)} />
-              <MetricTile label="Failed" value={String(overview.failedRuns)} />
-              <MetricTile label="Dead-lettered" value={String(overview.deadLetterRuns)} />
-              <MetricTile label="Failure rate" value={formatPercent(failureRate)} />
-              <MetricTile
-                label="Avg run duration"
-                value={formatDurationSeconds(overview.avgRunDurationSeconds)}
-              />
-              <MetricTile label="Retry events" value={String(overview.retryEvents)} />
-              <MetricTile
-                label="Credential failures"
-                value={String(overview.credentialValidationFailures)}
-              />
-            </div>
-          </SurfaceCard>
-
-          <div className="template-grid">
-            <SurfaceCard title="Queue and scaling" subtitle="Live pressure, limits, and backlog awareness.">
-              <div className="stack-sm">
-                <p>
-                  <strong>Queue:</strong> pending {overview.queuePendingJobs}, due {overview.queueDueJobs}, lag{" "}
-                  {formatDurationSeconds(overview.queueLagSeconds)}
-                </p>
-                {quotaSnapshot ? (
-                  <>
-                    <p>
-                      <strong>Active runs:</strong> {quotaSnapshot.usage.activeWorkflowRuns}/
-                      {quotaSnapshot.limits.maxActiveWorkflowRunsPerWorkspace}
-                    </p>
-                    <p>
-                      <strong>Queued jobs:</strong> {quotaSnapshot.usage.queuedJobs}/
-                      {quotaSnapshot.limits.maxQueuedJobsPerWorkspace}
-                    </p>
-                    <p>
-                      <strong>Scheduled waits:</strong> {quotaSnapshot.usage.scheduledWaits}/
-                      {quotaSnapshot.limits.maxScheduledWaitsPerWorkspace}
-                    </p>
-                  </>
-                ) : null}
-                {usageSnapshot ? (
-                  <p>
-                    <strong>Window usage:</strong> started {usageSnapshot.usage.workflowRunsStarted},
-                    completed {usageSnapshot.usage.workflowRunsCompleted}, retries{" "}
-                    {usageSnapshot.usage.workflowRetries}
-                  </p>
-                ) : null}
-                {quotaSnapshot?.warnings.length ? (
-                  <Callout tone="warning" title="Quota warnings">
-                    <ul>
-                      {quotaSnapshot.warnings.map((warning) => (
-                        <li key={warning}>{warning}</li>
-                      ))}
-                    </ul>
-                  </Callout>
-                ) : null}
-                {quotaSnapshot?.violations.length ? (
-                  <Callout tone="danger" title="Quota violations">
-                    <ul>
-                      {quotaSnapshot.violations.map((violation) => (
-                        <li key={violation}>{violation}</li>
-                      ))}
-                    </ul>
-                  </Callout>
-                ) : null}
-              </div>
-            </SurfaceCard>
-
-            <SurfaceCard title="Alert-ready signals" subtitle="Conditions that should trigger operator awareness.">
-              {alerts.length === 0 ? (
-                <p>No active warning signals.</p>
-              ) : (
-                <div className="stack-sm">
-                  {alerts.map((alert) => (
-                    <div key={alert.key} className="card-muted" style={{ borderRadius: 10, padding: 10 }}>
-                      <div className="inline-actions">
-                        <StatusPill tone={alert.severity === "critical" ? "danger" : "warning"}>
-                          {alert.severity}
-                        </StatusPill>
-                        <strong>{alert.key}</strong>
-                      </div>
-                      <p>{alert.message}</p>
-                    </div>
-                  ))}
-                </div>
-              )}
-              <div className="inline-actions">
-                <Link to="/alerts">Configure alerts</Link>
-              </div>
-            </SurfaceCard>
-          </div>
-
-          <div className="template-grid">
-            <SurfaceCard title="Failing workflows" subtitle="Recent workflows with failures or dead-letters.">
-              {failingWorkflows.length === 0 ? <p>No failing workflows in selected window.</p> : null}
-              <ul>
-                {failingWorkflows.map((workflow) => (
-                  <li key={workflow.workflowId}>
-                    {workflow.workflowName} - failed {workflow.failedRuns}, dead-lettered{" "}
-                    {workflow.deadLetterRuns}
-                  </li>
-                ))}
-              </ul>
-            </SurfaceCard>
-
-            <SurfaceCard title="Top retrying workflows" subtitle="Automation candidates for stability improvements.">
-              {topRetryingWorkflows.length === 0 ? <p>No retries in selected window.</p> : null}
-              <ul>
-                {topRetryingWorkflows.map((workflow) => (
-                  <li key={workflow.workflowId}>
-                    {workflow.workflowName} - retries {workflow.retryEvents}
-                  </li>
-                ))}
-              </ul>
-            </SurfaceCard>
-          </div>
-
-          <SurfaceCard title="Failing apps" subtitle="Apps with the highest execution failure rates.">
-            {failingAdapters.length === 0 ? <p>No app failures in selected window.</p> : null}
-            <table className={`table ${viewDensity === "compact" ? "compact" : ""}`}>
-              <thead>
-                <tr>
-                  <th>App</th>
-                  <th>Attempts</th>
-                  <th>Failures</th>
-                  <th>Avg duration</th>
-                </tr>
-              </thead>
-              <tbody>
-                {failingAdapters.map((adapter) => (
-                  <tr key={adapter.adapterKey}>
-                    <td>{adapter.adapterKey}</td>
-                    <td>{adapter.actionAttempts}</td>
-                    <td>{adapter.actionFailures}</td>
-                    <td>{formatDurationSeconds(adapter.avgActionDurationMs / 1000)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            ))}
+            {failingWorkflows.length > 0 ? (
+              <p>
+                Failing workflows:{" "}
+                {failingWorkflows.map((workflow) => workflow.workflowName).join(", ")}
+              </p>
+            ) : null}
+            {topRetryingWorkflows.length > 0 ? (
+              <p>
+                Top retrying:{" "}
+                {topRetryingWorkflows
+                  .map((workflow) => `${workflow.workflowName} (${workflow.retryEvents})`)
+                  .join(", ")}
+              </p>
+            ) : null}
+            {failingAdapters.length > 0 ? (
+              <p>
+                Failing apps:{" "}
+                {failingAdapters
+                  .map((adapter) => `${adapter.adapterKey} (${adapter.actionFailures})`)
+                  .join(", ")}
+              </p>
+            ) : null}
           </SurfaceCard>
 
           {isOperator && retentionPolicy ? (
-            <SurfaceCard title="Retention" subtitle="Automated cleanup windows and last job state.">
-              <div className="stack-sm">
+            <SurfaceCard title="Retention status" subtitle="Current cleanup windows and scheduler status.">
+              <p>
+                Runs {retentionPolicy.policy.workflowRunsDays}d | Logs{" "}
+                {retentionPolicy.policy.eventLogsDays}d | Audit{" "}
+                {retentionPolicy.policy.auditLogsDays}d
+              </p>
+              {retentionStatus ? (
                 <p>
-                  Interval {retentionPolicy.cleanupIntervalSeconds}s, batch size {retentionPolicy.cleanupBatchSize},
-                  max batches/domain {retentionPolicy.maxBatchesPerDomain}
+                  Last run {retentionStatus.lastRunAt || "never"} | Next run{" "}
+                  {retentionStatus.nextRunAt || "n/a"}
                 </p>
-                <div className="tag-row">
-                  <span className="tag">Runs {retentionPolicy.policy.workflowRunsDays}d</span>
-                  <span className="tag">Logs {retentionPolicy.policy.eventLogsDays}d</span>
-                  <span className="tag">Retries {retentionPolicy.policy.retryRecordsDays}d</span>
-                  <span className="tag">Waits {retentionPolicy.policy.scheduledWaitsDays}d</span>
-                  <span className="tag">Alerts {retentionPolicy.policy.alertLogsDays}d</span>
-                  <span className="tag">Audit {retentionPolicy.policy.auditLogsDays}d</span>
-                </div>
-                {retentionStatus ? (
-                  <p>
-                    Last run: {retentionStatus.lastRunAt || "never"} | Next run: {retentionStatus.nextRunAt || "n/a"}
-                  </p>
-                ) : null}
-                {retentionPolicy.warnings.length > 0 ? (
-                  <Callout tone="warning" title="Retention warnings">
-                    <ul>
-                      {retentionPolicy.warnings.map((warning) => (
-                        <li key={warning}>{warning}</li>
-                      ))}
-                    </ul>
-                  </Callout>
-                ) : null}
+              ) : null}
+              <div className="inline-actions">
+                <Link to="/alerts">Alerts</Link>
+                <Link to="/audit-logs">Audit</Link>
               </div>
             </SurfaceCard>
           ) : null}
-        </>
-      ) : null}
+        </div>
+      </details>
     </div>
   );
 }

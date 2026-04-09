@@ -3,8 +3,16 @@ import type {
   AnalyticsOverview,
   WorkflowAnalyticsRow,
 } from "../api";
+import { PLATFORM_MODES, type PlatformMode } from "../platform-mode";
 
 export type DashboardWindow = "24h" | "7d" | "30d";
+
+export type DashboardPrimaryAction = {
+  label: string;
+  path: string;
+  description: string;
+  reason: "connect" | "build" | "test" | "operate";
+};
 
 const WINDOW_HOURS: Record<DashboardWindow, number> = {
   "24h": 24,
@@ -83,4 +91,55 @@ export function getRecentFailingAdapters(
     .filter((adapter) => adapter.actionFailures > 0)
     .sort((left, right) => right.actionFailures - left.actionFailures)
     .slice(0, limit);
+}
+
+export function getDashboardPrimaryAction(input: {
+  connectedReadyApps: number;
+  workflowsCount: number;
+  totalRuns: number;
+  mode?: PlatformMode;
+}): DashboardPrimaryAction {
+  if (input.mode === PLATFORM_MODES.PROTOTYPE && input.totalRuns <= 0) {
+    return {
+      label: "Start first-success demo",
+      path: "/onboarding",
+      description:
+        "PROTOTYPE DEMO PATH: NO REAL EXTERNAL SETUP REQUIRED. Start the guided flow and send a simulated run.",
+      reason: "connect",
+    };
+  }
+
+  if (input.connectedReadyApps <= 0) {
+    return {
+      label: "Connect your first app",
+      path: "/integrations",
+      description: "Start by connecting one ready app so you can build and test an automation.",
+      reason: "connect",
+    };
+  }
+
+  if (input.workflowsCount <= 0) {
+    return {
+      label: "Create your first automation",
+      path: "/first-automation",
+      description: "Use the guided flow to generate your first working automation in minutes.",
+      reason: "build",
+    };
+  }
+
+  if (input.totalRuns <= 0) {
+    return {
+      label: "Send your first test run",
+      path: "/first-automation",
+      description: "Trigger a test event and confirm your automation behavior in the Runs console.",
+      reason: "test",
+    };
+  }
+
+  return {
+    label: "Open run console",
+    path: "/runs",
+    description: "Review recent executions, retries, and outcomes for your workspace.",
+    reason: "operate",
+  };
 }

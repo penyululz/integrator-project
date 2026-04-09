@@ -9,6 +9,13 @@ export type FirstAutomationStepStatus = {
   hasRun: boolean;
 };
 
+export type FirstAutomationPrimaryAction = {
+  stage: "connect" | "build" | "test" | "observe";
+  label: string;
+  description: string;
+  useLink: boolean;
+};
+
 export function buildFirstAutomationPayload(seed = Date.now()): Record<string, unknown> {
   return {
     message: `Hello from first automation (${seed})`,
@@ -89,5 +96,43 @@ export function getFirstAutomationStepStatus(input: {
     hasTemplate: input.templateAvailable,
     hasWorkflow: Boolean(input.workflow),
     hasRun: Boolean(input.latestRun),
+  };
+}
+
+export function getFirstAutomationPrimaryAction(
+  status: FirstAutomationStepStatus,
+): FirstAutomationPrimaryAction {
+  if (!status.connectedSlack) {
+    return {
+      stage: "connect",
+      label: "Connect Slack",
+      description: "Connect Slack first so the starter automation can send a message.",
+      useLink: true,
+    };
+  }
+
+  if (!status.hasWorkflow) {
+    return {
+      stage: "build",
+      label: "Create automation",
+      description: "Create the starter workflow from template.",
+      useLink: false,
+    };
+  }
+
+  if (!status.hasRun) {
+    return {
+      stage: "test",
+      label: "Send test run",
+      description: "Trigger one test event to verify your end-to-end setup.",
+      useLink: false,
+    };
+  }
+
+  return {
+    stage: "observe",
+    label: "Inspect run result",
+    description: "Review timeline, logs, and outcome in the Runs console.",
+    useLink: true,
   };
 }

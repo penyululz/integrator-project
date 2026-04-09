@@ -1,7 +1,21 @@
 import { describe, expect, it } from "vitest";
-import { getReturnPath, redirectAfterConnection } from "./navigation-flow-helpers";
+import {
+  getDefaultWorkspaceRoute,
+  getReturnPath,
+  isKnownWorkspaceRoute,
+  redirectAfterConnection,
+  STABLE_WORKSPACE_ROUTES,
+} from "./navigation-flow-helpers";
 
 describe("navigation-flow-helpers", () => {
+  it("exposes stable route constants for shell navigation", () => {
+    expect(getDefaultWorkspaceRoute()).toBe("/dashboard");
+    expect(STABLE_WORKSPACE_ROUTES.workflows).toBe("/workflows");
+    expect(isKnownWorkspaceRoute("/runs")).toBe(true);
+    expect(isKnownWorkspaceRoute("/runs/abc")).toBe(true);
+    expect(isKnownWorkspaceRoute("/external")).toBe(false);
+  });
+
   it("returns safe paths for template and returnTo input", () => {
     expect(getReturnPath({ returnTo: "/runs" })).toBe("/runs");
     expect(getReturnPath({ returnTo: "https://external.example" })).toBe("/workflows");

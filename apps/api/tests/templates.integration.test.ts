@@ -171,7 +171,7 @@ async function createTemplateRuntime() {
   };
 
   return {
-    app: createApp(runtime),
+    app: await createApp(runtime),
     runtime,
   };
 }
@@ -180,7 +180,7 @@ describe("Template library API", () => {
   it("rejects unauthenticated template listing", async () => {
     const { app, runtime } = await createTemplateRuntime();
     try {
-      const response = await request(app).get("/api/v1/templates");
+      const response = await request(app.server).get("/api/v1/templates");
       expect(response.status).toBe(401);
     } finally {
       await runtime.close();
@@ -197,7 +197,7 @@ describe("Template library API", () => {
         workspaceSlug: "default",
       });
 
-      const listResponse = await request(app)
+      const listResponse = await request(app.server)
         .get("/api/v1/templates")
         .set("authorization", `Bearer ${login.accessToken}`);
 
@@ -216,7 +216,7 @@ describe("Template library API", () => {
         }),
       );
 
-      const detailResponse = await request(app)
+      const detailResponse = await request(app.server)
         .get("/api/v1/templates/webhook-to-sheets-append")
         .set("authorization", `Bearer ${login.accessToken}`);
       expect(detailResponse.status).toBe(200);
@@ -227,7 +227,7 @@ describe("Template library API", () => {
       );
 
       const templateDefinition = detailResponse.body.template.workflow;
-      const createResponse = await request(app)
+      const createResponse = await request(app.server)
         .post("/api/v1/workflows")
         .set("authorization", `Bearer ${login.accessToken}`)
         .send({
@@ -263,7 +263,7 @@ describe("Template library API", () => {
         organizationSlug: "template-org",
         workspaceSlug: "default",
       });
-      const response = await request(app)
+      const response = await request(app.server)
         .get("/api/v1/templates/template-missing")
         .set("authorization", `Bearer ${login.accessToken}`);
       expect(response.status).toBe(404);

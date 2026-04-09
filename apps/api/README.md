@@ -9,6 +9,14 @@ For product overview, quick start, first-success flow, and launch docs, start at
 - API server (`src/index.ts`): authenticated control-plane + webhook ingress
 - worker process (`src/worker.ts`): execution queue, retries, durable waits, alerts, retention
 
+## Phase 2 Experience Layer Support
+
+Phase 2 UI/UX improvements are backed by stable API contracts in this app:
+
+- list/detail endpoints used by guided onboarding, templates, runs, alerts, audit, and approvals
+- contract-compatible `Prototype Mode` behavior for local demo and UI iteration
+- unchanged `Live Mode` route shapes for real runtime behavior
+
 ## Architecture and Setup Docs
 
 - architecture: [`docs/architecture.md`](../../docs/architecture.md)

@@ -1,5 +1,18 @@
 import { Pool } from "pg";
-import type { WorkflowDefinition, WorkflowStep } from "@integration/shared";
+import type {
+  StandardListResult,
+  WorkflowDefinition,
+  WorkflowStep,
+} from "@integration/shared";
+import {
+  appendFilterGroupClause,
+  buildOrderByClause,
+  encodeOffsetCursor,
+  normalizeSortDirectives,
+  resolvePaginationState,
+  type SqlColumnMap,
+  type SqlListQueryInput,
+} from "./list-query";
 
 export type WorkflowRecord = {
   id: string;
@@ -14,6 +27,9 @@ export type WorkflowRecord = {
   created_at: string;
   updated_at: string;
 };
+
+export type WorkflowListQuery = SqlListQueryInput;
+export type WorkflowListResult = StandardListResult<WorkflowRecord>;
 
 type PersistableStep = {
   adapterKey: string;
@@ -94,6 +110,95 @@ export class WorkflowRepository {
       [input.tenantId, input.organizationId, input.workspaceId],
     );
     return result.rows;
+  }
+
+  async listWithQuery(input: {
+    tenantId: string;
+    organizationId: string;
+    workspaceId: string;
+    query: WorkflowListQuery;
+  }): Promise<WorkflowListResult> {
+    const predicates = [
+      "tenant_id = $1",
+      "organization_id = $2",
+      "workspace_id = $3",
+    ];
+    const values: unknown[] = [
+      input.tenantId,
+      input.organizationId,
+      input.workspaceId,
+    ];
+
+    if (input.query.search) {
+      values.push(`%${input.query.search}%`);
+      const position = values.length;
+      predicates.push(
+        `(name ILIKE $${position} OR status ILIKE $${position} OR id::text ILIKE $${position} OR definition_json->'trigger'->>'adapter' ILIKE $${position})`,
+      );
+    }
+
+    const filterColumns: SqlColumnMap = {
+      id: "id::text",
+      name: "name",
+      status: "status",
+      createdAt: "created_at",
+      updatedAt: "updated_at",
+      triggerAdapter: "definition_json->'trigger'->>'adapter'",
+    };
+
+    appendFilterGroupClause({
+      predicates,
+      values,
+      filterGroup: input.query.filterGroup,
+      allowedColumns: filterColumns,
+    });
+
+    const pagination = resolvePaginationState(input.query, {
+      limit: 25,
+      maxLimit: 100,
+    });
+    const appliedSorts = normalizeSortDirectives(
+      input.query.sort,
+      filterColumns,
+      [{ field: "updatedAt", direction: "desc" }],
+    );
+    const orderBy = buildOrderByClause(appliedSorts, filterColumns);
+
+    const countResult = await this.pool.query<{ total: string }>(
+      `SELECT COUNT(*)::bigint AS total
+       FROM workflows
+       WHERE ${predicates.join("\n         AND ")}`,
+      values,
+    );
+
+    const pagedValues = [...values, pagination.limit, pagination.offset];
+    const limitPosition = pagedValues.length - 1;
+    const offsetPosition = pagedValues.length;
+    const rowsResult = await this.pool.query<WorkflowRecord>(
+      `SELECT *
+       FROM workflows
+       WHERE ${predicates.join("\n         AND ")}
+       ${orderBy}
+       LIMIT $${limitPosition}
+       OFFSET $${offsetPosition}`,
+      pagedValues,
+    );
+
+    const totalApprox = Number(countResult.rows[0]?.total || 0);
+    const hasMore = pagination.offset + rowsResult.rows.length < totalApprox;
+
+    return {
+      rows: rowsResult.rows,
+      nextCursor: hasMore
+        ? encodeOffsetCursor(pagination.offset + rowsResult.rows.length)
+        : null,
+      totalApprox,
+      appliedFilters: input.query.filterGroup || null,
+      appliedSorts,
+      page: pagination.page,
+      limit: pagination.limit,
+      hasMore,
+    };
   }
 
   async countByWorkspace(input: {

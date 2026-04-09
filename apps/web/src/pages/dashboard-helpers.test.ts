@@ -4,10 +4,12 @@ import {
   formatDurationSeconds,
   formatPercent,
   getFailureRate,
+  getDashboardPrimaryAction,
   getRecentFailingAdapters,
   getRecentFailingWorkflows,
   getTopRetryingWorkflows,
 } from "./dashboard-helpers";
+import { PLATFORM_MODES } from "../platform-mode";
 
 describe("dashboard-helpers", () => {
   it("builds deterministic time window filters", () => {
@@ -104,5 +106,52 @@ describe("dashboard-helpers", () => {
     expect(failingAdapters).toHaveLength(2);
     expect(failingAdapters[0].adapterKey).toBe("shopify");
     expect(formatDurationSeconds(75)).toBe("1m 15s");
+  });
+
+  it("computes the dashboard primary next action", () => {
+    expect(
+      getDashboardPrimaryAction({
+        connectedReadyApps: 0,
+        workflowsCount: 0,
+        totalRuns: 0,
+      }).reason,
+    ).toBe("connect");
+
+    expect(
+      getDashboardPrimaryAction({
+        connectedReadyApps: 1,
+        workflowsCount: 0,
+        totalRuns: 0,
+      }).reason,
+    ).toBe("build");
+
+    expect(
+      getDashboardPrimaryAction({
+        connectedReadyApps: 1,
+        workflowsCount: 1,
+        totalRuns: 0,
+      }).reason,
+    ).toBe("test");
+
+    expect(
+      getDashboardPrimaryAction({
+        connectedReadyApps: 1,
+        workflowsCount: 1,
+        totalRuns: 1,
+      }).reason,
+    ).toBe("operate");
+  });
+
+  it("prefers the prototype first-success journey when no runs exist", () => {
+    const action = getDashboardPrimaryAction({
+      connectedReadyApps: 0,
+      workflowsCount: 0,
+      totalRuns: 0,
+      mode: PLATFORM_MODES.PROTOTYPE,
+    });
+
+    expect(action.label).toBe("Start first-success demo");
+    expect(action.path).toBe("/onboarding");
+    expect(action.description).toContain("PROTOTYPE DEMO PATH");
   });
 });

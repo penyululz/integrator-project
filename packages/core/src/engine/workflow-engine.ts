@@ -178,6 +178,10 @@ const DEFAULT_SCHEDULED_WAIT_LEASE_MS = 60_000;
 const DEFAULT_SCHEDULED_WAIT_RETRY_BASE_DELAY_MS = 1_000;
 const MAX_SCHEDULED_WAIT_RETRY_DELAY_MS = 300_000;
 const DEFAULT_ADMISSION_DEFER_DELAY_MS = 500;
+// TODO(vNext): strengthen queue claim semantics with explicit at-least-once leases
+// and consumer heartbeats once the worker pool scales beyond a single Redis queue.
+// TODO(vNext): add deterministic fault-injection hooks for retry/dead-letter/delay
+// transitions so resilience testing can run in CI without external chaos tooling.
 
 function clampNumber(input: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, input));
@@ -996,10 +1000,15 @@ export class WorkflowEngine {
   }
 
   private getRetryQueueKey(): string {
+    // SHARED BETWEEN PROTOTYPE AND LIVE
+    // Runtime ownership is DB-backed (`retry_queue`) while event ingress uses BullMQ.
+    // Phase 3 can evolve this into stronger at-least-once semantics.
     return "retry_queue";
   }
 
   private getScheduledWaitQueueKey(): string {
+    // SHARED BETWEEN PROTOTYPE AND LIVE
+    // Durable waits remain DB-backed (`scheduled_waits`) and are claimed by worker loop.
     return "scheduled_waits";
   }
 

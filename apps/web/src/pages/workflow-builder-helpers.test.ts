@@ -6,6 +6,7 @@ import {
   buildWorkflowFromTemplate,
   buildDefaultWorkflow,
   buildReferenceHints,
+  duplicateWorkflowStepAsType,
   filterWorkflowTemplates,
   generateWorkflowFromGoal,
   getTemplateStatus,
@@ -266,6 +267,38 @@ describe("workflow-builder-helpers", () => {
     });
     expect(invalid.valid).toBe(false);
     expect(invalid.errors.some((error) => error.includes("Duplicate step id"))).toBe(true);
+  });
+
+  it("duplicates steps using convert-by-duplicate semantics", () => {
+    const duplicated = duplicateWorkflowStepAsType({
+      source: {
+        id: "step_old",
+        type: "action",
+        adapter: "slack",
+        action: "sendMessage",
+        config: {},
+        input: {
+          text: {
+            $literal: "hello",
+          },
+        },
+      },
+      nextType: "delay",
+      existingStepIds: ["step_old"],
+      adapters: [
+        {
+          key: "slack",
+          displayName: "Slack",
+          description: "",
+          authType: "oauth2",
+          supportedTriggers: [],
+          supportedActions: ["sendMessage"],
+        },
+      ],
+    });
+
+    expect(duplicated.id).not.toBe("step_old");
+    expect(duplicated.type).toBe("delay");
   });
 
   it("suggests tools for goal language and generates agent workflows", () => {

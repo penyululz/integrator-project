@@ -240,7 +240,7 @@ async function createRetentionRuntime() {
   };
 
   return {
-    app: createApp(runtime),
+    app: await createApp(runtime),
     runtime,
     pool,
     scope: {
@@ -608,15 +608,15 @@ describe("Retention API visibility", () => {
         workspaceSlug: "default",
       });
 
-      const unauthenticated = await request(app).get("/api/v1/retention");
+      const unauthenticated = await request(app.server).get("/api/v1/retention");
       expect(unauthenticated.status).toBe(401);
 
-      const forbidden = await request(app)
+      const forbidden = await request(app.server)
         .get("/api/v1/retention")
         .set("authorization", `Bearer ${memberLogin.accessToken}`);
       expect(forbidden.status).toBe(403);
 
-      const policyResponse = await request(app)
+      const policyResponse = await request(app.server)
         .get("/api/v1/retention")
         .set("authorization", `Bearer ${ownerLogin.accessToken}`);
       expect(policyResponse.status).toBe(200);
@@ -624,7 +624,7 @@ describe("Retention API visibility", () => {
 
       await runtime.retentionCleanupService!.runCleanupCycle(new Date());
 
-      const statusResponse = await request(app)
+      const statusResponse = await request(app.server)
         .get("/api/v1/retention/status")
         .set("authorization", `Bearer ${ownerLogin.accessToken}`);
       expect(statusResponse.status).toBe(200);

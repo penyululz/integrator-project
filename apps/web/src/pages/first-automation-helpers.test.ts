@@ -7,6 +7,7 @@ import {
   buildWebhookUrl,
   findFirstAutomationWorkflow,
   findLatestRunForWorkflow,
+  getFirstAutomationPrimaryAction,
   getFirstAutomationStepStatus,
   isWebhookToSlackWorkflow,
 } from "./first-automation-helpers";
@@ -152,5 +153,43 @@ describe("first-automation-helpers", () => {
       hasWorkflow: true,
       hasRun: true,
     });
+  });
+
+  it("derives first-automation primary action from completion state", () => {
+    expect(
+      getFirstAutomationPrimaryAction({
+        connectedSlack: false,
+        hasTemplate: true,
+        hasWorkflow: false,
+        hasRun: false,
+      }).stage,
+    ).toBe("connect");
+
+    expect(
+      getFirstAutomationPrimaryAction({
+        connectedSlack: true,
+        hasTemplate: true,
+        hasWorkflow: false,
+        hasRun: false,
+      }).stage,
+    ).toBe("build");
+
+    expect(
+      getFirstAutomationPrimaryAction({
+        connectedSlack: true,
+        hasTemplate: true,
+        hasWorkflow: true,
+        hasRun: false,
+      }).stage,
+    ).toBe("test");
+
+    expect(
+      getFirstAutomationPrimaryAction({
+        connectedSlack: true,
+        hasTemplate: true,
+        hasWorkflow: true,
+        hasRun: true,
+      }).stage,
+    ).toBe("observe");
   });
 });

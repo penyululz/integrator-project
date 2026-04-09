@@ -36,6 +36,20 @@ describe("audit-helpers", () => {
         targetId: "wait-id",
       }),
     ).toBe("/runs?waitId=wait-id");
+
+    expect(
+      buildAuditTargetLink({
+        targetType: "agent_approval",
+        targetId: "approval-id",
+      }),
+    ).toBe("/approvals?approvalId=approval-id");
+
+    expect(
+      buildAuditTargetLink({
+        targetType: "alert_dispatch",
+        targetId: "dispatch-id",
+      }),
+    ).toBe("/alerts?targetId=dispatch-id");
   });
 
   it("builds readable audit entry descriptions", () => {

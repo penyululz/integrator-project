@@ -40,6 +40,16 @@ export function buildAuditTargetLink(
   if (entry.targetType === "scheduled_wait") {
     return `/runs?waitId=${encodeURIComponent(entry.targetId)}`;
   }
+  if (entry.targetType === "agent_approval" || entry.targetType === "approval_request") {
+    return `/approvals?approvalId=${encodeURIComponent(entry.targetId)}`;
+  }
+  if (
+    entry.targetType === "alert_dispatch" ||
+    entry.targetType === "alert_delivery" ||
+    entry.targetType === "alert_config"
+  ) {
+    return `/alerts?targetId=${encodeURIComponent(entry.targetId)}`;
+  }
   return null;
 }
 

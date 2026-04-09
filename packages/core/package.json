@@ -25,6 +25,7 @@
     "@integration/adapter-webhook": "*",
     "@integration/shared": "*",
     "ajv": "^8.17.1",
+    "bullmq": "^5.61.0",
     "dotenv": "^17.2.3",
     "pg": "^8.16.3",
     "redis": "^4.7.1",

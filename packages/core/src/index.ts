@@ -10,6 +10,7 @@ import { AlertRepository } from "./repositories/alert-repository";
 import { RetentionRepository } from "./repositories/retention-repository";
 import { PluginLoader } from "./engine/plugin-loader";
 import { EventQueue } from "./engine/event-queue";
+import { resolveEventQueueBootstrapConfig } from "./engine/event-queue-config";
 import { WorkflowEngine } from "./engine/workflow-engine";
 import { OAuthService } from "./auth/oauth-service";
 import { CredentialResolver } from "./auth/credential-resolver";
@@ -267,7 +268,18 @@ export async function createCoreRuntime(): Promise<CoreRuntime> {
     },
   });
 
-  const eventQueue = new EventQueue(redis, "integration:events", observability);
+  // QUEUE: Redis + BullMQ
+  // SHARED BETWEEN PROTOTYPE AND LIVE
+  // `INTEGRATOR_QUEUE_DRIVER=legacy` preserves Redis-list behavior for compatibility.
+  const queueConfig = resolveEventQueueBootstrapConfig(
+    process.env as Record<string, string | undefined>,
+  );
+  const eventQueue = new EventQueue(
+    redis,
+    queueConfig.queueKey,
+    observability,
+    queueConfig,
+  );
   const credentialResolver = new CredentialResolver(credentialRepository);
   const alertDeliveryService = new AlertDeliveryService(
     alertRepository,
@@ -318,6 +330,7 @@ export async function createCoreRuntime(): Promise<CoreRuntime> {
       retentionRepository,
     },
     close: async () => {
+      await eventQueue.close();
       await closeRedisClient();
       await closePostgresPool();
     },

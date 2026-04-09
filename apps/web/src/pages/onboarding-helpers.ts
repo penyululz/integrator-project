@@ -1,3 +1,5 @@
+import { PLATFORM_MODES, type PlatformMode } from "../platform-mode";
+
 export type OnboardingSnapshot = {
   integrationsCount: number;
   connectedCredentialProviders: number;
@@ -17,6 +19,12 @@ export type OnboardingStep = {
 
 export type FirstSuccessLink = {
   id: string;
+  label: string;
+  path: string;
+  description: string;
+};
+
+export type OnboardingPrimaryAction = {
   label: string;
   path: string;
   description: string;
@@ -101,6 +109,7 @@ export function getNextRecommendedStep(steps: OnboardingStep[]): OnboardingStep 
 export function buildFirstSuccessLinks(input: {
   steps: OnboardingStep[];
   isOperator: boolean;
+  mode?: PlatformMode;
 }): FirstSuccessLink[] {
   const links: FirstSuccessLink[] = [];
   const nextStep = getNextPendingStep(input.steps);
@@ -147,6 +156,14 @@ export function buildFirstSuccessLinks(input: {
       path: "/alerts",
       description: "Send a test alert and verify delivery logs.",
     });
+    if (input.mode === PLATFORM_MODES.PROTOTYPE) {
+      links.push({
+        id: "approvals",
+        label: "Approvals",
+        path: "/approvals",
+        description: "Inspect seeded pending and completed approvals in Prototype Mode.",
+      });
+    }
   }
 
   const seen = new Set<string>();
@@ -158,4 +175,41 @@ export function buildFirstSuccessLinks(input: {
     seen.add(dedupeKey);
     return true;
   });
+}
+
+export function getOnboardingPrimaryAction(input: {
+  steps: OnboardingStep[];
+  isOperator: boolean;
+  mode?: PlatformMode;
+}): OnboardingPrimaryAction {
+  const nextStep = getNextPendingStep(input.steps);
+  if (input.mode === PLATFORM_MODES.PROTOTYPE && nextStep) {
+    return {
+      label: "Start first-success demo",
+      path: "/first-automation",
+      description:
+        "FIRST-SUCCESS DEMO: NO REAL EXTERNAL SETUP REQUIRED. Follow the guided path to trigger and inspect a simulated run.",
+    };
+  }
+  if (nextStep) {
+    return {
+      label: nextStep.ctaLabel,
+      path: nextStep.ctaPath,
+      description: `Next step: ${nextStep.title}.`,
+    };
+  }
+
+  if (input.isOperator) {
+    return {
+      label: "Open Dashboard",
+      path: "/dashboard",
+      description: "Onboarding is complete. Monitor runs, alerts, and audit activity from the dashboard.",
+    };
+  }
+
+  return {
+    label: "Open Runs",
+    path: "/runs",
+    description: "Onboarding is complete. Continue by reviewing recent automation runs.",
+  };
 }

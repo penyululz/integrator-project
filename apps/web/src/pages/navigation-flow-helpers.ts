@@ -1,3 +1,24 @@
+export const STABLE_WORKSPACE_ROUTES = {
+  dashboard: "/dashboard",
+  apps: "/integrations",
+  workflows: "/workflows",
+  runs: "/runs",
+  alerts: "/alerts",
+  audit: "/audit-logs",
+  approvals: "/approvals",
+  settings: "/settings",
+} as const;
+
+export function getDefaultWorkspaceRoute(): string {
+  return STABLE_WORKSPACE_ROUTES.dashboard;
+}
+
+export function isKnownWorkspaceRoute(pathname: string): boolean {
+  return Object.values(STABLE_WORKSPACE_ROUTES).some(
+    (route) => pathname === route || pathname.startsWith(`${route}/`),
+  );
+}
+
 export function getReturnPath(input: {
   returnTo?: string | null;
   templateId?: string | null;
