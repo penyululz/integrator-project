@@ -322,7 +322,7 @@ async function createObservabilityRuntimeFixture() {
   };
 
   return {
-    app: createApp(runtime),
+    app: await createApp(runtime),
     runtime,
     scope: {
       tenantId,
@@ -351,7 +351,7 @@ describe("Observability metrics + analytics", () => {
         queue: "integration:events",
       });
 
-      const response = await request(app).get("/metrics");
+      const response = await request(app.server).get("/metrics");
       expect(response.status).toBe(200);
       expect(response.headers["content-type"]).toContain("text/plain");
       expect(response.text).toContain("workflow_runs_total");
@@ -378,7 +378,7 @@ describe("Observability metrics + analytics", () => {
         workspaceSlug: "default",
       });
 
-      const overview = await request(app)
+      const overview = await request(app.server)
         .get("/api/v1/analytics/overview")
         .set("authorization", `Bearer ${login.accessToken}`);
       expect(overview.status).toBe(200);
@@ -396,7 +396,7 @@ describe("Observability metrics + analytics", () => {
       );
       expect(Array.isArray(overview.body.alerts)).toBe(true);
 
-      const workflows = await request(app)
+      const workflows = await request(app.server)
         .get("/api/v1/analytics/workflows")
         .set("authorization", `Bearer ${login.accessToken}`);
       expect(workflows.status).toBe(200);
@@ -411,7 +411,7 @@ describe("Observability metrics + analytics", () => {
         ]),
       );
 
-      const adapters = await request(app)
+      const adapters = await request(app.server)
         .get("/api/v1/analytics/adapters")
         .set("authorization", `Bearer ${login.accessToken}`);
       expect(adapters.status).toBe(200);
@@ -430,7 +430,7 @@ describe("Observability metrics + analytics", () => {
         ]),
       );
 
-      const forbiddenWorkspace = await request(app)
+      const forbiddenWorkspace = await request(app.server)
         .get("/api/v1/analytics/overview")
         .query({
           workspaceId: `${scope.workspaceId}-outside`,

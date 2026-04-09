@@ -313,7 +313,7 @@ async function createDurableDelayRuntime(input: {
   };
 
   return {
-    app: createApp(runtime),
+    app: await createApp(runtime),
     runtime,
     workflow,
     probeAdapter,
@@ -326,7 +326,7 @@ async function createDurableDelayRuntime(input: {
 }
 
 async function queueWebhookEvent(input: {
-  app: ReturnType<typeof createApp>;
+  app: Awaited<ReturnType<typeof createApp>>;
   runtime: CoreRuntime;
   payload: Record<string, unknown>;
 }) {
@@ -337,7 +337,7 @@ async function queueWebhookEvent(input: {
     workspaceSlug: "default",
   });
 
-  const response = await request(input.app)
+  const response = await request(input.app.server)
     .post("/api/v1/webhook/webhook/http_post")
     .set("authorization", `Bearer ${login.accessToken}`)
     .send({

@@ -376,7 +376,7 @@ async function createOperatorRuntime() {
   };
 
   return {
-    app: createApp(runtime),
+    app: await createApp(runtime),
     runtime,
     pool,
     fixture: {
@@ -453,7 +453,7 @@ describe("Operator controls + run recovery", () => {
       });
       const memberToken = await loginAs(runtime, "member");
 
-      const response = await request(app)
+      const response = await request(app.server)
         .post(`/api/v1/runs/${run.id}/cancel`)
         .set("authorization", `Bearer ${memberToken}`)
         .send({
@@ -493,7 +493,7 @@ describe("Operator controls + run recovery", () => {
       const runId = queuedRun.rows[0].id;
 
       const adminToken = await loginAs(runtime, "admin");
-      const response = await request(app)
+      const response = await request(app.server)
         .post(`/api/v1/runs/${runId}/cancel`)
         .set("authorization", `Bearer ${adminToken}`)
         .send({
@@ -519,7 +519,7 @@ describe("Operator controls + run recovery", () => {
       expect(run.status).toBe("waiting");
 
       const adminToken = await loginAs(runtime, "admin");
-      const response = await request(app)
+      const response = await request(app.server)
         .post(`/api/v1/runs/${run.id}/cancel`)
         .set("authorization", `Bearer ${adminToken}`)
         .send({
@@ -577,7 +577,7 @@ describe("Operator controls + run recovery", () => {
       expect(deadRun.status).toBe("dead_lettered");
 
       const adminToken = await loginAs(runtime, "admin");
-      const replayResponse = await request(app)
+      const replayResponse = await request(app.server)
         .post(`/api/v1/runs/${deadRun.id}/replay`)
         .set("authorization", `Bearer ${adminToken}`)
         .send({
@@ -640,7 +640,7 @@ describe("Operator controls + run recovery", () => {
 
       const adminToken = await loginAs(runtime, "admin");
       const rescheduledFor = new Date(Date.now() + 15 * 60 * 1000).toISOString();
-      const rescheduleResponse = await request(app)
+      const rescheduleResponse = await request(app.server)
         .post(`/api/v1/waits/${wait.id}/reschedule`)
         .set("authorization", `Bearer ${adminToken}`)
         .send({
@@ -650,7 +650,7 @@ describe("Operator controls + run recovery", () => {
       expect(rescheduleResponse.status).toBe(200);
       expect(rescheduleResponse.body.wait.status).toBe("pending");
 
-      const releaseResponse = await request(app)
+      const releaseResponse = await request(app.server)
         .post(`/api/v1/waits/${wait.id}/release-now`)
         .set("authorization", `Bearer ${adminToken}`)
         .send({
@@ -659,7 +659,7 @@ describe("Operator controls + run recovery", () => {
       expect(releaseResponse.status).toBe(200);
       expect(releaseResponse.body.wait.status).toBe("pending");
 
-      const cancelResponse = await request(app)
+      const cancelResponse = await request(app.server)
         .post(`/api/v1/waits/${wait.id}/cancel`)
         .set("authorization", `Bearer ${adminToken}`)
         .send({
@@ -677,7 +677,7 @@ describe("Operator controls + run recovery", () => {
           kind: "resume-target",
         },
       });
-      const resumeResponse = await request(app)
+      const resumeResponse = await request(app.server)
         .post(`/api/v1/runs/${runResumeTarget.id}/resume-if-waiting`)
         .set("authorization", `Bearer ${adminToken}`)
         .send({
