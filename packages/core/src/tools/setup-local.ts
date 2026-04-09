@@ -75,11 +75,18 @@ async function waitForInfra(repoRoot: string, env: NodeJS.ProcessEnv): Promise<v
 }
 
 async function runSetup(): Promise<void> {
-  const { repoRoot, envPath, created, sourcePath } = initializeRootEnv();
+  const { repoRoot, envPath, created, sourcePath, synced } = initializeRootEnv({
+    mode: "Prototype Mode",
+  });
   if (created) {
     console.log(`[setup:local] initialized .env from ${sourcePath}`);
   } else {
     console.log(`[setup:local] using existing .env`);
+  }
+  if (synced.added.length > 0 || synced.updated.length > 0) {
+    console.log(
+      `[setup:local] synchronized env keys (added: ${synced.added.join(", ") || "(none)"}, updated: ${synced.updated.join(", ") || "(none)"})`,
+    );
   }
 
   const env = {

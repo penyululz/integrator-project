@@ -1,0 +1,177 @@
+{{- range $processName, $config := .Values.processes }}
+{{- if hasKey $config "cron" }}
+# Skip {{ $processName }} as it is a cron job
+{{- continue }}
+{{- end }}
+
+{{- $mappings := dict }}
+{{- if hasKey $config "web" }}
+{{- range $pdx, $port_map := $config.web.port_maps }}
+{{- $mappings := set $mappings $port_map.name "true" }}
+{{- end }}
+{{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    app.kubernetes.io/version: {{ $.Values.global.deployment_id | quote }}
+    dokku.com/builder-type: {{ $.Values.global.image.type }}
+    dokku.com/managed: "true"
+    kubectl.kubernetes.io/default-container: {{ $.Values.global.app_name }}-{{ $processName }}
+    {{ include "print.annotations" (dict "config" $.Values.global "key" "deployment") | indent 4 }}
+    {{ include "print.annotations" (dict "config" $config "key" "deployment") | indent 4 }}
+  labels:
+    app.kubernetes.io/instance: {{ $.Values.global.app_name }}-{{ $processName }}
+    app.kubernetes.io/name: {{ $processName }}
+    app.kubernetes.io/part-of: {{ $.Values.global.app_name }}
+    {{ include "print.labels" (dict "config" $.Values.global "key" "deployment") | indent 4 }}
+    {{ include "print.labels" (dict "config" $config "key" "deployment") | indent 4 }}
+  name: {{ $.Values.global.app_name }}-{{ $processName }}
+  namespace: {{ $.Values.global.namespace }}
+spec:
+  {{- if not (and $config.autoscaling (and $config.autoscaling.enabled (eq $config.autoscaling.type "keda"))) }}
+  replicas: {{ $config.replicas }}
+  {{- end }}
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ $.Values.global.app_name }}-{{ $processName }}
+      app.kubernetes.io/name: {{ $processName }}
+      app.kubernetes.io/part-of: {{ $.Values.global.app_name }}
+      {{ include "print.labels" (dict "config" $.Values.global "key" "pod") | indent 6 }}
+      {{ include "print.labels" (dict "config" $config "key" "pod") | indent 6 }}
+  strategy: {}
+  template:
+    metadata:
+      annotations:
+        app.kubernetes.io/version: {{ $.Values.global.deployment_id | quote }}
+        dokku.com/builder-type: {{ $.Values.global.image.type }}
+        dokku.com/managed: "true"
+        kubectl.kubernetes.io/default-container: {{ $.Values.global.app_name }}-{{ $processName }}
+        {{ include "print.annotations" (dict "config" $.Values.global "key" "pod") | indent 8 }}
+        {{ include "print.annotations" (dict "config" $config "key" "pod") | indent 8 }}
+      labels:
+        app.kubernetes.io/instance: {{ $.Values.global.app_name }}-{{ $processName }}
+        app.kubernetes.io/name: {{ $processName }}
+        app.kubernetes.io/part-of: {{ $.Values.global.app_name }}
+        {{ include "print.labels" (dict "config" $.Values.global "key" "pod") | indent 8 }}
+        {{ include "print.labels" (dict "config" $config "key" "pod") | indent 8 }}
+    spec:
+      containers:
+      - args:
+        {{- range $config.args }}
+        - {{ . }}
+        {{- end }}
+        {{- if hasKey $config "web" }}
+        env:
+        - name: PORT
+          {{- if eq $processName "web" }}
+          value: "{{ $.Values.global.network.primary_port }}"
+          {{- else }}
+          value: "5000"
+          {{- end }}
+        {{- end }}
+        envFrom:
+        - secretRef:
+            name: env-{{ $.Values.global.app_name }}.{{ $.Values.global.deployment_id }}
+            optional: true
+        image: {{ $.Values.global.image.name }}
+        imagePullPolicy: Always
+        name: {{ $.Values.global.app_name }}-{{ $processName }}
+        {{- if hasKey $config "web" }}
+        ports:
+        {{- range $pdx, $port_map := $config.web.port_maps }}
+        {{- if and (eq $port_map.scheme "https") (hasKey $mappings (printf "http-80-%.0f" $port_map.container_port)) }}
+        {{- continue }}
+        {{- end }}
+        - containerPort: {{ $port_map.container_port }}
+          name: {{ $port_map.name }}
+          protocol: {{ $port_map.protocol }}
+        {{- end }}
+        {{- end }}
+        {{- if and $config.resources (or $config.resources.limits $config.resources.requests) }}
+        resources:
+          {{- if $config.resources.limits }}
+          limits:
+            {{- if $config.resources.limits.cpu }}
+            cpu: {{ $config.resources.limits.cpu }}
+            {{- end }}
+            {{- if $config.resources.limits.memory }}
+            memory: {{ $config.resources.limits.memory }}
+            {{- end }}
+          {{- end }}
+          {{- if $config.resources.requests }}
+          requests:
+            {{- if $config.resources.requests.cpu }}
+            cpu: {{ $config.resources.requests.cpu }}
+            {{- end }}
+            {{- if $config.resources.requests.memory }}
+            memory: {{ $config.resources.requests.memory }}
+            {{- end }}
+          {{- end }}
+        {{- end }}
+        {{- if and $config.healthchecks $config.healthchecks.startup }}
+        startupProbe:
+          {{ $config.healthchecks.startup | toJson | indent 10 }}
+        {{- end }}
+        {{- if and $config.healthchecks $config.healthchecks.liveness }}
+        livenessProbe:
+          {{ $config.healthchecks.liveness | toJson | indent 10 }}
+        {{- end }}
+        {{- if and $config.healthchecks $config.healthchecks.readiness }}
+        readinessProbe:
+          {{ $config.healthchecks.readiness | toJson | indent 10 }}
+        {{- end }}
+        {{- if hasKey $.Values.global "security_context" }}
+        securityContext:
+          {{- if $.Values.global.security_context.privileged }}
+          privileged: true
+          {{- end }}
+          {{- if hasKey $.Values.global.security_context "capabilities" }}
+          capabilities:
+            {{- if hasKey $.Values.global.security_context.capabilities "add" }}
+            add:
+              {{- range $.Values.global.security_context.capabilities.add }}
+              - {{ . }}
+              {{- end }}
+            {{- end }}
+            {{- if hasKey $.Values.global.security_context.capabilities "drop" }}
+            drop:
+              {{- range $.Values.global.security_context.capabilities.drop }}
+              - {{ . }}
+              {{- end }}
+            {{- end }}
+          {{- end }}
+        {{- end }}
+        {{- if $.Values.global.image.working_dir }}
+        workingDir: {{ $.Values.global.image.working_dir }}
+        {{- end }}
+        {{- if $config.volumes }}
+        volumeMounts:
+        {{- range $volume := $config.volumes }}
+        - name: {{ $volume.name }}
+          mountPath: {{ $volume.mount_path }}
+        {{- end }}
+        {{- end }}
+      {{- if $.Values.global.image.image_pull_secrets }}
+      imagePullSecrets:
+      - name: {{ $.Values.global.image.image_pull_secrets }}
+      {{- end }}
+      serviceAccountName: {{ $.Values.global.app_name }}
+      {{- if $config.volumes }}
+      volumes:
+        {{- range $volume := $config.volumes }}
+        - name: {{ $volume.name }}
+          {{- if $volume.empty_dir }}
+          emptyDir:
+            {{- if $volume.empty_dir.medium }}
+            medium: {{ $volume.empty_dir.medium }}
+            {{- end }}
+            {{- if $volume.empty_dir.size_limit }}
+            sizeLimit: {{ $volume.empty_dir.size_limit }}
+            {{- end }}
+          {{- end }}
+        {{- end }}
+      {{- end }}
+{{- end }}

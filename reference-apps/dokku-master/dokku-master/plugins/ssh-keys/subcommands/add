@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+set -eo pipefail
+[[ $DOKKU_TRACE ]] && set -x
+source "$PLUGIN_CORE_AVAILABLE_PATH/common/functions"
+source "$PLUGIN_AVAILABLE_PATH/ssh-keys/functions"
+
+cmd-ssh-keys-add() {
+  declare desc="add a new key via sshcommand"
+  declare cmd="ssh-keys:add"
+  [[ "$1" == "$cmd" ]] && shift 1
+  declare NAME="$1" KEY_FILE="$2"
+  local TMP_KEY_FILE
+
+  TMP_KEY_FILE=$(mktemp "/tmp/dokku-${DOKKU_PID}-${FUNCNAME[0]}.XXXXXX")
+  trap "rm -rf '$TMP_KEY_FILE' >/dev/null" RETURN INT TERM EXIT
+
+  if [[ -n "$KEY_FILE" ]]; then
+    true
+  elif [[ -p /dev/stdin ]]; then
+    local key_contents
+    read -r key_contents
+    echo "$key_contents" >"$TMP_KEY_FILE"
+    KEY_FILE="$TMP_KEY_FILE"
+  else
+    dokku_log_fail "No key specified via file or pipe"
+  fi
+
+  if [[ ! -s "$KEY_FILE" ]]; then
+    dokku_log_fail "Empty key was specified"
+  fi
+
+  local count="$(wc -l "$KEY_FILE" | awk '{ print $1; }')"
+  # Don't check for "-eq 1" as no newlines is also a valid SSH key
+  [[ "$count" -lt 2 ]] || dokku_log_fail "Too many keys provided, set one per invocation of dokku ssh-keys:add <NAME> <KEY_FILE>"
+  ssh-keygen -lf "$KEY_FILE" &>/dev/null || dokku_log_fail "Key specified in is not a valid ssh public key"
+  create_ssh_key_file
+  verify_ssh_key_exists
+  sshcommand acl-add dokku "$NAME" "$KEY_FILE" || dokku_log_fail "sshcommand returned an error: $?"
+  verify_ssh_key_file
+}
+
+cmd-ssh-keys-add "$@"

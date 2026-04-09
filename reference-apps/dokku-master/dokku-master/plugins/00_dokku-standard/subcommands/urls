@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+source "$PLUGIN_CORE_AVAILABLE_PATH/common/functions"
+set -eo pipefail
+[[ $DOKKU_TRACE ]] && set -x
+
+cmd-urls() {
+  declare desc="reports dokku vitals for troubleshooting"
+  declare cmd="url"
+  declare URL_TYPE="$1" APP="$2"
+
+  verify_app_name "$APP"
+  plugn trigger domains-urls "$APP" "$URL_TYPE"
+}
+
+cmd-urls "$@"

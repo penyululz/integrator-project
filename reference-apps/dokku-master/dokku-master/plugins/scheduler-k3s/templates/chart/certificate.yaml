@@ -1,0 +1,41 @@
+{{- range $processName, $config := .Values.processes }}
+{{- if not (hasKey $config "web") }}
+# Skip {{ $processName }} as it doesn't have a web section
+{{- continue }}
+{{- end }}
+
+{{- if and $config.web.tls.enabled (not $config.web.tls.use_imported_cert) $config.web.domains }}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  annotations:
+    dokku.com/managed: "true"
+    {{ include "print.annotations" (dict "config" $.Values.global "key" "certificate") | indent 4 }}
+    {{ include "print.annotations" (dict "config" $config "key" "certificate") | indent 4 }}
+  labels:
+    app.kubernetes.io/name: {{ $.Values.global.app_name }}-{{ $processName }}
+    app.kubernetes.io/part-of: {{ $.Values.global.app_name }}
+    {{ include "print.labels" (dict "config" $.Values.global "key" "certificate") | indent 4 }}
+    {{ include "print.labels" (dict "config" $config "key" "certificate") | indent 4 }}
+  name: {{ $.Values.global.app_name }}-{{ $processName }}
+  namespace: {{ $.Values.global.namespace }}
+spec:
+  issuerRef:
+    kind: ClusterIssuer
+    name: {{ $config.web.tls.issuer_name }}
+  secretName: tls-{{ $.Values.global.app_name }}-{{ $processName }}
+  secretTemplate:
+    annotations:
+      dokku.com/managed: "true"
+    labels:
+      app.kubernetes.io/name: {{ $.Values.global.app_name }}-{{ $processName }}
+      app.kubernetes.io/part-of: {{ $.Values.global.app_name }}
+      {{ include "print.labels" (dict "config" $.Values.global "key" "secret") | indent 6 }}
+      {{ include "print.labels" (dict "config" $config "key" "secret") | indent 6 }}
+  dnsNames:
+    {{- range $idx, $domain := $config.web.domains }}
+    - {{ $domain.name }}
+    {{- end }}
+{{- end }}
+{{- end }}

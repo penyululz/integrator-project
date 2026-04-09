@@ -1,0 +1,35 @@
+{{- range $processName, $config := .Values.processes }}
+{{- if not (hasKey $config "web") }}
+# Skip {{ $processName }} as it doesn't have a web section
+{{- continue }}
+{{- end }}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  annotations:
+    dokku.com/managed: "true"
+    {{ include "print.annotations" (dict "config" $.Values.global "key" "service") | indent 4 }}
+    {{ include "print.annotations" (dict "config" $config "key" "service") | indent 4 }}
+  labels:
+    app.kubernetes.io/instance: {{ $.Values.global.app_name }}-{{ $processName }}
+    app.kubernetes.io/name: {{ $processName }}
+    app.kubernetes.io/part-of: {{ $.Values.global.app_name }}
+    {{ include "print.labels" (dict "config" $.Values.global "key" "service") | indent 4 }}
+    {{ include "print.labels" (dict "config" $config "key" "service") | indent 4 }}
+  name: {{ $.Values.global.app_name }}-{{ $processName }}
+  namespace: {{ $.Values.global.namespace }}
+spec:
+  ports:
+  {{- range $pdx, $port_map := $config.web.port_maps }}
+  - name: {{ $port_map.name }}
+    port: {{ $port_map.host_port }}
+    protocol: TCP
+    targetPort: {{ $port_map.container_port }}
+  {{- end }}
+  selector:
+    app.kubernetes.io/instance: {{ $.Values.global.app_name }}-{{ $processName }}
+    app.kubernetes.io/name: {{ $processName }}
+    app.kubernetes.io/part-of: {{ $.Values.global.app_name }}
+{{- end }}

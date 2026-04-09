@@ -1,0 +1,16 @@
+[project]
+id = "python"
+name = "python"
+version = "1.0.0"
+
+[[build.buildpacks]]
+uri = "./cnb/1"
+
+[[build.buildpacks]]
+uri = "./cnb/1"
+
+[[build.buildpacks]]
+uri = "docker.io/paketobuildpacks/python"
+
+[[order.group]]
+uri = "docker.io/paketobuildpacks/procfile"

@@ -324,7 +324,7 @@ Read [`docs/SETUP_GUIDE_SYSTEM.md`](./docs/SETUP_GUIDE_SYSTEM.md) for:
 - Root `.env` is the active runtime file.
 - Root `.env` is used by API, worker, and local tooling.
 - Root `.env` is also used by Docker Compose.
-- `npm run env:init` creates root `.env` from root `.env.example` when missing.
+- `npm run env:init` creates root `.env` when missing and synchronizes missing required keys when it already exists.
 
 ### Services By Mode
 
@@ -380,41 +380,26 @@ Read [`docs/SETUP_GUIDE_SYSTEM.md`](./docs/SETUP_GUIDE_SYSTEM.md) for:
 
 ### Prototype Mode Startup (recommended first run)
 
-1. Install dependencies:
+Fastest path:
 
 ```bash
 npm install
+npm run setup:prototype
+npm run dev:prototype
 ```
 
-2. Initialize environment file:
-
-```bash
-npm run env:init
-```
-
-3. Start infrastructure dependencies:
-
-```bash
-npm run infra:up
-```
-
-4. Run one-time bootstrap (verify + migrate + seed):
-
-```bash
-npm run setup:local
-```
-
-5. Start API + worker + web:
-
-```bash
-npm run dev:local
-```
-
-6. Open:
+Open:
 
 - Web: `http://localhost:3000`
 - API health: `http://localhost:4000/api/v1/health`
 - Metrics: `http://localhost:4000/metrics`
+
+If `3000` or `4000` is occupied, run:
+
+```bash
+npm run ports:free
+npm run dev:prototype
+```
 
 ### Local Testing Commands (Phase 3C)
 
@@ -490,16 +475,19 @@ VPS baseline expectations for Live Mode:
 
 ### Live Mode Startup (same bootstrap, real credentials)
 
-1. Copy root `.env.example` to `.env` (or run `npm run env:init` then edit values).
-2. Set `INTEGRATOR_MODE="Live Mode"` and configure required live secrets:
+1. Configure required live secrets in root `.env`:
    - `JWT_SECRET`
    - `MASTER_ENCRYPTION_KEY`
-3. Keep `APP_ENV=production` for compatibility with existing runtime checks.
-4. Configure platform OAuth registration values as needed:
+2. Configure platform OAuth registration values as needed:
    - `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`
    - `SHOPIFY_CLIENT_ID` / `SHOPIFY_CLIENT_SECRET`
    - `SLACK_CLIENT_ID` / `SLACK_CLIENT_SECRET`
-5. Start PostgreSQL + Redis, run migrations, then start API + worker + web.
+3. Start in Live Mode:
+
+```bash
+npm run setup:live
+npm run dev:live
+```
 
 ### What Can Be Tested Locally (No Public Domain Required)
 

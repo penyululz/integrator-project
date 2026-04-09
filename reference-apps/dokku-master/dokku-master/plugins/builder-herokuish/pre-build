@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+set -eo pipefail
+[[ $DOKKU_TRACE ]] && set -x
+source "$PLUGIN_CORE_AVAILABLE_PATH/common/functions"
+source "$PLUGIN_AVAILABLE_PATH/config/functions"
+
+trigger-builder-herokuish-pre-build-buildpack() {
+  declare desc="builder-herokuish pre-build-buildpack plugin trigger"
+  declare trigger="pre-build-buildpack"
+  declare BUILDER_TYPE="$1" APP="$2" SOURCECODE_WORK_DIR="$3"
+  local IMAGE TMP_WORK_DIR
+
+  if [[ "$BUILDER_TYPE" != "herokuish" ]]; then
+    return
+  fi
+
+  local DOCKER_BUILD_LABEL_ARGS=("--label=org.label-schema.schema-version=1.0" "--label=org.label-schema.vendor=dokku" "--label=com.dokku.image-stage=build" "--label=com.dokku.builder-type=herokuish" "--label=com.dokku.app-name=$APP" "--label=dokku")
+
+  IMAGE=$(get_app_image_name "$APP")
+
+  [[ -z $(config_get --global CURL_CONNECT_TIMEOUT) ]] && config_set --global CURL_CONNECT_TIMEOUT=90
+  [[ -z $(config_get --global CURL_TIMEOUT) ]] && config_set --global CURL_TIMEOUT=600
+
+  dokku_log_info1 "Adding BUILD_ENV to build environment..."
+  TMP_WORK_DIR="$(mktemp -d "/tmp/dokku-${DOKKU_PID}-${FUNCNAME[0]}.XXXXXX")"
+  trap "rm -rf '$TMP_WORK_DIR' >/dev/null" RETURN INT TERM EXIT
+  mkdir -p "$TMP_WORK_DIR/.env.d"
+
+  # create build env files for use in buildpacks like this:
+  # https://github.com/niteoweb/heroku-buildpack-buildout/blob/5879fa3418f7d8e079f1aa5816ba1adde73f4948/bin/compile#L34
+  config_bundle --merged "$APP" | tar -x -C "$TMP_WORK_DIR/.env.d"
+
+  # create build env for 'old style' buildpacks and dokku plugins
+  touch "$TMP_WORK_DIR/.env"
+  if [[ -f "$SOURCECODE_WORK_DIR/.env" ]]; then
+    cp -f "$SOURCECODE_WORK_DIR/.env" "$TMP_WORK_DIR/.env"
+  fi
+  local dotenv_contents="$(sed -Ez '$ s/\n+$//' "$TMP_WORK_DIR/.env")"
+  echo "$dotenv_contents" >"$TMP_WORK_DIR/.env"
+  config_export app "$APP" --format envfile --merged >>"$TMP_WORK_DIR/.env"
+
+  DOKKU_APP_USER=$(config_get "$APP" DOKKU_APP_USER || true)
+  DOKKU_APP_USER=${DOKKU_APP_USER:="herokuishuser"}
+  local DOCKER_CONFIG
+  DOCKER_CONFIG="$(fn-registry-docker-config-dir "$APP")"
+  [[ -n "$DOCKER_CONFIG" ]] && export DOCKER_CONFIG
+  if ! suppress_output "$DOCKER_BIN" image build "${DOCKER_BUILD_LABEL_ARGS[@]}" $DOKKU_GLOBAL_BUILD_ARGS -f "$PLUGIN_AVAILABLE_PATH/builder-herokuish/dockerfiles/pre-build.Dockerfile" --build-arg APP_IMAGE="$IMAGE" --build-arg "DOKKU_APP_USER=$DOKKU_APP_USER" -t $IMAGE "$TMP_WORK_DIR"; then
+    dokku_log_warn "Failure injecting BUILD_ENV into build environment"
+    return 1
+  fi
+
+  dokku_log_verbose_quiet "BUILD_ENV added successfully"
+}
+
+trigger-builder-herokuish-pre-build-buildpack "$@"

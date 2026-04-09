@@ -1,0 +1,9 @@
+/var/log/services/*[!0-9z] {
+  daily
+  missingok
+  rotate 7
+  compress
+  delaycompress
+  notifempty
+  copytruncate
+}

@@ -1,0 +1,167 @@
+#!/usr/bin/env bash
+set -eo pipefail
+
+readonly ROOT_DIR="$(cd "$(dirname "$(dirname "${BASH_SOURCE[0]}")")" && pwd)"
+
+main() {
+  pushd "$ROOT_DIR" >/dev/null || return 1
+  rm -rf docs-main tmp/docs-source tmp/docs-build # tmp/docs-build
+  cp -r docs docs-main
+
+  echo "====> Generating docs image"
+  make docs-build-image
+
+  echo "====> Fetching latest docs"
+  git clone -q https://github.com/dokku/docs.git tmp/docs-build
+
+  echo "====> Processing version: latest"
+  rm -rf tmp/docs-build/docs
+  git clone -q https://github.com/dokku/dokku.git tmp/docs-source
+
+  rm -rf docs/assets
+  mkdir -p docs/assets
+  cp -r docs-main/assets/extra.css docs/assets/extra.css
+  cp -r docs-main/assets/favicons docs/assets/favicons
+  cp -r docs-main/assets/dokku-logo.svg docs/assets/dokku-logo.svg
+
+  rm -rf tmp/docs-build/assets
+  cp -r docs-main/assets tmp/docs-build/assets
+  cp docs-main/_build/app-nginx.conf.sigil tmp/docs-build/app-nginx.conf.sigil
+  mkdir -p tmp/docs-build/nginx.conf.d
+  touch tmp/docs-build/.static
+  echo "[]" >tmp/docs-build/versions.json
+
+  sed -i.bak "s/outdated/outdated_hidden/g" docs/_overrides/main.html && rm docs/_overrides/main.html.bak
+  echo "----> Generating docs"
+  make docs-build
+  if [[ -n "$GITHUB_ACTION" ]]; then
+    sudo chown -R "$(whoami)" site
+  fi
+
+  rm -rf site/_build
+  mv site tmp/docs-build/docs
+  mv docs/home.html tmp/docs-build/index.html
+  sed -i.bak "s/{{NAME}}~{{REF}}/docs/g" tmp/docs-build/index.html && rm tmp/docs-build/index.html.bak
+  sed -i.bak "s/{{NAME}}/docs/g" tmp/docs-build/index.html && rm tmp/docs-build/index.html.bak
+  sed -i.bak 's/="\/docs\/"/="\/"/g' tmp/docs-build/index.html && rm tmp/docs-build/index.html.bak
+
+  jq -C -r '.["max-versions"][]' docs-main/assets/versions.json | while read -r current_version; do
+    major="$(echo "$current_version" | cut -d'.' -f1)"
+    minor="$(echo "$current_version" | cut -d'.' -f2)"
+    patch="$(echo "$current_version" | cut -d'.' -f3)"
+    while true; do
+      if [[ "$patch" -lt 0 ]]; then
+        break
+      fi
+      version="${major}.${minor}.${patch}"
+      echo "====> Processing version: ${major}.${minor}.${patch}"
+
+      if [[ "$major" -lt 1 ]]; then
+        if [[ "$current_version" != "$version" ]]; then
+          echo "      Writing rewrite rule"
+          echo "rewrite ^/docs~v$version/(.*)$ /docs~v$current_version/\$1 redirect;" >"tmp/docs-build/nginx.conf.d/$version.conf"
+          echo "      Removing old docs"
+          rm -rf "tmp/docs-build/docs~v${version}"
+          patch=$((patch - 1))
+          continue
+        fi
+      fi
+
+      jq --arg title "v$version" --arg version "docs~v$version" '. += [{"title": $title, "version": $version, "aliases": []}]' tmp/docs-build/versions.json >tmp/docs-build/versions.json.bak
+      mv tmp/docs-build/versions.json.bak tmp/docs-build/versions.json
+      if [[ -d "tmp/docs-build/docs~v${version}" ]]; then
+        echo " !    Docs exist, skipping regeneration"
+        rm -rf "tmp/docs-build/docs~v${version}/assets/favicons"
+        cp -r docs-main/assets/favicons "tmp/docs-build/docs~v${version}/assets/favicons"
+        cp -r docs-main/assets/dokku-logo.svg "tmp/docs-build/docs~v${version}/assets/dokku-logo.svg"
+        cp -r docs-main/assets/extra.css "tmp/docs-build/docs~v${version}/assets/extra.css"
+        patch=$((patch - 1))
+        continue
+      fi
+
+      git -C tmp/docs-source checkout -q -- .
+      git -C tmp/docs-source checkout -q "tags/v${version}" -b "v${version}-branch"
+      rm -rf docs
+      mv tmp/docs-source/docs docs
+
+      rm -rf docs/assets
+      mkdir -p docs/assets
+      cp -r docs-main/assets/favicons docs/assets/favicons
+      cp -r docs-main/assets/dokku-logo.svg docs/assets/dokku-logo.svg
+      cp -r docs-main/assets/extra.css docs/assets/extra.css
+
+      cp -r docs-main/_build docs/_build
+      cp -r docs-main/_overrides docs/_overrides
+      git checkout -q -- mkdocs.yml
+      sed -i.bak "s/site_dir: site/site_dir: docs~v$version/g" mkdocs.yml && rm mkdocs.yml.bak
+      if [[ ! -f docs/template.html ]]; then
+        if [[ "$patch" -eq 0 ]]; then
+          break
+        fi
+
+        continue
+      fi
+
+      echo "----> Generating docs"
+      if ! make docs-build; then
+        continue
+      fi
+
+      if [[ -d "docs~v${version}" ]]; then
+        if [[ -n "$GITHUB_ACTION" ]]; then
+          sudo chown -R "$(whoami)" "docs~v${version}"
+        fi
+
+        rm -rf "docs~v${version}/_build"
+        mv "docs~v${version}" "tmp/docs-build/docs~v${version}"
+      fi
+
+      if [[ "$patch" -eq 0 ]]; then
+        break
+      fi
+      patch=$((patch - 1))
+    done
+  done
+
+  echo "====> Rebuild versions"
+  if [[ -f "tmp/docs-build/versions.json" ]]; then
+    python3 contrib/sort-mkdocs-versions
+  else
+    echo "      No version file exists"
+  fi
+
+  echo "====> Cleanup main repo"
+  rm -rf docs
+  mv docs-main docs
+  git checkout -- mkdocs.yml docs
+
+  echo "====> Checking for file changes"
+  changes=$(git -C tmp/docs-build ls-files -dmo)
+  if [[ -z "$changes" ]]; then
+    echo " !    No doc changes found"
+    exit 0
+  fi
+
+  if [[ "$changes" == "docs/sitemap.xml.gz" ]]; then
+    echo " !    No doc changes found"
+    git -C tmp/docs-build checkout -- docs/sitemap.xml.gz
+    exit 0
+  fi
+
+  echo "====> Changes found"
+  echo "$changes"
+
+  echo "====> Committing changes"
+  git -C tmp/docs-build add .
+  git -C tmp/docs-build commit -m "chore: regenerate docs"
+
+  echo "====> Pushing changes"
+  if [[ -n "$BOT_GITHUB_USERNAME" ]] && [[ -n "$BOT_GITHUB_API_TOKEN" ]]; then
+    git -C tmp/docs-build remote set-url origin "https://$BOT_GITHUB_USERNAME:$BOT_GITHUB_API_TOKEN@github.com/dokku/docs.git"
+  fi
+
+  git -C tmp/docs-build push origin master
+
+}
+
+main "$@"

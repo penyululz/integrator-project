@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+set -eo pipefail
+[[ $DOKKU_TRACE ]] && set -x
+source "$PLUGIN_CORE_AVAILABLE_PATH/common/functions"
+source "$PLUGIN_CORE_AVAILABLE_PATH/common/property-functions"
+
+trigger-scheduler-docker-local-post-delete() {
+  declare desc="scheduler-docker-local post-delete plugin trigger"
+  declare trigger="post-delete"
+  declare APP="$1"
+
+  fn-plugin-property-destroy "scheduler-docker-local" "$APP"
+  rm -rf "${DOKKU_LIB_ROOT}/data/scheduler-docker-local/$APP"
+
+  # remove all application containers
+  "$DOCKER_BIN" container ls --filter "label=com.dokku.app-name=${APP}" -q | xargs -n1 -I {} "$DOCKER_BIN" container rm --force {} &>/dev/null || true
+}
+
+trigger-scheduler-docker-local-post-delete "$@"

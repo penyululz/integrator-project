@@ -1,0 +1,31 @@
+---
+layout: default
+title: Error 404 (Not Found)
+---
+
+<style type="text/css" media="screen">
+  .container {
+    margin: 10px auto;
+    max-width: 600px;
+    text-align: center;
+  }
+  h1 {
+    margin: 30px 0;
+    font-size: 4em;
+    line-height: 1;
+    letter-spacing: -1px;
+  }
+</style>
+
+
+<h1>404</h1>
+<p>Not all who wander are lost...but you are.</p>
+<a class="button blue" href="/">Back to Safety</a>
+
+<script>
+  // to remove trailing slashes, via https://github.com/daattali/daattali.github.io/blob/master/404.html#L14-L21
+  var url = location.href;
+  if(url.substr(url.length - 1) === '/') {
+    window.location = url.substr(0, url.length - 1);
+  }
+</script>

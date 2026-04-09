@@ -1,0 +1,7 @@
+packages/cli/scaffold/
+package.json
+package-lock.json
+packages/cli/src/generators/templates/
+.yarn
+
+/.nx/workspace-data

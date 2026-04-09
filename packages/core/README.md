@@ -51,6 +51,9 @@ Phase 2 adds usability and guided flows in `apps/web` while preserving core runt
 npm run migrate -w @integration/core
 npm run seed -w @integration/core
 npm run verify:setup -w @integration/core
+npm run mode:prototype -w @integration/core
+npm run mode:live -w @integration/core
+npm run ports:free -w @integration/core
 npm run smoke:prototype -w @integration/core
 npm run smoke:live -w @integration/core
 npm run create:adapter -w @integration/core -- --name my-adapter

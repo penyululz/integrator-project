@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+
+install-go-devtools() {
+  go install github.com/go-delve/delve/cmd/dlv@latest
+  go install honnef.co/go/tools/cmd/staticcheck@latest
+  go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+}
+
+setup-ci() {
+  local dokku_root="/root/go/src/github.com/dokku/dokku"
+  pushd "$plugin_root" >/dev/null || true
+  make ci-dependencies setup-deploy-tests
+  popd >/dev/null || true
+}
+
+main() {
+  install-go-devtools
+  setup-ci
+}
+
+main "$@"

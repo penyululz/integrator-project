@@ -1,0 +1,10 @@
+/commands
+/core-post-extract
+/subcommands/*
+/triggers/*
+/triggers
+/network-*
+/install
+/post-*
+/report
+/builder-*

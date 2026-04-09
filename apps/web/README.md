@@ -78,6 +78,20 @@ This layer sits on top of existing API contracts and mode boundaries (`Prototype
 From repo root:
 
 ```bash
+npm run setup:prototype
+npm run dev:prototype
+```
+
+If local dev ports are already used:
+
+```bash
+npm run ports:free
+npm run dev:prototype
+```
+
+Package-only:
+
+```bash
 npm run dev -w @integration/web
 ```
 

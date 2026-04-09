@@ -1,0 +1,286 @@
+package config
+
+import (
+	"os"
+	"strings"
+	"testing"
+
+	"github.com/dokku/dokku/plugins/common"
+
+	. "github.com/onsi/gomega"
+)
+
+var (
+	testAppName      = "test-app-1"
+	dokkuRoot        = common.MustGetEnv("DOKKU_ROOT")
+	testAppDir       = strings.Join([]string{dokkuRoot, testAppName}, "/")
+	globalConfigFile = strings.Join([]string{dokkuRoot, "ENV"}, "/")
+)
+
+func setupTests() (err error) {
+	if err := os.Setenv("PLUGIN_PATH", "/var/lib/dokku/plugins"); err != nil {
+		return err
+	}
+
+	return os.Setenv("PLUGIN_ENABLED_PATH", "/var/lib/dokku/plugins/enabled")
+}
+
+func setupTestApp() (err error) {
+	Expect(os.MkdirAll(testAppDir, 0766)).To(Succeed())
+	b := []byte("export testKey=TESTING\n")
+	if err = os.WriteFile(strings.Join([]string{testAppDir, "/ENV"}, ""), b, 0644); err != nil {
+		return
+	}
+
+	b = []byte("export testKey=GLOBAL_TESTING\nexport globalKey=GLOBAL_VALUE")
+	if err = os.WriteFile(globalConfigFile, b, 0644); err != nil {
+		return
+	}
+	return
+}
+
+func teardownTestApp() {
+	os.RemoveAll(testAppDir)
+}
+
+func TestConfigGetWithDefault(t *testing.T) {
+	RegisterTestingT(t)
+	Expect(setupTests()).To(Succeed())
+	Expect(setupTestApp()).To(Succeed())
+	Expect(GetWithDefault(testAppName, "unknownKey", "UNKNOWN")).To(Equal("UNKNOWN"))
+	Expect(GetWithDefault(testAppName, "testKey", "testKey")).To(Equal("TESTING"))
+	Expect(GetWithDefault(testAppName+"-nonexistent", "testKey", "default")).To(Equal("default"))
+	teardownTestApp()
+}
+
+func TestConfigGet(t *testing.T) {
+	RegisterTestingT(t)
+	Expect(setupTests()).To(Succeed())
+	Expect(setupTestApp()).To(Succeed())
+	defer teardownTestApp()
+
+	expectValue(testAppName, "testKey", "TESTING")
+	expectValue("", "testKey", "GLOBAL_TESTING")
+
+	expectNoValue(testAppName, "testKey2")
+	expectNoValue("", "testKey2")
+}
+
+func TestConfigSetMany(t *testing.T) {
+	RegisterTestingT(t)
+	Expect(setupTests()).To(Succeed())
+	Expect(setupTestApp()).To(Succeed())
+	defer teardownTestApp()
+
+	expectValue(testAppName, "testKey", "TESTING")
+
+	vals := []string{"testKey=updated", "testKey2=new"}
+	Expect(CommandSet(testAppName, vals, false, true, false)).To(Succeed())
+	expectValue(testAppName, "testKey", "updated")
+	expectValue(testAppName, "testKey2", "new")
+
+	vals = []string{"testKey=updated_global", "testKey2=new_global"}
+	Expect(CommandSet("", vals, true, true, false)).To(Succeed())
+	expectValue("", "testKey", "updated_global")
+	expectValue("", "testKey2", "new_global")
+	expectValue("", "globalKey", "GLOBAL_VALUE")
+	expectValue(testAppName, "testKey", "updated")
+	expectValue(testAppName, "testKey2", "new")
+
+	Expect(CommandSet(testAppName+"does_not_exist", vals, false, true, false)).ToNot(Succeed())
+}
+
+func TestConfigUnsetAll(t *testing.T) {
+	RegisterTestingT(t)
+	Expect(setupTests()).To(Succeed())
+	Expect(setupTestApp()).To(Succeed())
+	defer teardownTestApp()
+
+	expectValue(testAppName, "testKey", "TESTING")
+	expectValue("", "testKey", "GLOBAL_TESTING")
+
+	Expect(CommandClear(testAppName, false, true)).To(Succeed())
+	expectNoValue(testAppName, "testKey")
+	expectNoValue(testAppName, "noKey")
+	expectNoValue(testAppName, "globalKey")
+
+	Expect(CommandClear(testAppName+"does-not-exist", false, true)).ToNot(Succeed())
+}
+
+func TestConfigUnsetMany(t *testing.T) {
+	RegisterTestingT(t)
+	Expect(setupTests()).To(Succeed())
+	Expect(setupTestApp()).To(Succeed())
+	defer teardownTestApp()
+
+	expectValue(testAppName, "testKey", "TESTING")
+	expectValue("", "testKey", "GLOBAL_TESTING")
+
+	keys := []string{"testKey", "noKey"}
+	Expect(CommandUnset(testAppName, keys, false, true)).To(Succeed())
+	expectNoValue(testAppName, "testKey")
+	expectValue("", "testKey", "GLOBAL_TESTING")
+
+	Expect(CommandUnset(testAppName, keys, false, true)).To(Succeed())
+	expectNoValue(testAppName, "testKey")
+	expectNoValue(testAppName, "globalKey")
+
+	Expect(CommandUnset(testAppName+"does-not-exist", keys, false, true)).ToNot(Succeed())
+}
+
+func TestConfigImport(t *testing.T) {
+	RegisterTestingT(t)
+	Expect(setupTests()).To(Succeed())
+	Expect(setupTestApp()).To(Succeed())
+	defer teardownTestApp()
+
+	tempFile, err := os.CreateTemp("", "test-config-import-*.env")
+	Expect(err).To(Succeed())
+	defer os.Remove(tempFile.Name())
+	content := `
+testKey=TESTING-updated1
+testKey2=TESTING-updated2
+`
+	_, err = tempFile.WriteString(content)
+	Expect(err).To(Succeed())
+	tempFile.Close()
+
+	Expect(CommandImport(testAppName, false, false, true, "envfile", tempFile.Name())).To(Succeed())
+	expectValue(testAppName, "testKey", "TESTING-updated1")
+	expectValue(testAppName, "testKey2", "TESTING-updated2")
+
+	env, err := LoadAppEnv(testAppName)
+	Expect(err).To(Succeed())
+	env.Set("testKey", "TESTING-original1")
+	env.Set("testKey2", "TESTING-original2")
+	env.Set("testKey3", "TESTING-original3")
+	env.Write()
+
+	Expect(CommandImport(testAppName, false, false, true, "envfile", tempFile.Name())).To(Succeed())
+	expectValue(testAppName, "testKey", "TESTING-updated1")
+	expectValue(testAppName, "testKey2", "TESTING-updated2")
+	expectValue(testAppName, "testKey3", "TESTING-original3")
+
+	Expect(CommandImport(testAppName, false, true, true, "envfile", tempFile.Name())).To(Succeed())
+	expectValue(testAppName, "testKey", "TESTING-updated1")
+	expectValue(testAppName, "testKey2", "TESTING-updated2")
+	expectNoValue(testAppName, "testKey3")
+}
+
+func TestConfigImportJSON(t *testing.T) {
+	RegisterTestingT(t)
+	Expect(setupTests()).To(Succeed())
+	Expect(setupTestApp()).To(Succeed())
+	defer teardownTestApp()
+
+	tempFile, err := os.CreateTemp("", "test-config-import-*.json")
+	Expect(err).To(Succeed())
+	defer os.Remove(tempFile.Name())
+
+	content := `{"testKey": "TESTING-updated1", "testKey2": "TESTING-updated2"}`
+	_, err = tempFile.WriteString(content)
+	Expect(err).To(Succeed())
+	tempFile.Close()
+
+	Expect(CommandImport(testAppName, false, false, true, "json", tempFile.Name())).To(Succeed())
+	expectValue(testAppName, "testKey", "TESTING-updated1")
+	expectValue(testAppName, "testKey2", "TESTING-updated2")
+
+	env, err := LoadAppEnv(testAppName)
+	Expect(err).To(Succeed())
+	env.Set("testKey", "TESTING-original1")
+	env.Set("testKey2", "TESTING-original2")
+	env.Set("testKey3", "TESTING-original3")
+	env.Write()
+
+	Expect(CommandImport(testAppName, false, false, true, "json", tempFile.Name())).To(Succeed())
+	expectValue(testAppName, "testKey", "TESTING-updated1")
+	expectValue(testAppName, "testKey2", "TESTING-updated2")
+	expectValue(testAppName, "testKey3", "TESTING-original3")
+
+	Expect(CommandImport(testAppName, false, true, true, "json", tempFile.Name())).To(Succeed())
+	expectValue(testAppName, "testKey", "TESTING-updated1")
+	expectValue(testAppName, "testKey2", "TESTING-updated2")
+	expectNoValue(testAppName, "testKey3")
+}
+
+func TestEnvironmentLoading(t *testing.T) {
+	RegisterTestingT(t)
+	Expect(setupTests()).To(Succeed())
+	Expect(setupTestApp()).To(Succeed())
+	defer teardownTestApp()
+
+	env, err := LoadMergedAppEnv(testAppName)
+	Expect(err).To(Succeed())
+	v, _ := env.Get("testKey")
+	Expect(v).To(Equal("TESTING"))
+	v, _ = env.Get("globalKey")
+	Expect(v).To(Equal("GLOBAL_VALUE"))
+	Expect(env.Write()).ToNot(Succeed())
+
+	env, err = LoadAppEnv(testAppName)
+	env.Set("testKey", "TESTING-updated")
+	env.Set("testKey2", "TESTING-'\n'-updated")
+	env.Write()
+
+	expectValue(testAppName, "testKey", "TESTING-updated")
+	expectValue(testAppName, "testKey2", "TESTING-'\n'-updated")
+	expectValue("", "testKey", "GLOBAL_TESTING")
+	Expect(err).To(Succeed())
+}
+
+func TestInvalidKeys(t *testing.T) {
+	RegisterTestingT(t)
+	Expect(setupTests()).To(Succeed())
+	Expect(setupTestApp()).To(Succeed())
+	defer teardownTestApp()
+
+	invalidKeys := []string{"0invalidKey", "invalid:key", "invalid=Key", "!invalidKey"}
+	for _, key := range invalidKeys {
+		Expect(SetMany(testAppName, map[string]string{key: "value"}, false, false)).NotTo(Succeed())
+		Expect(UnsetMany(testAppName, []string{key}, false)).NotTo(Succeed())
+		value, ok := Get(testAppName, key)
+		Expect(ok).To(Equal(false))
+		Expect(value).To(Equal(""))
+		value2 := GetWithDefault(testAppName, key, "default")
+		Expect(value2).To(Equal("default"))
+	}
+}
+
+func TestInvalidEnvOnDisk(t *testing.T) {
+	RegisterTestingT(t)
+	Expect(setupTests()).To(Succeed())
+	Expect(setupTestApp()).To(Succeed())
+	defer teardownTestApp()
+
+	appConfigFile := strings.Join([]string{testAppDir, "/ENV"}, "")
+	b := []byte("export --invalid-key=TESTING\nexport valid_key=value\n")
+	if err := os.WriteFile(appConfigFile, b, 0644); err != nil {
+		return
+	}
+
+	env, err := LoadAppEnv(testAppName)
+	Expect(err).NotTo(HaveOccurred())
+	_, ok := env.Get("--invalid-key")
+	Expect(ok).To(Equal(false))
+	value, ok := env.Get("valid_key")
+	Expect(ok).To(Equal(true))
+	Expect(value).To(Equal("value"))
+
+	//LoadAppEnv eliminates it from the file
+	content, err := os.ReadFile(appConfigFile)
+	Expect(err).NotTo(HaveOccurred())
+	Expect(strings.Contains(string(content), "--invalid-key")).To(BeFalse())
+
+}
+
+func expectValue(appName string, key string, expected string) {
+	v, ok := Get(appName, key)
+	Expect(ok).To(Equal(true))
+	Expect(v).To(Equal(expected))
+}
+
+func expectNoValue(appName string, key string) {
+	_, ok := Get(appName, key)
+	Expect(ok).To(Equal(false))
+}

@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+set -eo pipefail
+[[ $DOKKU_TRACE ]] && set -x
+source "$PLUGIN_CORE_AVAILABLE_PATH/common/functions"
+source "$PLUGIN_AVAILABLE_PATH/plugin/functions"
+source "$PLUGIN_AVAILABLE_PATH/plugin/internal-functions"
+
+cmd-plugin-install() {
+  declare desc="installs a plugin from URL and calls install plugin trigger via command line"
+  declare cmd="plugin:install"
+  [[ "$1" == "$cmd" ]] && shift 1
+  declare FLAG="$1"
+
+  case "$FLAG" in
+    --core)
+      [[ "$#" -gt 1 ]] && dokku_log_info1_quiet "Cannot install additional core plugins, running core plugin install trigger"
+      PLUGIN_PATH="$PLUGIN_CORE_PATH" plugn trigger install
+      ;;
+    https:* | git* | ssh:* | file:* | *.tar.gz | *.tgz)
+      download_and_enable_plugin "$@"
+      ;;
+    *)
+      if [[ -n "$FLAG" ]]; then
+        dokku_log_warn "First argument must be --core or url to plugin"
+        dokku_log_warn "Valid prefixes: https:, git:, ssh:, file:"
+        dokku_log_warn "Valid suffixes: .tar.gz, .tgz"
+        dokku_log_fail "Please retry with valid arguments"
+      fi
+      plugn trigger install
+      ;;
+  esac
+  plugin_prime_bash_completion
+}
+
+cmd-plugin-install "$@"

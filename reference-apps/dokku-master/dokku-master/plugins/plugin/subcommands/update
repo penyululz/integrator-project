@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+set -eo pipefail
+[[ $DOKKU_TRACE ]] && set -x
+source "$PLUGIN_AVAILABLE_PATH/plugin/internal-functions"
+
+cmd-plugin-update() {
+  declare desc="updates plugin to optional committish and calls update plugin trigger via command line"
+  declare cmd="plugin:update"
+  [[ "$1" == "$cmd" ]] && shift 1
+  declare PLUGIN="$1" PLUGIN_COMMITTISH="$2"
+
+  if [[ -n "$PLUGIN" ]]; then
+    if ! fn-is-valid-plugin "$PLUGIN"; then
+      dokku_log_fail "Invalid plugin name specified"
+    fi
+
+    if ! fn-plugin-enabled "$PLUGIN"; then
+      dokku_log_fail "Specified plugin not enabled or installed"
+    fi
+
+    if fn-is-core-plugin "$PLUGIN"; then
+      dokku_log_fail "Cannot trigger plugin:update against core plugin, please update Dokku instead"
+    fi
+
+    plugn update "$PLUGIN" "$PLUGIN_COMMITTISH"
+  else
+    pushd "$PLUGIN_ENABLED_PATH" >/dev/null
+    for PLUGIN in *; do
+      if [[ -d "${PLUGIN}" ]]; then
+        if fn-is-core-plugin "${PLUGIN}"; then
+          continue
+        fi
+
+        plugn update "$PLUGIN"
+      fi
+    done
+    popd &>/dev/null || pushd "/tmp" >/dev/null
+  fi
+
+  plugn trigger update
+  plugin_prime_bash_completion
+}
+
+cmd-plugin-update "$@"

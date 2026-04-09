@@ -1,0 +1,10 @@
+/commands
+/subcommands/*
+/triggers/*
+/triggers
+/install
+/post-*
+/report
+/docker-args-process-deploy
+/docker-args-process-run
+/resource-get-property

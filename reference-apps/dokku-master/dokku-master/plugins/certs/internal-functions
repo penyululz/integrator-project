@@ -1,0 +1,148 @@
+#!/usr/bin/env bash
+source "$PLUGIN_CORE_AVAILABLE_PATH/common/functions"
+source "$PLUGIN_AVAILABLE_PATH/certs/functions"
+set -eo pipefail
+[[ $DOKKU_TRACE ]] && set -x
+
+cmd-certs-report() {
+  declare desc="displays an ssl report for one or more apps"
+  declare cmd="certs:report"
+  [[ "$1" == "$cmd" ]] && shift 1
+  declare APP="$1" INFO_FLAG="$2"
+
+  if [[ -n "$APP" ]] && [[ "$APP" == --* ]]; then
+    INFO_FLAG="$APP"
+    APP=""
+  fi
+
+  if [[ -z "$APP" ]] && [[ -z "$INFO_FLAG" ]]; then
+    INFO_FLAG="true"
+  fi
+
+  if [[ -z "$APP" ]]; then
+    for app in $(dokku_apps); do
+      cmd-certs-report-single "$app" "$INFO_FLAG" | tee || true
+    done
+  else
+    cmd-certs-report-single "$APP" "$INFO_FLAG"
+  fi
+}
+
+cmd-certs-report-single() {
+  declare APP="$1" INFO_FLAG="$2"
+  if [[ "$INFO_FLAG" == "true" ]]; then
+    INFO_FLAG=""
+  fi
+  verify_app_name "$APP"
+  local flag_map=(
+    "--ssl-dir: $DOKKU_ROOT/$APP/tls"
+    "--ssl-enabled: $(fn-ssl-enabled "$APP")"
+    "--ssl-hostnames: $(fn-ssl-hostnames "$APP")"
+    "--ssl-expires-at: $(fn-ssl-expires-at "$APP")"
+    "--ssl-issuer: $(fn-ssl-issuer "$APP")"
+    "--ssl-starts-at: $(fn-ssl-starts-at "$APP")"
+    "--ssl-subject: $(fn-ssl-subject "$APP")"
+    "--ssl-verified: $(fn-ssl-verified "$APP")"
+  )
+
+  if [[ -z "$INFO_FLAG" ]]; then
+    dokku_log_info2_quiet "$APP ssl information"
+    for flag in "${flag_map[@]}"; do
+      key="$(echo "${flag#--}" | cut -f1 -d' ' | tr - ' ')"
+      dokku_log_verbose "$(printf "%-30s %-25s" "${key^}" "${flag#*: }")"
+    done
+  else
+    local match=false
+    local value_exists=false
+    for flag in "${flag_map[@]}"; do
+      valid_flags="${valid_flags} $(echo "$flag" | cut -d':' -f1)"
+      if [[ "$flag" == "${INFO_FLAG}:"* ]]; then
+        value=${flag#*: }
+        size="${#value}"
+        if [[ "$size" -ne 0 ]]; then
+          echo "$value" && match=true && value_exists=true
+        else
+          match=true
+        fi
+      fi
+    done
+    [[ "$match" == "true" ]] || dokku_log_fail "Invalid flag passed, valid flags:${valid_flags}"
+    [[ "$value_exists" == "true" ]] || dokku_log_fail "not deployed"
+  fi
+}
+
+fn-ssl-enabled() {
+  declare APP="$1"
+  local SSL_ENABLED=false
+
+  if is_ssl_enabled "$APP"; then
+    SSL_ENABLED=true
+  fi
+  echo "$SSL_ENABLED"
+}
+
+fn-ssl-expires-at() {
+  declare APP="$1"
+  local APP_SSL_PATH="$DOKKU_ROOT/$APP/tls"
+
+  if is_ssl_enabled "$APP"; then
+    openssl x509 -in "$APP_SSL_PATH/server.crt" -noout -text | grep "Not After :" | awk -F " : " '{ print $2 }'
+  fi
+}
+
+fn-ssl-hostnames() {
+  declare APP="$1"
+
+  if is_ssl_enabled "$APP"; then
+    get_ssl_hostnames "$APP" | xargs
+  fi
+}
+
+fn-ssl-issuer() {
+  declare APP="$1"
+  local APP_SSL_PATH="$DOKKU_ROOT/$APP/tls"
+
+  if is_ssl_enabled "$APP"; then
+    openssl x509 -in "$APP_SSL_PATH/server.crt" -noout -text | grep "Issuer:" | head -n1 | sed -e 's/Issuer: //g' -e 's/^[[:space:]]*//'
+  fi
+}
+
+fn-ssl-starts-at() {
+  declare APP="$1"
+  local APP_SSL_PATH="$DOKKU_ROOT/$APP/tls"
+
+  if is_ssl_enabled "$APP"; then
+    openssl x509 -in "$APP_SSL_PATH/server.crt" -noout -text | grep "Not Before:" | awk -F ": " '{ print $2 }'
+  fi
+}
+
+fn-ssl-subject() {
+  declare APP="$1"
+  local APP_SSL_PATH="$DOKKU_ROOT/$APP/tls"
+
+  if is_ssl_enabled "$APP"; then
+    openssl x509 -in "$APP_SSL_PATH/server.crt" -noout -subject | sed -e "s:subject= ::g" | sed -e "s:^/::g" | sed -e "s:/:; :g"
+  fi
+}
+
+fn-ssl-verified() {
+  declare APP="$1"
+  local APP_SSL_PATH="$DOKKU_ROOT/$APP/tls"
+  local SSL_VERIFY_OUTPUT=false SSL_SELF_SIGNED="self signed"
+
+  if ! is_ssl_enabled "$APP"; then
+    return
+  fi
+
+  if [[ -f "$APP_SSL_PATH/server.letsencrypt.crt" ]]; then
+    SSL_VERIFY_OUTPUT="$(openssl verify -verbose -purpose sslserver -CAfile "$APP_SSL_PATH/server.crt" "$APP_SSL_PATH/server.letsencrypt.crt" 2>/dev/null | awk -F ':' '{ print $2 }' | tail -1 | xargs || true)"
+  else
+    SSL_VERIFY_OUTPUT="$(openssl verify -verbose -purpose sslserver "$APP_SSL_PATH/server.crt" 2>/dev/null | awk -F ':' '{ print $2 }' | tail -1 | xargs || true)"
+  fi
+
+  if [[ "$SSL_VERIFY_OUTPUT" == "OK" ]]; then
+    SSL_SELF_SIGNED="verified by a certificate authority"
+  fi
+
+  echo "$SSL_SELF_SIGNED"
+}

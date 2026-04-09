@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+set -eo pipefail
+[[ $DOKKU_TRACE ]] && set -x
+source "$PLUGIN_CORE_AVAILABLE_PATH/common/functions"
+source "$PLUGIN_AVAILABLE_PATH/nginx-vhosts/functions"
+
+trigger-nginx-vhosts-post-domains-update() {
+  declare desc="calls nginx build_config when domains are updated"
+  declare trigger="post-domains-update"
+  declare APP="$1"
+
+  [[ -z "$APP" ]] && dokku_log_fail "Please specify an app to run the command on"
+
+  if [[ "$(plugn trigger proxy-type "$APP")" == "nginx" ]]; then
+    nginx_build_config "$APP"
+  fi
+}
+
+trigger-nginx-vhosts-post-domains-update "$@"

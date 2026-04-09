@@ -1,0 +1,31 @@
+import { initializeRootEnv } from "./init-env";
+
+type RuntimeMode = "Prototype Mode" | "Live Mode";
+
+function parseRuntimeModeArg(argv: string[]): RuntimeMode {
+  const modeArg = argv.find((value) => value.startsWith("--mode="));
+  const rawMode = modeArg?.split("=")[1]?.trim().toLowerCase();
+  if (rawMode === "live" || rawMode === "live mode") {
+    return "Live Mode";
+  }
+  return "Prototype Mode";
+}
+
+function runCli(): void {
+  const mode = parseRuntimeModeArg(process.argv.slice(2));
+  const result = initializeRootEnv({
+    mode,
+  });
+
+  console.log(`[mode] runtime mode set to ${mode}.`);
+  console.log(`[mode] env file: ${result.envPath}`);
+  if (result.synced.added.length > 0 || result.synced.updated.length > 0) {
+    console.log(
+      `[mode] synchronized keys (added: ${result.synced.added.join(", ") || "(none)"}, updated: ${result.synced.updated.join(", ") || "(none)"})`,
+    );
+  }
+}
+
+if (require.main === module) {
+  runCli();
+}

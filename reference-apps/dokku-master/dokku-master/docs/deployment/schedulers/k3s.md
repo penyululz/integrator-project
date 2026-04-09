@@ -1,0 +1,757 @@
+# K3s Scheduler
+
+> [!IMPORTANT]
+> New as of 0.33.0
+
+```
+scheduler-k3s:annotations:set <app|--global> <property> (<value>) [--process-type PROCESS_TYPE] <--resource-type RESOURCE_TYPE>, Set or clear an annotation for a given app/process-type/resource-type combination
+scheduler-k3s:autoscaling-auth:set <app|--global> <trigger> [<--metadata key=value>...], Set or clear a scheduler-k3s autoscaling keda trigger authentication resource for an app
+scheduler-k3s:autoscaling-auth:report <app|--global> [--format stdout|json] [--include-metadata] # Displays a scheduler-k3s autoscaling auth report for an app
+scheduler-k3s:cluster:add [ssh://user@host:port]    # Adds a server node to a Dokku-managed cluster
+scheduler-k3s:cluster:list                          # Lists all nodes in a Dokku-managed cluster
+scheduler-k3s:cluster:remove [node-id]              # Removes client node to a Dokku-managed cluster
+scheduler-k3s:ensure-charts                         # Ensures the k3s charts are installed
+scheduler-k3s:initialize                            # Initializes a cluster
+scheduler-k3s:labels:set <app|--global> <property> (<value>) [--process-type PROCESS_TYPE] <--resource-type RESOURCE_TYPE> # Set or clear a label for a given app/process-type/resource-type combination
+scheduler-k3s:profiles:add <profile> [--role ROLE] [--insecure-allow-unknown-hosts] [--taint-scheduling] [--kubelet-args KUBELET_ARGS] Adds a node profile to the k3s cluster
+scheduler-k3s:profiles:list [--format json|stdout]  # Lists all node profiles in the k3s cluster
+scheduler-k3s:profiles:remove <profile>             # Removes a node profile from the k3s cluster
+scheduler-k3s:report [<app>] [<flag>]               # Displays a scheduler-k3s report for one or more apps
+scheduler-k3s:set [<app>|--global] <key> (<value>)  # Set or clear a scheduler-k3s property for an app or the scheduler
+scheduler-k3s:show-kubeconfig                       # Displays the kubeconfig for remote usage
+scheduler-k3s:uninstall                             # Uninstalls k3s from the Dokku server
+```
+
+> [!NOTE]
+> The k3s plugin replaces the external [scheduler-kubernetes](https://github.com/dokku/dokku-scheduler-kubernetes) plugin. Users can continue to use the external plugin as necessary, but all future development will occur on the official core k3s plugin.
+
+For multi-server support, Dokku provides the ability for users to setup a K3s cluster. As with all schedulers, it is set on a per-app basis. The scheduler can currently be overridden by running the following command:
+
+```shell
+dokku scheduler:set node-js-app selected k3s
+```
+
+As it is the default, unsetting the `selected` scheduler property is also a valid way to reset the scheduler.
+
+```shell
+dokku scheduler:set node-js-app k3s
+```
+
+## Usage
+
+> [!IMPORTANT]
+> The k3s plugin requires usage of a docker registry to store deployed image artifacts. See the [registry documentation](/docs/advanced-usage/registry-management.md) for more details on how to configure a registry.
+
+### Initializing a cluster
+
+> [!WARNING]
+> This command must be run as root
+
+Clusters can be initialized via the `scheduler-k3s:initialize` command. This will start a k3s cluster on the Dokku node itself.
+
+```shell
+dokku scheduler-k3s:initialize
+```
+
+By default, the k3s installation can run both app and system workloads. For clusters where app workloads are run on distinct worker nodes, initialize the cluster with the `--taint-scheduling` flag, which will allow _only_ Critical cluster components on the k3s control-plane nodes.
+
+```shell
+dokku scheduler-k3s:initialize --taint-scheduling
+```
+
+By default, Dokku will attempt to auto-detect the IP address of the server. In cases where the auto-detected IP address is incorrect, an override may be specified via the `--server-ip` flag:
+
+```shell
+dokku scheduler-k3s:initialize --server-ip 192.168.20.15
+```
+
+Dokku's k3s integration natively uses `nginx` as it's ingress load balancer via [ingress-nginx](https://github.com/kubernetes/ingress-nginx). Properties set by the `nginx` plugin will be respected, either by turning them into annotations or creating a custom server/location snippet that the `ingress-nginx` project can use. A `ps:restart` is required after changing nginx properties in order to have them apply to running resources.
+
+Dokku can also use Traefik on cluster initialization via the [Traefik's CRDs](https://doc.traefik.io/traefik/providers/kubernetes-crd/). To change the ingress, set the `--ingress-class` flag:
+
+```shell
+dokku scheduler-k3s:initialize --ingress-class traefik
+```
+
+### Adding nodes to the cluster
+
+> [!WARNING]
+> The `dokku` user _must_ be able to ssh onto the server in order to connect nodes to the cluster. The remote user must be root or have sudo enabled, or the install will fail.
+
+#### Adding a worker node
+
+Nodes that run app workloads can be added via the `scheduler-k3s:cluster:add` command. This will ssh onto the specified server, install k3s, and join it to the current Dokku node in worker mode. Workers are typically used to run app workloads.
+
+```shell
+dokku scheduler-k3s:cluster:add  ssh://root@worker-1.example.com
+```
+
+Per-node kubelet flags can be supplied by passing `--kubelet-args` with a comma-separated `key=value` list. This is useful for tuning scheduler capacity or enforcing cluster-wide defaults at the node level.
+
+```shell
+dokku scheduler-k3s:cluster:add \
+  --kubelet-args allowed-unsafe-sysctls=net.ipv6.conf.all.disable_ipv6 \
+  ssh://root@worker-1.example.com
+```
+
+Multiple kubelet arguments can be specified in the same call by separating them with commas. The following example enables IPv4 forwarding while also increasing the pod density on the worker.
+
+```shell
+dokku scheduler-k3s:cluster:add \
+  --kubelet-args allowed-unsafe-sysctls=net.ipv6.conf.all.disable_ipv6,max-pods=150 \
+  ssh://root@worker-2.example.com
+```
+
+If the server isn't in the `known_hosts` file, the connection will fail. This can be bypassed by setting the `--insecure-allow-unknown-hosts` flag:
+
+```shell
+dokku scheduler-k3s:cluster:add --insecure-allow-unknown-hosts ssh://root@worker-1.example.com
+```
+
+By default, Dokku will attempt to auto-detect the IP address of the Dokku server for the remote server to connect to. In cases where the auto-detected IP address is incorrect, an override may be specified via the `--server-ip` flag:
+
+```shell
+dokku scheduler-k3s:cluster:add --server-ip 192.168.20.15 ssh://root@worker-1.example.com
+```
+
+#### Adding a server node
+
+> [!NOTE]
+> Only the initial Dokku server will be properly configured for push deployment, and should be considered your git remote. Additional server nodes are for ensuring high-availability of the K3s etcd state. Ensure this server is properly backed up and restorable or deployments will not work.
+
+Server nodes are typically used to replicate the cluster state, and it is recommended to have an odd number of nodes spread across several availability zones (datacenters in close proximity within a region). This allows for higher availability in the event of a cluster failure. Server nodes run control-plane services such as the traefik load balancer and the etcd backing store.
+
+Server nodes can also be added with the `scheduler-k3s:cluster:add` command by specifying `--role server`. This will ssh onto the specified server, install k3s, and join it to the current Dokku node in server mode.
+
+```shell
+dokku scheduler-k3s:cluster:add  --role server ssh://root@server-1.example.com
+```
+
+Server nodes allow any workloads to be scheduled on them by default, in addition to the control-plane, etcd, and the scheduler itself. To avoid app workloads being scheduled on your control-plane, use the `--taint-scheduling` flag:
+
+```shell
+dokku scheduler-k3s:cluster:add --role server --taint-scheduling ssh://root@server-1.example.com
+```
+
+If the server isn't in the `known_hosts` file, the connection will fail. This can be bypassed by setting the `--insecure-allow-unknown-hosts` flag:
+
+```shell
+dokku scheduler-k3s:cluster:add --role server --insecure-allow-unknown-hosts ssh://root@server-1.example.com
+```
+
+By default, Dokku will attempt to auto-detect the IP address of the Dokku server for the remote server to connect to. In cases where the auto-detected IP address is incorrect, an override may be specified via the `--server-ip` flag:
+
+```shell
+dokku scheduler-k3s:cluster:add --role server --server-ip 192.168.20.15 ssh://root@server-1.example.com
+```
+
+#### Changing the network interface
+
+When attaching an worker or server node, the K3s plugin will look at the IP associated with the `eth0` interface and use that to connect the new node to the cluster. To change this, set the `network-interface` property to the appropriate value.
+
+```shell
+dokku scheduler-k3s:set --global network-interface eth1
+```
+
+### Node Profiles
+
+Node profiles capture repeatable `scheduler-k3s:cluster:add` options so you can join multiple nodes with identical settings. A profile name can be specified for the `scheduler-k3s:cluster:add` command via the  `--profile <name>` flag. Any flags passed directly to `scheduler-k3s:cluster:add` override the stored values for that run.
+
+#### Listing profiles
+
+Display stored profiles to understand which roles and behaviors will be used.
+
+```shell
+dokku scheduler-k3s:profiles:list
+```
+
+```
+name            role
+awesome-profile worker
+```
+
+This command also takes an optional `--format` flag to specify a format for the output. Options include `json` and `stdout`
+
+#### Adding profiles
+
+Create or update a profile that defines how new nodes should be prepared before joining the cluster.
+
+```shell
+dokku scheduler-k3s:profiles:add edge-workers \
+  --role worker \
+  --insecure-allow-unknown-hosts \
+  --kubelet-args protect-kernel-defaults=true,eviction-hard=memory.available<200Mi
+```
+
+Profile names must be alphanumeric, may include internal dashes, cannot start/end with a dash, and must be ≤32 characters. Other than the `--server-ip` flag, all flags used for `scheduler-k3s:cluster:add` are valid for the `scheduler-k3s:profiles:add` command.
+
+#### scheduler-k3s:profiles:remove
+
+Delete a profile once it’s no longer required.
+
+```shell
+dokku scheduler-k3s:profiles:remove edge-workers
+```
+
+Removal only deletes the stored definition; nodes that already joined the cluster keep their existing configuration.
+
+### Changing deployment settings
+
+The k3s plugin provides a number of settings that can be used to managed deployments on a per-app basis. The following table outlines ones not covered elsewhere:
+
+| Name                  | Description                                       | Global Default     |
+|-----------------------|---------------------------------------------------|--------------------|
+| `deploy-timeout`      | Controls when app deploys will timeout in seconds | `300s`             |
+| `kustomize-root-path` | Controls the folder context from the deployed repository used for Kustomize | `config/kustomize` |
+| `image-pull-secrets`  | Name of a kubernetes secret used to auth against a registry | Contents of `~/.docker/config.json` from Dokku server |
+| `namespace`           | Controls the namespace used for resource creation | `default`          |
+| `rollback-on-failure` | Whether to rollback failed deploys                | `false`            |
+| `shm-size`            | Default shared memory size for pods               | Kubernetes default |
+
+All settings can be set via the `scheduler-k3s:set` command. Using `deploy-timeout` as an example:
+
+```shell
+dokku scheduler-k3s:set node-js-app deploy-timeout 60s
+```
+
+The default value may be set by passing an empty value for the option in question:
+
+```shell
+dokku scheduler-k3s:set node-js-app deploy-timeout
+```
+
+Properties can also be set globally. If not set for an app, the global value will apply.
+
+```shell
+dokku scheduler-k3s:set --global deploy-timeout 60s
+```
+
+The global default value may be set by passing an empty value for the option.
+
+```shell
+dokku scheduler-k3s:set --global deploy-timeout
+```
+
+### Exposing services on the network
+
+Dokku will automatically expose the `web` process as a Kubernetes Service, with all others being treated as background processes. In some cases, it may be useful to have other processes exposed as Kubernetes Service objects so as to segregate internal http endpoints from public http endpoints. This can be done by modifying the `app.json` Formation entry for your process type.
+
+```json
+{
+  "formation": {  
+    "internal-web": {
+      "service": {
+        "exposed": true
+      }
+    }
+  }
+}
+```
+
+In the above example, the `internal-web` process is exposed as a service. The `PORT` variable for the process will be set to `5000`, and a kubernetes `Service` object will be created pointing at your processes.
+
+> [!NOTE]
+> It is not possible to modify the port mapping, nor is it possible to assign domains or SSL to a non-web process.
+
+### SSL Certificates
+
+#### Enabling letsencrypt integration
+
+By default, letsencrypt is disabled and https port mappings are ignored. To enable, set the `letsencrypt-email-prod` or `letsencrypt-email-stag` property with the `--global` flag:
+
+```shell
+# set the value for prod
+dokku scheduler-k3s:set --global letsencrypt-email-prod automated@dokku.sh
+
+# set the value for stag
+dokku scheduler-k3s:set --global letsencrypt-email-stag automated@dokku.sh
+```
+
+After enabling and rebuilding, all apps with an `http:80` port mapping will have a corresponding `https:443` added and ssl will be automatically enabled. All http requests will then be redirected to https.
+
+#### Customizing the letsencrypt server
+
+The letsencrypt integration is set to the production letsencrypt server by default. This can be changed on an app-level by setting the `letsencrypt-server` property with the `scheduler-k3s:set` command
+
+```shell
+dokku scheduler-k3s:set node-js-app letsencrypt-server staging
+```
+
+The default value may be set by passing an empty value for the option:
+
+```shell
+dokku scheduler-k3s:set node-js-app letsencrypt-server
+```
+
+The `letsencrypt-server` property can also be set globally. The global default is `production`.
+
+```shell
+dokku scheduler-k3s:set --global letsencrypt-server staging
+```
+
+The default value may be set by passing an empty value for the option.
+
+```shell
+dokku scheduler-k3s:set --global letsencrypt-server staging
+```
+
+Letsencrypt can be completely disabled for a given app by setting the `letsencrypt-server` to `false`
+
+```shell
+dokku scheduler-k3s:set node-js-app letsencrypt-server false
+```
+
+The server can also be disabled globally, and then conditionally enabled on a per-app basis:
+
+```shell
+dokku scheduler-k3s:set --global letsencrypt-server false
+```
+
+#### Using imported SSL certificates
+
+SSL certificates imported via the `certs` plugin can be used with the k3s scheduler. When a certificate is imported, it is automatically synced to Kubernetes as a TLS secret and will be used for the app's ingress configuration.
+
+To import a certificate:
+
+```shell
+dokku certs:add node-js-app server.crt server.key
+```
+
+When a certificate is imported:
+
+- A Kubernetes TLS secret named `tls-<app-name>` is created in the app's namespace
+- The ingress configuration is updated to use the imported certificate
+- Automatic Let's Encrypt certificate generation is disabled for the app
+
+Imported certificates take precedence over Let's Encrypt certificates. If you have both an imported certificate and Let's Encrypt configured, the imported certificate will be used.
+
+To remove an imported certificate:
+
+```shell
+dokku certs:remove node-js-app
+```
+
+When a certificate is removed:
+
+- The TLS secret is deleted from Kubernetes
+- The app is automatically redeployed to update the ingress configuration
+- If Let's Encrypt is configured, automatic certificate generation will resume
+
+When an app is destroyed, any associated TLS secret is automatically cleaned up.
+
+### Customizing Annotations and Labels
+
+> [!NOTE]
+> The cron ID is used as the process type if your app deploys any cron tasks
+
+#### Setting Annotations
+
+Dokku injects certain annotations into each created resource by default, but it may be necessary to inject others for tighter integration with third-party tools. The `scheduler-k3s:annotations:set` command can be used to perform this task. The command takes an app name and a required `--resource-type` flag.
+
+```shell
+dokku scheduler-k3s:annotations:set node-js-app annotation.key annotation.value --resource-type deployment
+```
+
+If not specified, the annotation will be applied to all processes within an app, though it may be further scoped to a specific process type via the `--process-type` flag.
+
+```shell
+dokku scheduler-k3s:annotations:set node-js-app annotation.key annotation.value --resource-type deployment --process-type web
+```
+
+The following resource types are supported:
+
+- `certificate`
+- `cronjob`
+- `deployment`
+- `ingress`
+- `job`
+- `pod`
+- `secret`
+- `service`
+- `serviceaccount`
+- `traefik_ingressroute`
+- `traefik_middleware`
+
+A `ps:restart` is required after setting annotations in order to have them apply to running resources.
+
+#### Removing an annotation
+
+To unset an annotation, pass an empty value:
+
+```shell
+dokku scheduler-k3s:annotations:set node-js-app annotation.key --resource-type deployment
+dokku scheduler-k3s:annotations:set node-js-app annotation.key --resource-type deployment --process-type web
+```
+
+A `ps:restart` is required after removing annotations in order to remove them from running resources.
+
+#### Setting Labels
+
+Dokku injects certain labels into each created resource by default, but it may be necessary to inject others for tighter integration with third-party tools. The `scheduler-k3s:labels:set` command can be used to perform this task. The command takes an app name and a required `--resource-type` flag.
+
+```shell
+dokku scheduler-k3s:labels:set node-js-app label.key label.value --resource-type deployment
+```
+
+If not specified, the label will be applied to all processes within an app, though it may be further scoped to a specific process type via the `--process-type` flag.
+
+```shell
+dokku scheduler-k3s:labels:set node-js-app label.key label.value --resource-type deployment --process-type web
+```
+
+The following resource types are supported:
+
+- `certificate`
+- `cronjob`
+- `deployment`
+- `ingress`
+- `job`
+- `pod`
+- `secret`
+- `service`
+- `serviceaccount`
+- `traefik_ingressroute`
+- `traefik_middleware`
+
+A `ps:restart` is required after setting labels in order to have them apply to running resources.
+
+#### Removing a label
+
+To unset an label, pass an empty value:
+
+```shell
+dokku scheduler-k3s:annotations:set node-js-app label.key --resource-type deployment
+dokku scheduler-k3s:labels:set node-js-app label.key --resource-type deployment --process-type web
+```
+
+A `ps:restart` is required after removing labels in order to remove them from running resources.
+
+### Autoscaling
+
+#### Workload Autoscaling
+
+> [!IMPORTANT]
+> New as of 0.33.8
+> Users with older installations will need to manually install Keda.
+
+Autoscaling in k3s is managed by [Keda](https://keda.sh/), which integrates with a variety of external metric providers to allow for autoscaling application workloads.
+
+To enable autoscaling, use the `app.json` `formation.$PROCESS_TYPE.autoscaling` key to manage rules. In addition to the existing configuration used for process management, each process type in the `formation.$PROCESS_TYPE.autoscaling` key can have the following keys:
+
+- `min_quantity`: The minimum number of instances the application can run. If not specified, the `quantity` specified for the app is used.
+- `max_quantity`: The maximum number of instances the application can run. If not specified, the higher value of `quantity` and the `min_quantity` is used.
+- `polling_interval_seconds`: (default: 30) The interval to wait for polling each of the configured triggers
+- `cooldown_seconds`: (default: 300) The number of seconds to wait in between each scaling event
+- `triggers`: A list of autoscaling triggers.
+
+Autoscaling triggers are passed as is to Keda, and should match the configuration keda uses for a given [scaler](https://keda.sh/docs/2.13/scalers/). Below is an example for [datadog](https://keda.sh/docs/2.13/scalers/datadog/#example-2---driving-scale-directly):
+
+```json
+{
+    "formation": {
+        "web": {
+            "autoscaling": {
+                "min_quantity": 1,
+                "max_quantity": 10,
+                "triggers": [
+                    {
+                        "name": "name-for-trigger",
+                        "type": "datadog",
+                        "metadata": {
+                            "query": "per_second(sum:http.requests{service:myservice1}).rollup(max, 300))/180,per_second(sum:http.backlog{service:myservice1}).rollup(max, 300)/30",
+                            "queryValue": "1",
+                            "queryAggregator": "max"
+                        }
+                    }
+                ]
+            }
+        }
+    }
+}
+```
+
+Each value in the `metadata` stanza can use the following interpolated strings:
+
+- `DOKKU_DEPLOYMENT_NAME`: The name of the deployment being scaled
+- `DOKKU_PROCESS_TYPE`: The name of the process being scaled
+- `DOKKU_APP_NAME`: The name of the app being scaled
+
+##### HTTP Autoscaling
+
+In addition to the built-in scalers that Keda provides, Dokku also supports Keda's HTTP Add On. This requires that the addon be properly installed and configured. For existing k3s clusters, this can be performed by the `scheduler-k3s:ensure-charts` command:
+
+```shell
+dokku scheduler-k3s:ensure-charts
+```
+
+> [!NOTE]
+> Users who wish to use this functionality on a cluster not managed by Dokku will need to manually install the `keda-http-add-on` into the `keda` namespace. Please consult the `keda-http-add-on` [install documentation](https://kedacore.github.io/http-add-on/install.html) for further details.
+
+> [!WARNING]
+> If the `keda-http-add-on` chart is not installed, then this trigger will be ignored.
+
+Once the chart is configured, an `http` trigger can be specified like so:
+
+```json
+{
+    "formation": {
+        "web": {
+            "autoscaling": {
+                "min_quantity": 1,
+                "max_quantity": 10,
+                "triggers": [
+                    {
+                        "type": "http",
+                        "metadata": {
+                            "scaledown_period_seconds": "150",
+                            "request_rate_target_value": "50"
+                        }
+                    }
+                ]
+            }
+        }
+    }
+}
+```
+
+The following metadata properties are supported with the http autoscaler:
+
+- `scale_by`: (default: `request_rate`) whether to scale by `concurrency` or `request_rate`.
+- `scaledown_period_seconds`: (default: `300`) period to wait after the last reported active before scaling the resource back to 0.
+- `request_rate_granularity_seconds`: (default: `1`) granualarity of the aggregated requests for the request rate calculation.
+- `request_rate_target_value`: (default: `100`) target value for the request rate.
+- `request_rate_window_seconds`: (default: `60`) aggregation window for the request rate calculation.
+- `concurrency_target_value`: (default: `100`) target value for the request concurrency.
+
+Note that due to Keda limitations, scaling is done by _either_ `concurrency` or `request_rate`.
+
+#### Workload Autoscaling Authentication
+
+Most Keda triggers require some form of authentication to query for data. In the Kubernetes API, they are represented by `TriggerAuthentication` and `ClusterTriggerAuthentication` resources. Dokku can manage these via the `scheduler-k3s:autoscaling-auth` commands, and includes generated resources with each helm release generated by a deploy.
+
+If no app-specific authentication is provided for a given trigger type, Dokku will fallback to any globally defined `ClusterTriggerAuthentication` resources. Autoscaling triggers within an app all share the same `TriggerAuthentication` resources, while `ClusterTriggerAuthentication` resources can be shared across all apps deployed by Dokku within a given cluster.
+
+##### Creating Authentication Resources
+
+Users can specify custom authentication resources directly via the Kubernetes api _or_ use the `scheduler-k3s:autoscaling-auth:set` command to create the resources in the Kubernetes cluster.
+
+```shell
+dokku scheduler-k3s:autoscaling-auth:set $APP $TRIGGER --metadata apiKey=some-api-key --metadata appKey=some-app-key
+```
+
+For example, the following will configure the authentication for all datadog triggers on the specified app:
+
+```shell
+dokku scheduler-k3s:autoscaling-auth:set node-js-app datadog --metadata apiKey=1234567890 --metadata appKey=asdfghjkl --metadata datadogSite=us5.datadoghq.com
+```
+
+After execution, Dokku will include the following resources for each specified trigger with the helm release generated on subsequent app deploys:
+
+- `Secret`: an Opaque `Secret` resource storing the authentication credentials
+- `TriggerAuthentication`: A `TriggerAuthentication` resource that references the secret for use by triggers
+
+If the `--global` flag is specified instead of an app name, a custom helm chart is created on the fly with the above resources.
+
+##### Removing Authentication Resources
+
+To remove a configured authenticatin resource, run the `scheduler-k3s:autoscaling-auth:set` command with no metadata specified. Subsequent deploys will not include these resources.
+
+```shell
+dokku scheduler-k3s:autoscaling-auth:set $APP $TRIGGER_TYPE
+```
+
+##### Displaying an Authentication Resource report
+
+To see a list of authentication resources managed by Dokku, run the `scheduler-k3s:autoscaling-auth:report` command.
+
+```shell
+dokku scheduler-k3s:autoscaling-auth:report node-js-app
+```
+
+```
+====> $APP autoscaling-auth report
+      datadog: configured
+```
+
+By default, the report will not display configured metadata - making it safe to include in Dokku report output. To include metadata and their values, add the `--include-metadata` flag:
+
+```shell
+dokku scheduler-k3s:autoscaling-auth:report node-js-app --include-metadata
+```
+
+```
+====> node-js-app autoscaling-auth report
+      Datadog:                       configured
+      Datadog apiKey:                1234567890
+      Datadog appKey:                asdfghjkl
+      Datadog datadogSite:           us5.datadoghq.com
+```
+
+### Integrating Kustomize
+
+Dokku supports integration with [Kustomize](https://kustomize.io/) to further customize the generated helm charts for app deployments. For example, a `config/kustomize/kustomization.yaml` file with the following contents will override the scale for each process deployed to `3`:
+
+```yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+- rendered.yaml
+patches:
+- patch: |-
+    - op: replace
+      path: /spec/replicas
+      value: 3
+  target:
+      group: apps
+      version: v1
+      kind: Deployment
+```
+
+When using Kustomize with Dokku, all Kustomize-files _must_ be placed in the `config/kustomize` folder, with a `kustomization.yaml` file being the entrypoint to Kustomize. Dokku will render the helm chart to a `rendered.yaml` file, and then execute Kustomize with the `config/kustomize` folder as the context.
+
+See the [Kustomize](https://kustomize.io/) website for more details on how to use Kustomize.
+
+### Using kubectl remotely
+
+> [!WARNING]
+> Certain ports must be open for interacting with the remote kubernets api. Refer to the [K3s networking documentation](https://docs.k3s.io/installation/requirements?os=debian#networking) for the required open ports between servers prior to running the command.
+
+By default, Dokku assumes that all it controls all actions on the cluster, and thus does not expose the `kubectl` binary for administrators. To interact with kubectl, you will need to retrieve the `kubeconfig` for the cluster and configure your client to use that configuration.
+
+```shell
+dokku scheduler-k3s:show-kubeconfig
+```
+
+### Interacting with an external Kubernetes cluster
+
+While the k3s scheduler plugin is designed to work with a Dokku-managed k3s cluster, Dokku can be configured to interact with any Kubernetes cluster by setting the global `kubeconfig-path` to a path to a custom kubeconfig on the Dokku server. This property is only available at a global level.
+
+```shell
+dokku scheduler-k3s:set --global kubeconfig-path /path/to/custom/kubeconfig
+```
+
+To set the default value, omit the value from the `scheduler-k3s:set` call:
+
+```shell
+dokku scheduler-k3s:set --global kubeconfig-path
+```
+
+The default value for the `kubeconfig-path` is the k3s kubeconfig located at `/etc/rancher/k3s/k3s.yaml`.
+
+### Customizing the Kubernetes context
+
+When interacting with a custom Kubeconfig, the `kube-context` property can be set to specify a specific context within the kubeconfig to use. This property is available only at the global leve.
+
+```shell
+dokku scheduler-k3s:set --global kube-context lollipop
+```
+
+To set the default value, omit the value from the `scheduler-k3s:set` call:
+
+```shell
+dokku scheduler-k3s:set --global kube-context
+```
+
+The default value for the `kube-context` is an empty string, and will result in Dokku using the current context within the kubeconfig.
+
+### Customizing Helm Chart Properties
+
+Dokku includes a number of helm charts by default with settings that are optimized for Dokku. That said, it may be useful to further customize the charts for a given environment. Users can customize which charts are installed by setting properties prefixed with `chart.$CHART_NAME.` with the `--global` flag.
+
+```shell
+dokku scheduler-k3s:set --global chart.cert-manager.version 1.13.3
+```
+
+> [!NOTE]
+> Properties follow dot-notation, and are expanded according to Helm's internal logic. See the [Helm documentation](https://helm.sh/docs/helm/helm_install/#helm-install) for `helm install` for further details.
+
+To unset a chart property, omit the value from the `scheduler-k3s:set` call:
+
+```shell
+dokku scheduler-k3s:set --global chart.cert-manager.version
+```
+
+A `scheduler-k3s:ensure-charts` command with the `--force` flag is required after changing any chart properties in order to have them apply. This will install all charts, not just the ones that have changed.
+
+```shell
+dokku scheduler-k3s:ensure-charts --force
+```
+
+Alternatively, a comma separated list of chart names can be specified to only force install the specified charts:
+
+```shell
+dokku scheduler-k3s:ensure-charts --charts cert-manager
+```
+
+## Scheduler Interface
+
+The following sections describe implemented and unimplemented scheduler functionality for the `k3s` scheduler.
+
+### Implemented Commands and Triggers
+
+This plugin implements various functionality through `plugn` triggers to integrate with Docker for running apps on a single server. The following functionality is supported by the `scheduler-k3s` plugin.
+
+- `apps:clone`
+- `apps:destroy`
+- `apps:rename`
+- `docker-options`:
+    - The following docker options are translated into their kubernetes equivalents:
+        - `--cap-add`
+        - `--cap-drop`
+        - `--privileged`
+- `cron`
+- `enter`
+- `deploy`
+- healthchecks
+    - Due to Kubernetes limitations, only a single healthcheck is supported for each of the `liveness`, `readiness`, and `startup` healthchecks
+    - Due to Kubernetes limitations, content checks are not supported
+    - Ports specified in the `app.json` are ignored in favor of the container port on the port mapping detected
+- `logs`
+- `nginx`
+    - Properties set by the `nginx` plugin will be respected, either by turning them into annotations or creating a custom server/location snippet that the `ingress-nginx` project can use. A `ps:restart` after changing any nginx properties is required in order to have them apply.
+    - The `nginx:access-logs` and `nginx:error-logs` commands will fetch logs from one running `ingress-nginx` pod.
+    - The `nginx:show-config` command will retrieve any `server` blocks associated with a domain attached to the app from one running `ingress-nginx` pod.
+- `ps:stop`
+- `run`
+    - The `scheduler-post-run` trigger is not always triggered
+- `run:detached`
+- `run:list`
+
+### Unimplemented command functionality
+
+- `run:logs`
+- `ps:inspect`
+
+The following Dokku functionality is not implemented at this time.
+
+- `vector` log integration
+- persistent storage
+
+### Logging support
+
+App logs for the `logs` command are fetched by Dokku from running containers via the Kubernetes api. While the `k3s` scheduler does not integrate with the `logs:vector-*` subcommands, it does respect the global `vector-sink` logs property. When that property is set, the `scheduler-k3s:ensure-charts` command can be utilized to reconfigure vector to ship kubernetes logs to the provided sink.
+
+To setup log shipping, configure the global `vector-sink` property for the `logs` plugin.. Note that this can be run before _or_ after the `scheduler-k3s:ensure-charts` command - if run before, the `scheduler-k3s:ensure-charts` subcommand will pick up the value.
+
+```shell
+dokku logs:set --global vector-sink "console://?encoding[codec]=json"
+```
+
+Next, run the `scheduler-k3s:ensure-charts` command with the `vector` chart to force the `k3s` scheduler to reconfigure vector with the specified sink:
+
+```shell
+dokku scheduler-k3s:ensure-charts --charts vector
+```
+Please see the [vector logs documentation](/docs/deployment/logs.md#configuring-a-log-sink) for more information on specifying vector sinks.
+
+### Supported Resource Management Properties
+
+The `k3s` scheduler supports a minimal list of resource _limits_ and _reservations_:
+
+- cpu: is specified in number of CPUs a process can access.
+- memory: should be specified with a suffix of `b` (bytes), `Ki` (kilobytes), `Mi` (megabytes), `Gi` (gigabytes). Default unit is `Mi` (megabytes).
+
+If unspecified for any task, the default reservation will be `.1` CPU and `128Mi` RAM, with no limit set for either CPU or RAM. This is to avoid issues with overscheduling pods on a cluster. To avoid issues, set more specific values for at least resource reservations. If unbounded utilization is desired, set CPU and Memory to `0m` and `0Mi`, respectively.
+
+> [!NOTE]
+> Cron tasks retrieve resource limits based on the computed cron task ID.

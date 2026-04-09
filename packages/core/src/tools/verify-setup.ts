@@ -1,7 +1,10 @@
-import "dotenv/config";
+import fs from "node:fs";
+import path from "node:path";
+import dotenv from "dotenv";
 import { resolvePlatformModeFromEnv } from "@integration/shared";
 import { closePostgresPool, getPostgresPool } from "../db/postgres";
 import { closeRedisClient, getRedisClient } from "../db/redis";
+import { findRepoRoot } from "./init-env";
 
 type EnvImportance = "required" | "optional" | "prototype_optional";
 
@@ -126,6 +129,38 @@ function hasValue(value: string | undefined): boolean {
   return typeof value === "string" && value.trim().length > 0;
 }
 
+let rootEnvLoaded = false;
+
+function ensureRootEnvLoaded(): void {
+  if (rootEnvLoaded) {
+    return;
+  }
+  rootEnvLoaded = true;
+
+  const explicitPath = process.env.DOTENV_CONFIG_PATH;
+  if (explicitPath && fs.existsSync(explicitPath)) {
+    dotenv.config({
+      path: explicitPath,
+    });
+    return;
+  }
+
+  try {
+    const repoRoot = findRepoRoot(process.cwd());
+    const rootEnvPath = path.join(repoRoot, ".env");
+    if (fs.existsSync(rootEnvPath)) {
+      dotenv.config({
+        path: rootEnvPath,
+      });
+      return;
+    }
+  } catch {
+    // fallback to default dotenv behavior below
+  }
+
+  dotenv.config();
+}
+
 export function evaluateSetupEnvironment(
   env: NodeJS.ProcessEnv = process.env,
 ): SetupVerificationSummary {
@@ -185,6 +220,7 @@ export async function verifySetup(options?: {
   checkConnections?: boolean;
   logger?: Pick<Console, "info" | "warn" | "error">;
 }): Promise<{ ok: boolean; summary: SetupVerificationSummary }> {
+  ensureRootEnvLoaded();
   const env = options?.env || process.env;
   const checkConnections = options?.checkConnections ?? true;
   const logger = options?.logger || console;

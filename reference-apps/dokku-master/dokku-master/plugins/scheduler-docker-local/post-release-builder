@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+set -eo pipefail
+[[ $DOKKU_TRACE ]] && set -x
+source "$PLUGIN_CORE_AVAILABLE_PATH/common/functions"
+source "$PLUGIN_CORE_AVAILABLE_PATH/common/property-functions"
+source "$PLUGIN_AVAILABLE_PATH/config/functions"
+source "$PLUGIN_AVAILABLE_PATH/scheduler-docker-local/internal-functions"
+
+trigger-scheduler-docker-local-post-release-builder() {
+  declare desc="scheduler-docker-local post-release-builder plugin trigger"
+  declare trigger="post-release-builder"
+  declare BUILDER_TYPE="$1" APP="$2" IMAGE="$3"
+
+  local DOKKU_SCHEDULER="$(get_app_scheduler "$APP")"
+  if [[ "$DOKKU_SCHEDULER" != "docker-local" ]]; then
+    return
+  fi
+
+  scheduler-docker-local-post-release-builder-precheck "$APP"
+}
+
+scheduler-docker-local-post-release-builder-precheck() {
+  declare desc="Outputs the checks messages if necessary"
+  declare APP="$1"
+
+  dokku_log_info2 "Processing deployment checks"
+
+  local TMP_APP_JSON_OUTPUT=$(mktemp "/tmp/dokku-${DOKKU_PID}-${FUNCNAME[0]}.XXXXXX")
+  trap "rm -rf '$TMP_APP_JSON_OUTPUT' >/dev/null" RETURN INT TERM EXIT
+  plugn trigger app-json-get-content "$APP" >"$TMP_APP_JSON_OUTPUT"
+
+  if ! docker-container-healthchecker exists web --app-json "$TMP_APP_JSON_OUTPUT"; then
+    local CHECKS_URL="${DOKKU_CHECKS_URL:-https://dokku.com/docs/deployment/zero-downtime-deploys/}"
+    dokku_log_verbose "No web healthchecks found in app.json. Simple container checks will be performed."
+    dokku_log_verbose "For more efficient zero downtime deployments, add healthchecks to your app.json. See ${CHECKS_URL} for examples"
+  fi
+}
+
+trigger-scheduler-docker-local-post-release-builder "$@"

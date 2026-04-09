@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+source "$PLUGIN_AVAILABLE_PATH/git/internal-functions"
+set -eo pipefail
+[[ $DOKKU_TRACE ]] && set -x
+
+trigger-git-post-create() {
+  declare desc="initializes an app with the correct git repository structure"
+  declare trigger="post-create"
+  declare APP="$1"
+
+  fn-git-create-hook "$APP"
+}
+
+trigger-git-post-create "$@"

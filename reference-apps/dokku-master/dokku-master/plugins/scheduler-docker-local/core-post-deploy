@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+set -eo pipefail
+[[ $DOKKU_TRACE ]] && set -x
+source "$PLUGIN_CORE_AVAILABLE_PATH/common/functions"
+source "$PLUGIN_AVAILABLE_PATH/config/functions"
+
+trigger-scheduler-docker-local-core-post-deploy() {
+  declare desc="scheduler-docker-local core-post-deploy state cleanup"
+  declare trigger="core-post-deploy"
+  declare APP="$1"
+  local APP_ROOT="$DOKKU_ROOT/$APP"
+
+  local DOKKU_SCHEDULER=$(get_app_scheduler "$APP")
+  if [[ "$DOKKU_SCHEDULER" != "docker-local" ]]; then
+    return
+  fi
+
+  # move over the checks file appropriately
+  checks_file="${DOKKU_LIB_ROOT}/data/scheduler-docker-local/$APP/CHECKS"
+  process_specific_checks_file="${DOKKU_LIB_ROOT}/data/scheduler-docker-local/$APP/CHECKS.$DOKKU_PID"
+  if [[ -f "$process_specific_checks_file" ]]; then
+    mv "$process_specific_checks_file" "$checks_file"
+  elif [[ -f "$process_specific_checks_file.missing" ]]; then
+    rm -f "$process_specific_checks_file.missing"
+    if [[ -f "$checks_file" ]]; then
+      rm -f "$checks_file"
+    fi
+  fi
+
+  dokku_log_info1 "Renaming containers"
+  local PROCTYPES="$(plugn trigger ps-current-scale "$APP" | awk -F '=' '{ print $1 }' | xargs)"
+  local CONTAINER_FILES="$(find "$DOKKU_ROOT/$APP" -maxdepth 1 -name "CONTAINER.*" -printf "%f\n" 2>/dev/null | sort -t . -k 3 -n | xargs)"
+
+  local CONTAINER_FILE
+  for CONTAINER_FILE in $CONTAINER_FILES; do
+    local CONTAINER_TYPE="$(awk -F '.' '{ print $2 }' <<<"$CONTAINER_FILE")"
+    if [[ "$(is_val_in_list "$CONTAINER_TYPE" "$PROCTYPES" " ")" == "false" ]]; then
+      dokku_log_verbose_quiet "Container type ($CONTAINER_TYPE) is no longer defined. Removing state"
+      local IP_FILE="${CONTAINER_FILE//CONTAINER/IP}"
+      local PORT_FILE="${CONTAINER_FILE//CONTAINER/PORT}"
+      rm -f "$DOKKU_ROOT/$APP/$CONTAINER_FILE" "$DOKKU_ROOT/$APP/$IP_FILE" "$DOKKU_ROOT/$APP/$PORT_FILE"
+    fi
+  done
+
+  shopt -s nullglob
+  local container
+  for container in $APP_ROOT/CONTAINER.*; do
+    local DYNO=$(echo "$container" | sed -r 's/.*CONTAINER\.(.*)/\1/') || true
+    local NAME="$APP.$DYNO"
+    local CURRENT_CONTAINER_ID="$(<"$container")"
+    # TODO: Ensure these are from the current service
+    local PREVIOUS_CIDS=$("$DOCKER_BIN" container ls --all --quiet --filter name="^.?$NAME\$" | xargs) || true
+    if [[ -n $PREVIOUS_CIDS ]]; then
+      dokku_log_verbose_quiet "Found previous container(s) ($PREVIOUS_CIDS) named $NAME"
+      # in case $PREVIOUS_CIDS has more than one entry
+      local cid
+      for cid in $PREVIOUS_CIDS; do
+        local PREVIOUS_CONTAINER_STATUS=$("$DOCKER_BIN" container inspect --format '{{.State.Status}}' "$cid" || echo "dead")
+        # dead containers cannot be renamed
+        if [[ "$PREVIOUS_CONTAINER_STATUS" != "dead" ]]; then
+          local CONTAINER_DATE_NAME="$NAME.$(date +%s)"
+          dokku_log_verbose_quiet "Renaming container ($cid) ${NAME} to $CONTAINER_DATE_NAME"
+          "$DOCKER_BIN" container rename "$NAME" "$CONTAINER_DATE_NAME" &>/dev/null || dokku_log_warn "Unable to rename container"
+        fi
+      done
+    fi
+    local ID=$(cat "$container")
+    local CURRENT_NAME=$("$DOCKER_BIN" container inspect --format '{{.Name}}' "$ID" | tr -d /)
+    if [[ -n "$CURRENT_NAME" ]]; then
+      dokku_log_verbose_quiet "Renaming container $CURRENT_NAME (${ID:0:12}) to $NAME"
+      if ! "$DOCKER_BIN" container rename "$ID" "$NAME" >/dev/null; then
+        dokku_log_warn "Failed to rename container $CURRENT_NAME (${ID:0:12})"
+        dokku_log_info2_quiet "Start $APP container output (${ID:0:12} $NAME)"
+        dokku_container_log_verbose_quiet "$ID"
+        dokku_log_info2_quiet "End $APP container output (${ID:0:12} $NAME)"
+      fi
+    fi
+  done
+  shopt -u nullglob
+}
+
+trigger-scheduler-docker-local-core-post-deploy "$@"

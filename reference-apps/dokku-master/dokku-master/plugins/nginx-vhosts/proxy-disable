@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+set -eo pipefail
+[[ $DOKKU_TRACE ]] && set -x
+source "$PLUGIN_CORE_AVAILABLE_PATH/common/functions"
+
+trigger-nginx-vhosts-proxy-disable() {
+  declare desc="disable nginx proxy"
+  declare trigger="proxy-disable"
+  declare APP="$1"
+
+  if [[ "$(plugn trigger proxy-type "$APP")" == "nginx" ]]; then
+    plugn trigger domains-disable "$APP" false
+    plugn trigger app-restart "$APP"
+  fi
+}
+
+trigger-nginx-vhosts-proxy-disable "$@"

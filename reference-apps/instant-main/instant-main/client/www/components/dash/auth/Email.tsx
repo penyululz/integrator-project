@@ -1,0 +1,556 @@
+import { useContext, useState, useEffect } from 'react';
+import config from '@/lib/config';
+import { jsonMutate, jsonFetch } from '@/lib/fetch';
+import { TokenContext } from '@/lib/contexts';
+import { InstantApp } from '@/lib/types';
+import {
+  ActionButton,
+  BlockHeading,
+  Button,
+  CodeEditor,
+  Content,
+  Dialog,
+  Label,
+  SectionHeading,
+  SubsectionHeading,
+  TextInput,
+  useDialog,
+} from '@/components/ui';
+import { displayInstantStandardError, useForm } from '@/lib/hooks/useForm';
+import { errorToast, successToast } from '@/lib/toast';
+import clsx from 'clsx';
+import { useFetchedDash } from '../MainDashLayout';
+import { useDarkMode } from '../DarkModeToggle';
+
+export type EmailValues = {
+  from: string;
+  subject: string;
+  bodyHtml: string;
+  senderEmail: string;
+};
+
+export type SenderVerificationInfo = {
+  ID: number;
+  EmailAddress: string;
+  Confirmed: boolean;
+  DKIMHost?: string;
+  DKIMPendingHost?: string;
+  DKIMPendingTextValue?: string;
+  DKIMTextValue?: string;
+  ReturnPathDomain: string;
+  ReturnPathDomainCNAMEValue: string;
+};
+
+export function getSenderVerification({
+  token,
+  appId,
+}: {
+  token: string;
+  appId: string;
+}): Promise<{
+  senderEmail: string;
+  verification: SenderVerificationInfo | null;
+}> {
+  return jsonFetch(`${config.apiURI}/dash/apps/${appId}/sender-verification`, {
+    method: 'GET',
+    headers: {
+      authorization: `Bearer ${token}`,
+      'content-type': 'application/json',
+    },
+  });
+}
+
+export function Email({ app }: { app: InstantApp }) {
+  const dashResponse = useFetchedDash();
+  const template = app.magic_code_email_template;
+  const token = useContext(TokenContext);
+  const [isEditing, setIsEditing] = useState(Boolean(template) ?? false);
+  const [{ isVerifying, verification }, setVerification] = useState<{
+    isVerifying: boolean;
+    verification: SenderVerificationInfo | null;
+  }>({
+    isVerifying: false,
+    verification: null,
+  });
+
+  const { darkMode } = useDarkMode();
+
+  const checkVerification = async () => {
+    setVerification((prev) => ({ ...prev, isVerifying: true }));
+    try {
+      const response = await getSenderVerification({
+        token,
+        appId: app.id,
+      });
+      setVerification((prev) => ({
+        ...prev,
+        verification: response.verification,
+      }));
+    } catch (error) {
+      console.error('Failed to check verification:', error);
+      errorToast('Failed to check verification status');
+    } finally {
+      setVerification((prev) => ({ ...prev, isVerifying: false }));
+    }
+  };
+
+  async function onSubmit(values: EmailValues) {
+    return dashResponse
+      .optimisticUpdate(
+        jsonMutate<{ id: string }>(
+          `${config.apiURI}/dash/apps/${app.id}/email_templates`,
+          {
+            body: {
+              'email-type': 'magic-code',
+              subject: values.subject,
+              body: values.bodyHtml,
+              'sender-email': values.senderEmail,
+              'sender-name': values.from,
+            },
+            token,
+          },
+        ),
+      )
+      .then(
+        () => {
+          successToast('Email template saved!');
+          if (values.senderEmail) {
+            checkVerification();
+          }
+        },
+        (errorRes) =>
+          displayInstantStandardError(errorRes, form, {
+            'sender-email': 'senderEmail',
+            'sender-name': 'from',
+            body: 'bodyHtml',
+            subject: 'subject',
+          }),
+      );
+  }
+
+  const form = useForm<EmailValues>({
+    onSubmit,
+    validators: {
+      subject: validateTemplate,
+      bodyHtml: validateTemplate,
+    },
+    initial: template
+      ? {
+          subject: template.subject,
+          bodyHtml: template.body,
+          from: template.name ?? '',
+          senderEmail: template.email ?? '',
+        }
+      : formDefaults,
+  });
+
+  useEffect(() => {
+    if (template?.email) {
+      checkVerification();
+    }
+  }, []);
+
+  if (!isEditing) {
+    return (
+      <div className="flex flex-col gap-2">
+        <SectionHeading>Custom Magic Code Email</SectionHeading>
+        <Button onClick={() => setIsEditing(true)}>
+          Customize your magic code email
+        </Button>
+      </div>
+    );
+  }
+  return (
+    <div>
+      <form {...form.formProps()} className="flex flex-col gap-2">
+        <SectionHeading>Custom Magic Code Email</SectionHeading>
+
+        <div className="flex flex-col gap-1 rounded-sm border bg-gray-50 p-3 dark:border-neutral-700 dark:bg-neutral-800">
+          <BlockHeading>Template variables</BlockHeading>
+          <Content className="text-sm">
+            We provide a few dynamic variables for you to use in your email:
+            <ul>
+              <li>
+                <VariableName>code</VariableName>, the magic code e.g.{' '}
+                <strong className="dark:text-white">123456</strong>
+              </li>
+              <li>
+                <VariableName>app_title</VariableName>, your app's title, i.e.{' '}
+                <strong className="dark:text-white">{app.title}</strong>
+              </li>
+              <li>
+                <VariableName>user_email</VariableName>, the user's email
+                address, e.g.{' '}
+                <strong className="dark:text-white">happyuser@gmail.com</strong>
+              </li>
+            </ul>
+          </Content>
+          <Content className="text-sm">
+            <strong className="dark:text-white">Note:</strong>{' '}
+            <VariableName>code</VariableName>
+            is required in both the subject and body.
+          </Content>
+        </div>
+
+        <TextInput
+          {...form.inputProps('subject')}
+          label="Subject"
+          placeholder="Hey there!  Your code for {app_title} is: {code}"
+        />
+
+        <TextInput
+          {...form.inputProps('from')}
+          label="From"
+          placeholder="YourName from YourCo"
+        />
+
+        <div className="flex flex-col gap-1">
+          <Label>Body (HTML or plain-text)</Label>
+          <div
+            className={clsx('h-64 rounded-sm border dark:border-neutral-700', {
+              'border-red-500': form.getError('bodyHtml'),
+            })}
+          >
+            <CodeEditor
+              darkMode={darkMode}
+              className="dark:border-neutral-600"
+              language="html"
+              {...form.inputProps('bodyHtml')}
+            />
+          </div>
+          {form.getError('bodyHtml') ? (
+            <div className="text-sm text-red-600">
+              {form.getError('bodyHtml')}
+            </div>
+          ) : null}
+        </div>
+
+        <div className="flex flex-col gap-2 rounded-sm border bg-gray-50 p-3 dark:border-neutral-700 dark:bg-neutral-800">
+          <SubsectionHeading>
+            Use a custom 'From' address (optional)
+          </SubsectionHeading>
+          <Content className="text-sm">
+            By default emails are sent from our domain. Add a custom sender to
+            send emails from your own domain and build trust with recipients.
+            Our email partner will send a confirmation to the provided address
+            with a link to verify.
+          </Content>
+          <TextInput
+            {...form.inputProps('senderEmail')}
+            label="Sender email address"
+            placeholder="hi@yourdomain.co"
+          />
+        </div>
+
+        {verification && (
+          <div className="flex flex-col gap-2 rounded-sm border bg-gray-50 p-3 dark:border-neutral-700 dark:bg-neutral-800">
+            <div className="flex items-center justify-between">
+              <SubsectionHeading>
+                Verify {verification.EmailAddress}
+              </SubsectionHeading>
+              <Button
+                type="button"
+                onClick={checkVerification}
+                loading={isVerifying}
+                variant="primary"
+                size="mini"
+              >
+                Refresh Status
+              </Button>
+            </div>
+
+            <div className="rounded-sm border bg-white p-4 dark:border-neutral-700 dark:bg-neutral-700/60">
+              <div className="mb-2 flex items-center justify-between">
+                <div className="text-sm font-medium">Email Confirmation</div>
+                <div className="flex items-center gap-2">
+                  <StatusCircle
+                    isLoading={isVerifying}
+                    isSuccess={verification.Confirmed}
+                  />
+                  {verification.Confirmed ? (
+                    <div className="text-xs font-medium text-green-600">
+                      Confirmed
+                    </div>
+                  ) : (
+                    <div className="text-xs text-gray-500 dark:text-neutral-400">
+                      Pending confirmation
+                    </div>
+                  )}
+                </div>
+              </div>
+              <Content className="text-sm text-gray-600">
+                {verification.Confirmed
+                  ? `Great! You've confirmed ${verification.EmailAddress} and can now send emails from this address.`
+                  : `We've sent a confirmation email to ${verification.EmailAddress}. Please click the link in that email to confirm ownership.`}
+              </Content>
+            </div>
+
+            {/* Domain Verification */}
+            <div className="rounded-sm border bg-white p-4 dark:border-neutral-700 dark:bg-neutral-700/60">
+              <div className="mb-2 flex items-center justify-between">
+                <div className="text-sm font-medium">
+                  Bonus: Domain Verification
+                </div>
+              </div>
+
+              <Content className="mb-3 text-sm text-gray-600">
+                Add DNS records to improve email deliverability and avoid spam
+                filters.
+              </Content>
+
+              <div className="mb-3 overflow-hidden rounded-sm border dark:border-neutral-600">
+                <div className="grid grid-cols-[1fr_80px_2fr] border-b bg-gray-50 px-4 py-3 text-sm font-medium text-gray-700 dark:border-b-neutral-600 dark:bg-neutral-600/50 dark:text-white">
+                  <div>Record</div>
+                  <div>Type</div>
+                  <div>Value</div>
+                </div>
+                <div className="grid grid-cols-[1fr_80px_2fr] border-b px-4 py-3 text-sm dark:border-b-neutral-600">
+                  <div className="flex gap-3">
+                    <div className="font-medium">DKIM</div>
+                  </div>
+                  <div className="flex text-sm text-gray-600 dark:text-gray-400">
+                    TXT
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <div>
+                      <div className="mb-1 text-xs text-gray-600 dark:text-gray-400">
+                        Hostname:
+                      </div>
+                      <code className="block rounded-sm bg-gray-100 px-2 py-1 text-xs break-all select-all dark:bg-neutral-700">
+                        {verification.DKIMPendingHost || verification.DKIMHost}
+                      </code>
+                    </div>
+                    <div>
+                      <div className="mb-1 text-xs text-gray-600 dark:text-gray-400">
+                        Value:
+                      </div>
+                      <code className="block rounded-sm bg-gray-100 px-2 py-1 text-xs break-all select-all dark:bg-neutral-700">
+                        {verification.DKIMPendingTextValue ||
+                          verification.DKIMTextValue}
+                      </code>
+                    </div>
+                  </div>
+                </div>
+                <div className="grid grid-cols-[1fr_80px_2fr] px-4 py-3 text-sm">
+                  <div className="flex items-center gap-3">
+                    <div className="font-medium">Return-Path</div>
+                  </div>
+                  <div className="flex items-center text-sm text-gray-600 dark:text-neutral-400">
+                    CNAME
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <div>
+                      <div className="mb-1 text-xs text-gray-600 dark:text-neutral-400">
+                        Hostname:
+                      </div>
+                      <code className="block rounded-sm bg-gray-100 px-2 py-1 text-xs break-all select-all dark:bg-neutral-700">
+                        {verification.ReturnPathDomain}
+                      </code>
+                    </div>
+                    <div>
+                      <div className="mb-1 text-xs text-gray-600 dark:text-neutral-400">
+                        Value:
+                      </div>
+                      <code className="block rounded-sm bg-gray-100 px-2 py-1 text-xs break-all select-all dark:bg-neutral-700">
+                        {verification.ReturnPathDomainCNAMEValue}
+                      </code>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        <Button {...form.submitButtonProps()} />
+
+        <>
+          <ActionButton
+            variant="destructive"
+            label="Delete template"
+            submitLabel="Deleting..."
+            errorMessage="Failed to delete template"
+            onClick={async () => {
+              if (template?.id) {
+                await dashResponse.optimisticUpdate(
+                  jsonMutate(
+                    `${config.apiURI}/dash/apps/${app.id}/email_templates/${template?.id}`,
+                    {
+                      method: 'DELETE',
+                      token,
+                    },
+                  ),
+                );
+              }
+
+              form.reset(formDefaults);
+              setIsEditing(false);
+            }}
+          />
+        </>
+      </form>
+
+      <MagicCodeExpirationSection app={app} />
+    </div>
+  );
+}
+
+const EXPIRY_OPTIONS = [
+  { label: '10 minutes', value: 10 },
+  { label: '1 hour', value: 60 },
+  { label: '24 hours', value: 1440 },
+];
+
+function MagicCodeExpirationSection({ app }: { app: InstantApp }) {
+  const dashResponse = useFetchedDash();
+  const token = useContext(TokenContext);
+  const dialog = useDialog();
+  const currentExpiry = app.magic_code_expiry_minutes ?? undefined;
+  const [selected, setSelected] = useState<number | undefined>(currentExpiry);
+  const [isSaving, setIsSaving] = useState(false);
+
+  const handleSave = async () => {
+    if (!selected) return;
+    setIsSaving(true);
+    try {
+      await dashResponse.optimisticUpdate(
+        jsonMutate(
+          `${config.apiURI}/dash/apps/${app.id}/set-magic-code-expiry`,
+          { body: { expiry: selected }, token },
+        ),
+      );
+      successToast('Magic code expiration updated!');
+      dialog.onClose();
+    } catch {
+      errorToast('Failed to update expiration.');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  return (
+    <div className="mt-4">
+      <button
+        type="button"
+        className="text-sm text-gray-400 underline hover:text-gray-600 dark:text-neutral-500 dark:hover:text-neutral-300"
+        onClick={() => {
+          setSelected(currentExpiry);
+          dialog.onOpen();
+        }}
+      >
+        Change magic code expiration
+      </button>
+      <Dialog title="Magic Code Lifetime" {...dialog}>
+        <div className="flex flex-col gap-4">
+          <SubsectionHeading>Magic Code Lifetime</SubsectionHeading>
+          <Content className="text-sm">
+            Choose how long magic codes remain valid.
+          </Content>
+          <div className="rounded border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-800 dark:border-blue-800 dark:bg-blue-900/30 dark:text-blue-300">
+            <strong>Recommended: 10 minutes.</strong> Shorter lifetimes reduce
+            the window for code interception.
+          </div>
+          <div className="flex flex-col gap-2">
+            {EXPIRY_OPTIONS.map((option) => (
+              <label
+                key={option.value}
+                className="flex cursor-pointer items-center gap-2 rounded border p-3 dark:border-neutral-700"
+              >
+                <input
+                  type="radio"
+                  name="expiry"
+                  checked={selected === option.value}
+                  onChange={() => setSelected(option.value)}
+                />
+                <span className="text-sm">{option.label}</span>
+              </label>
+            ))}
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button type="button" onClick={dialog.onClose} variant="subtle">
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              onClick={handleSave}
+              loading={isSaving}
+              variant="primary"
+              disabled={!selected || selected === currentExpiry}
+            >
+              Save
+            </Button>
+          </div>
+        </div>
+      </Dialog>
+    </div>
+  );
+}
+
+function VariableName({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="rounded-sm border bg-white px-1 font-mono text-sm dark:border-neutral-700 dark:bg-neutral-800">
+      {'{'}
+      {children}
+      {'}'}
+    </span>
+  );
+}
+
+const defaultMagicCodeEmailHtml = /* html */ `<div style="background: #f6f6f6; font-family: Helvetica, Arial, sans-serif; line-height: 1.6; font-size: 18px;">
+  <div style="max-width: 650px; margin: 0 auto; background: white; padding: 20px">
+    <div style="background: #f6f6f6; font-family: Helvetica, Arial, sans-serif; line-height: 1.6; font-size: 18px;">
+      <div style="max-width: 650px; margin: 0 auto; background: white; padding: 20px;">
+        <p><strong>Welcome,</strong></p>
+        <p>
+          You asked to join {app_title}. To complete your registration, use this
+          verification code:
+        </p>
+        <h2 style="text-align: center"><strong>{code}</strong></h2>
+        <p>
+          Copy and paste this into the confirmation box, and you'll be on your
+          way.
+        </p>
+        <p>
+          Note: This code will expire in 10 minutes, and can only be used once. If
+          you didn't request this code, please reply to this email.
+        </p>
+      </div>
+    </div>
+  </div>
+</div>
+`;
+
+const formDefaults = {
+  subject: '{code} is your code for {app_title}',
+  bodyHtml: defaultMagicCodeEmailHtml,
+  from: '',
+  senderEmail: '',
+};
+
+function validateTemplate(v: string) {
+  if (!v.includes('{code}')) {
+    return { error: 'Must include the template variable {code}' };
+  }
+}
+
+function StatusCircle({
+  isLoading,
+  isSuccess,
+}: {
+  isLoading?: boolean;
+  isSuccess: boolean;
+}) {
+  if (isLoading) {
+    return <div className="h-3 w-3 rounded-full bg-gray-400"></div>;
+  }
+
+  if (isSuccess) {
+    return (
+      <div className="flex h-3 w-3 items-center justify-center rounded-full bg-green-500">
+        <span className="text-xs text-white">✓</span>
+      </div>
+    );
+  }
+
+  return <div className="h-3 w-3 rounded-full bg-red-500"></div>;
+}

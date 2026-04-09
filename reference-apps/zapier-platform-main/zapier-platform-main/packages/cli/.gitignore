@@ -1,0 +1,8 @@
+node_modules
+*.zip
+*.log
+.zapier-*
+scratch/*
+lib/*
+.DS_Store
+.vscode

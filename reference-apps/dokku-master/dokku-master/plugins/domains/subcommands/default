@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -eo pipefail
+[[ $DOKKU_TRACE ]] && set -x
+source "$PLUGIN_AVAILABLE_PATH/domains/help-functions"
+
+cmd-domains-help "domains:help"

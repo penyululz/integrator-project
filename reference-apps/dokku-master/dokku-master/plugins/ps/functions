@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+set -eo pipefail
+[[ $DOKKU_TRACE ]] && set -x
+source "$PLUGIN_CORE_AVAILABLE_PATH/common/functions"
+
+ps_restore() {
+  declare desc="restores app"
+  local APP="$1"
+
+  ps_start "$APP"
+}
+
+fn-ps-app-status() {
+  declare APP="$1"
+
+  local DOKKU_SCHEDULER=$(get_app_scheduler "$APP")
+  plugn trigger scheduler-app-status "$DOKKU_SCHEDULER" "$APP"
+}
+
+fn-ps-is-app-running() {
+  declare APP="$1"
+  APP_STATUS=$(fn-ps-app-status "$APP")
+  echo "$APP_STATUS" | cut -d ' ' -f 2
+}

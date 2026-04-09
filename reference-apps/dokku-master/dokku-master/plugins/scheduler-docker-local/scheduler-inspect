@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+set -eo pipefail
+[[ $DOKKU_TRACE ]] && set -x
+source "$PLUGIN_CORE_AVAILABLE_PATH/common/functions"
+source "$PLUGIN_AVAILABLE_PATH/config/functions"
+
+trigger-scheduler-docker-local-scheduler-inspect() {
+  declare desc="scheduler-docker-local scheduler-inspect plugin trigger"
+  declare trigger="scheduler-inspect"
+  declare DOKKU_SCHEDULER="$1" APP="$2"
+
+  if [[ "$DOKKU_SCHEDULER" != "docker-local" ]]; then
+    return
+  fi
+
+  local TMP_INSPECT_CMD=$(mktemp "/tmp/dokku-${DOKKU_PID}-${FUNCNAME[0]}.XXXXXX")
+  trap "rm -rf '$TMP_INSPECT_CMD' >/dev/null" RETURN INT TERM EXIT
+  cat >"$TMP_INSPECT_CMD" <<EOF
+import json
+import sys
+
+output = []
+data = json.load(sys.stdin)
+for container in data:
+    env = []
+    allowed_prefixes = ['CACHE_PATH=', 'DOCKER_', 'DOKKU_', 'DYNO=', 'PATH=', 'PORT=', 'USER=']
+    for e in container['Config']['Env']:
+        append = False
+        for s in allowed_prefixes:
+            if e.startswith(s):
+                append = True
+                break
+        if append:
+            env.append(e)
+            continue
+
+        k, v = e.split('=', 1)
+        env.append('{0}=XXXXXX'.format(k))
+
+    container['Config']['Env'] = env
+    output.append(container)
+
+print(json.dumps(data, sort_keys=True, indent=4))
+EOF
+
+  local CONTAINER_FILES="$(find "$DOKKU_ROOT/$APP" -maxdepth 1 -name "CONTAINER.*" -printf "%f\n" 2>/dev/null | sort -t . -k 2 -n | xargs)"
+  local CIDS=()
+  for CONTAINER_FILE in $CONTAINER_FILES; do
+    CIDS+=("$(<"$DOKKU_ROOT/$APP/$CONTAINER_FILE")")
+  done
+
+  local PYTHON_BIN=python
+  if command -v "python3" &>/dev/null; then
+    PYTHON_BIN=python3
+  elif command -v "python2.7" &>/dev/null; then
+    PYTHON_BIN=python2.7
+  fi
+
+  "$DOCKER_BIN" container inspect "${CIDS[@]}" | "$PYTHON_BIN" "$TMP_INSPECT_CMD"
+
+}
+
+trigger-scheduler-docker-local-scheduler-inspect "$@"

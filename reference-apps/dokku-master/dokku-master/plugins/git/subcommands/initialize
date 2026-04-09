@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+source "$PLUGIN_CORE_AVAILABLE_PATH/common/functions"
+source "$PLUGIN_AVAILABLE_PATH/git/internal-functions"
+set -eo pipefail
+[[ $DOKKU_TRACE ]] && set -x
+
+cmd-git-initialize() {
+  declare desc="initialize a git repository for an app"
+  declare cmd="git:initialize"
+  [[ "$1" == "$cmd" ]] && shift 1
+  declare APP="$1"
+
+  verify_app_name "$APP"
+  dokku_log_info1_quiet "Initializing git repository for $APP"
+  fn-git-create-hook "$APP"
+}
+
+cmd-git-initialize "$@"

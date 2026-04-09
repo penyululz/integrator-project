@@ -1,0 +1,29 @@
+{
+  "compilerOptions": {
+    "rootDir": "./src",
+
+    /* Base Options */
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "moduleDetection": "force",
+
+    /* Strictness */
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "forceConsistentCasingInFileNames": true,
+
+    /* Language and Environment */
+    "target": "ESNext",
+    "lib": ["ES2022"],
+
+    /* Modules */
+    "noEmit": true /* Run by tsx */,
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "resolveJsonModule": true,
+    "verbatimModuleSyntax": true,
+    "allowImportingTsExtensions": true
+  },
+  "exclude": ["node_modules", "./src/**/*.spec.ts"],
+  "include": ["./src/**/*.ts"]
+}

@@ -1,0 +1,7 @@
+/commands
+/subcommands/*
+/triggers/*
+/triggers
+/config-*
+/config_sub
+/post-*

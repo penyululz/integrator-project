@@ -1,0 +1,147 @@
+#!/usr/bin/env python
+import os
+import pathlib
+import shutil
+import sys
+
+import yaml
+from bs4 import BeautifulSoup
+
+
+def get_nav_from_selector(soup: BeautifulSoup, selector: str, docs_dir: str):
+    """
+    Generates navigation from template file
+    """
+    navigation = []
+    header_name = ""
+    for anchor in soup.select(selector):
+        classes = anchor.get("class", [])
+        if classes is None:
+            continue
+
+        if "disabled" in classes:
+            header_name = anchor.text
+            navigation.append({header_name: []})
+
+        href = anchor.get("href", "")
+        if href is None:
+            continue
+
+        href = str(href)
+        if href == "#":
+            continue
+
+        url = href.replace("{{NAME}}", "")
+        filename = url.replace("http://progrium.viewdocs.io/dokku/", "")
+        filename = filename.replace("http://dokku.viewdocs.io/dokku/", "")
+        filename = filename.strip("/") + ".md"
+        filename = filename.removeprefix("dokku/")
+
+        ignore_errors_for = [
+            "getting-started/installation.md",
+            "getting-started/upgrading.md",
+        ]
+        if not os.path.exists(docs_dir + "/" + filename):
+            if filename not in ignore_errors_for:
+                print("error fetching markdown file:", filename)
+                continue
+
+        for nav in navigation:
+            if header_name in nav:
+                if filename == "getting-started/installation.md":
+                    child_dir = "getting-started/install/"
+                    children = os.listdir(docs_dir + "/" + child_dir)
+                    children = [child_dir + c for c in children]
+                    children.sort()
+                    children.insert(0, "getting-started/advanced-installation.md")
+                    if os.path.exists(docs_dir + "/" + filename):
+                        children.insert(0, filename)
+                    else:
+                        children.insert(0, "getting-started/installation/index.md")
+                    nav[header_name].append(
+                        {
+                            "Getting Started with Dokku": children,
+                        }
+                    )
+                    continue
+
+                if filename == "getting-started/upgrading.md":
+                    child_dir = "appendices/"
+                    children = os.listdir(docs_dir + "/" + child_dir)
+
+                    children.sort(
+                        key=lambda x: list(map(int, x.split("-")[0].split("."))) if "." in x else [-1, -1, -1],
+                        reverse=True,
+                    )
+                    children = [child_dir + c for c in children]
+                    if os.path.exists(docs_dir + "/" + filename):
+                        children.insert(0, filename)
+                    else:
+                        children.insert(0, "getting-started/upgrading/index.md")
+                    nav[header_name].append(
+                        {
+                            "Upgrading": children,
+                        }
+                    )
+                    continue
+
+                nav[header_name].append(filename)
+    return navigation
+
+
+def generate_nav(src: str, dest: str) -> None:
+    """
+    Writes out navigation information to the mkdocs yaml file
+    """
+    navigation = []
+    repo_dir = pathlib.Path(__file__).parent.parent.resolve()
+    docs_dir = str(repo_dir) + "/docs"
+    with open(docs_dir + "/template.html", encoding="utf-8") as response:
+        soup = BeautifulSoup(response, "html.parser")
+        selectors = [
+            ".container .row .list-group a",
+            ".container-fluid .row .list-group a",
+        ]
+        for selector in selectors:
+            navigation = get_nav_from_selector(soup, selector, docs_dir)
+            if len(navigation) > 0:
+                break
+
+        if len(navigation) == 0:
+            print("No navigation found")
+            sys.exit(1)
+
+    with open(src, encoding="utf-8") as handler:
+        data = yaml.unsafe_load(handler)
+        data["nav"] = [
+            {"Docs": navigation},
+            {"Pro": "https://pro.dokku.com/docs/getting-started/"},
+            {"Blog": "https://dokku.com/blog/"},
+            {"Tutorials": "https://dokku.com/tutorials/"},
+            {
+                "Purchase Dokku Pro": "https://dokku.dpdcart.com/cart/add?product_id=217344&method_id=236878"
+            },
+        ]
+
+    with open(dest, mode="wt", encoding="utf-8") as handler:
+        yaml.dump(data, handler)
+
+
+def main():
+    """
+    Main command that performs doc manipulation
+    """
+    print("----> Copying mkdocs.yml")
+    print("      Generating navigation")
+    generate_nav("/usr/src/source/mkdocs.yml", "/usr/src/app/mkdocs.yml")
+
+    if os.path.exists("/usr/src/app/docs"):
+        print("      Removing old docs folder")
+        shutil.rmtree("/usr/src/app/docs")
+
+    print("      Performing copy")
+    shutil.copytree("/usr/src/source/docs", "/usr/src/app/docs")
+
+
+if __name__ == "__main__":
+    main()

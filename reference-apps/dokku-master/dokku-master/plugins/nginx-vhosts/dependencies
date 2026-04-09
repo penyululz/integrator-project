@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -eo pipefail
+[[ $DOKKU_TRACE ]] && set -x
+
+trigger-nginx-vhosts-dependencies() {
+  declare desc="installs dependencies for the nginx-vhosts plugin"
+  declare trigger="dependencies"
+
+  case "$DOKKU_DISTRO" in
+    arch)
+      pacman -S --noconfirm --noprogressbar --needed nginx bind-tools
+      ;;
+  esac
+}
+
+trigger-nginx-vhosts-dependencies "$@"

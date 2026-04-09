@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+set -eo pipefail
+[[ $DOKKU_TRACE ]] && set -x
+source "$PLUGIN_CORE_AVAILABLE_PATH/common/functions"
+
+trigger-builder-pack-builder-release() {
+  declare desc="builder-pack builder-release plugin trigger"
+  declare trigger="builder-release"
+  declare BUILDER_TYPE="$1" APP="$2" IMAGE_TAG="$3"
+
+  if [[ "$BUILDER_TYPE" != "pack" ]]; then
+    return
+  fi
+
+  local IMAGE=$(get_app_image_name "$APP" "$IMAGE_TAG")
+  if fn-plugn-trigger-exists "pre-release-pack"; then
+    dokku_log_warn "Deprecated: please upgrade plugin to use 'pre-release-builder' plugin trigger instead of pre-release-pack"
+    plugn trigger pre-release-pack "$APP" "$IMAGE_TAG"
+  fi
+  plugn trigger pre-release-builder "$BUILDER_TYPE" "$APP" "$IMAGE"
+
+  docker-image-labeler relabel --label=com.dokku.image-stage=release --label=com.dokku.app-name=$APP --label=org.label-schema.schema-version=1.0 --label=org.label-schema.vendor=dokku --label=dokku "$IMAGE"
+  plugn trigger post-release-builder "$BUILDER_TYPE" "$APP" "$IMAGE"
+}
+
+trigger-builder-pack-builder-release "$@"

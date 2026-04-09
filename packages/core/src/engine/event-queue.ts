@@ -30,6 +30,7 @@ export type EventQueueOptions = {
 
 export type EventQueueRuntimeState = {
   queueKey: string;
+  bullmqQueueName: string;
   configuredDriver: QueueDriver;
   activeDriver: QueueDriver;
   usingFallback: boolean;
@@ -98,6 +99,14 @@ function normalizeFallbackReason(reason: unknown): string {
   }
 }
 
+function normalizeBullMqQueueName(queueKey: string): string {
+  const trimmed = queueKey.trim();
+  if (!trimmed) {
+    return "integration-events";
+  }
+  return trimmed.replace(/[:\s]+/g, "-");
+}
+
 function toBullMqConnection(redisUrl: string): Record<string, unknown> {
   const parsed = new URL(redisUrl);
   const database = parsed.pathname && parsed.pathname !== "/" ? Number(parsed.pathname.slice(1)) : 0;
@@ -127,6 +136,7 @@ export class EventQueue {
   private readonly bullmqRemoveOnCompleteCount: number;
   private readonly bullmqRemoveOnFailCount: number;
   private readonly bullmqJobName: string;
+  private readonly bullmqQueueName: string;
   private fallbackReason: string | null = null;
   private bullQueue: Queue<IncomingEvent, void, string> | null = null;
   private bullWorker: Worker<IncomingEvent, void, string> | null = null;
@@ -171,6 +181,7 @@ export class EventQueue {
       (options.bullmqJobName || process.env.INTEGRATOR_BULLMQ_JOB_NAME || "incoming-event")
         .trim()
         .slice(0, 120) || "incoming-event";
+    this.bullmqQueueName = normalizeBullMqQueueName(this.queueKey);
     this.initializeBullMq();
   }
 
@@ -189,7 +200,7 @@ export class EventQueue {
 
     try {
       const connection = toBullMqConnection(this.redisUrl);
-      this.bullQueue = new Queue<IncomingEvent, void, string>(this.queueKey, {
+      this.bullQueue = new Queue<IncomingEvent, void, string>(this.bullmqQueueName, {
         connection,
         prefix: this.bullmqPrefix,
         defaultJobOptions: {
@@ -202,7 +213,7 @@ export class EventQueue {
         },
       });
       this.bullWorker = new Worker<IncomingEvent, void, string>(
-        this.queueKey,
+        this.bullmqQueueName,
         async (job) =>
           new Promise<void>((resolve) => {
             this.pushPendingBullEvent({
@@ -504,6 +515,7 @@ export class EventQueue {
   getRuntimeState(): EventQueueRuntimeState {
     return {
       queueKey: this.queueKey,
+      bullmqQueueName: this.bullmqQueueName,
       configuredDriver: this.configuredDriver,
       activeDriver: this.driver,
       usingFallback:
