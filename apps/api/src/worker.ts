@@ -1,8 +1,30 @@
 import "dotenv/config";
 import { createCoreRuntime } from "@integration/core";
+import { resolvePlatformModeFromEnv } from "@integration/shared";
 
+// QUEUE: Redis + BullMQ (official locked stack)
+// MODE: Prototype Mode | Live Mode
+// SHARED BETWEEN PROTOTYPE AND LIVE
+// KEEP CONTRACT SHAPE IN SYNC
+// USED FOR LOCAL DEMO / UI ITERATION (Prototype Mode queue simulation path)
+// NOTE: worker loop remains engine-driven; queue transport is BullMQ-first with Redis legacy fallback.
 async function runWorker(): Promise<void> {
   const runtime = await createCoreRuntime();
+  const modeResolution = resolvePlatformModeFromEnv(
+    process.env as Record<string, string | undefined>,
+  );
+  const queueRuntime = runtime.eventQueue.getRuntimeState();
+  console.log(
+    `[worker] MODE: ${modeResolution.mode} (source: ${modeResolution.source})`,
+  );
+  console.log(
+    `[worker] QUEUE: ${queueRuntime.activeDriver} (configured=${queueRuntime.configuredDriver}, key=${queueRuntime.queueKey}, prefix=${queueRuntime.bullmq.prefix}, concurrency=${queueRuntime.bullmq.workerConcurrency})`,
+  );
+  if (queueRuntime.usingFallback) {
+    console.warn(
+      `[worker] queue driver fallback active: ${queueRuntime.fallbackReason || "unknown reason"}`,
+    );
+  }
   console.log("Worker started.");
 
   while (true) {

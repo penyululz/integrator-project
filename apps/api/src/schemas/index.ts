@@ -1,4 +1,8 @@
-﻿import { z } from "zod";
+import { z } from "zod";
+import {
+  normalizeStandardListQueryInput,
+  standardListQuerySchema,
+} from "@integration/shared";
 
 const workflowReferencePattern =
   /^(trigger|context|steps\.[A-Za-z0-9_-]+\.output)(\.[A-Za-z0-9_-]+)*$/;
@@ -21,6 +25,27 @@ export const workflowRunStatusSchema = z.enum([
   "cancelled",
 ]);
 
+function validateDateRange(
+  value: {
+    from?: string;
+    to?: string;
+  },
+  ctx: z.RefinementCtx,
+): void {
+  if (!value.from || !value.to) {
+    return;
+  }
+  const from = Date.parse(value.from);
+  const to = Date.parse(value.to);
+  if (Number.isFinite(from) && Number.isFinite(to) && from > to) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["from"],
+      message: "`from` must be less than or equal to `to`.",
+    });
+  }
+}
+
 export const analyticsQuerySchema = z
   .object({
     from: isoDateTimeSchema.optional(),
@@ -32,20 +57,31 @@ export const analyticsQuerySchema = z
     limit: z.coerce.number().int().min(1).max(100).optional(),
   })
   .strict()
-  .superRefine((value, ctx) => {
-    if (!value.from || !value.to) {
-      return;
-    }
-    const from = Date.parse(value.from);
-    const to = Date.parse(value.to);
-    if (Number.isFinite(from) && Number.isFinite(to) && from > to) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["from"],
-        message: "`from` must be less than or equal to `to`.",
-      });
-    }
-  });
+  .superRefine(validateDateRange);
+
+export const integrationsListQuerySchema = standardListQuerySchema
+  .extend({
+    adapterKey: z.string().trim().min(1).max(120).optional(),
+    status: z.string().trim().min(1).max(120).optional(),
+  })
+  .strict();
+
+export const workflowsListQuerySchema = standardListQuerySchema
+  .extend({
+    status: z.string().trim().min(1).max(120).optional(),
+    triggerAdapter: z.string().trim().min(1).max(120).optional(),
+  })
+  .strict();
+
+export const runsListQuerySchema = standardListQuerySchema
+  .extend({
+    workflowId: z.string().uuid().optional(),
+    status: workflowRunStatusSchema.optional(),
+    from: isoDateTimeSchema.optional(),
+    to: isoDateTimeSchema.optional(),
+  })
+  .strict()
+  .superRefine(validateDateRange);
 
 export const auditLogsQuerySchema = z
   .object({
@@ -57,24 +93,10 @@ export const auditLogsQuerySchema = z
     targetId: z.string().trim().min(1).max(120).optional(),
     from: isoDateTimeSchema.optional(),
     to: isoDateTimeSchema.optional(),
-    page: z.coerce.number().int().min(1).max(100000).optional(),
-    limit: z.coerce.number().int().min(1).max(100).optional(),
   })
+  .merge(standardListQuerySchema)
   .strict()
-  .superRefine((value, ctx) => {
-    if (!value.from || !value.to) {
-      return;
-    }
-    const from = Date.parse(value.from);
-    const to = Date.parse(value.to);
-    if (Number.isFinite(from) && Number.isFinite(to) && from > to) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["from"],
-        message: "`from` must be less than or equal to `to`.",
-      });
-    }
-  });
+  .superRefine(validateDateRange);
 
 export const agentApprovalsQuerySchema = z
   .object({
@@ -84,24 +106,28 @@ export const agentApprovalsQuerySchema = z
     status: z.enum(["pending", "approved", "denied", "expired"]).optional(),
     from: isoDateTimeSchema.optional(),
     to: isoDateTimeSchema.optional(),
-    page: z.coerce.number().int().min(1).max(100000).optional(),
-    limit: z.coerce.number().int().min(1).max(100).optional(),
+  })
+  .merge(standardListQuerySchema)
+  .strict()
+  .superRefine(validateDateRange);
+
+export const alertDeliveryLogsQuerySchema = standardListQuerySchema
+  .extend({
+    eventType: z.string().trim().min(1).max(120).optional(),
+    severity: z.string().trim().min(1).max(80).optional(),
+    status: z.string().trim().min(1).max(80).optional(),
+    channel: z.string().trim().min(1).max(80).optional(),
+    from: isoDateTimeSchema.optional(),
+    to: isoDateTimeSchema.optional(),
   })
   .strict()
-  .superRefine((value, ctx) => {
-    if (!value.from || !value.to) {
-      return;
-    }
-    const from = Date.parse(value.from);
-    const to = Date.parse(value.to);
-    if (Number.isFinite(from) && Number.isFinite(to) && from > to) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["from"],
-        message: "`from` must be less than or equal to `to`.",
-      });
-    }
-  });
+  .superRefine(validateDateRange);
+
+export function normalizeListQueryParams(
+  raw: Record<string, unknown>,
+): Record<string, unknown> {
+  return normalizeStandardListQueryInput(raw);
+}
 
 const agentMemoryScopeSchema = z.enum(["workflow", "run"]);
 
@@ -365,6 +391,28 @@ const workflowBranchStepSchema: z.ZodTypeAny = z.lazy(() =>
 
 export const workflowStepSchema = workflowStepSchemaInternal;
 
+const workflowBuilderNodeMetadataSchema = z
+  .object({
+    stepId: z.string().trim().min(1).max(160),
+    kind: z.enum(["trigger", "action", "branch", "delay", "result"]),
+    x: z.number().optional(),
+    y: z.number().optional(),
+    lane: z.string().trim().min(1).max(120).optional(),
+    collapsed: z.boolean().optional(),
+    notes: z.string().trim().min(1).max(500).optional(),
+  })
+  .catchall(z.unknown());
+
+const workflowBuilderMetadataSchema = z
+  .object({
+    source: z.enum(["builder", "template", "api", "import"]).optional(),
+    paletteVersion: z.string().trim().min(1).max(80).optional(),
+    inspectorVersion: z.string().trim().min(1).max(80).optional(),
+    createdFromTemplateId: z.string().trim().min(1).max(120).optional(),
+    nodeLayout: z.array(workflowBuilderNodeMetadataSchema).max(500).optional(),
+  })
+  .catchall(z.unknown());
+
 export const workflowDefinitionSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
@@ -380,7 +428,7 @@ export const workflowDefinitionSchema = z.object({
   context: z.record(z.unknown()).optional(),
   steps: z.array(workflowStepSchema).min(1),
   enabled: z.boolean().default(true),
-  metadata: z.record(z.unknown()).optional(),
+  metadata: workflowBuilderMetadataSchema.optional(),
 });
 
 export const createWorkflowSchema = z.object({

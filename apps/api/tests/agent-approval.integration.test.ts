@@ -341,7 +341,7 @@ async function createApprovalRuntime() {
   } as CoreRuntime;
 
   return {
-    app: createApp(runtime),
+    app: await createApp(runtime),
     runtime,
     pool,
     approvalAdapter,
@@ -414,7 +414,7 @@ describe("Agent approval workflow + continuation", () => {
       expect(waitingRun.status).toBe("waiting");
 
       const adminToken = await loginAs(runtime, "admin");
-      const listResponse = await request(app)
+      const listResponse = await request(app.server)
         .get("/api/v1/approvals")
         .set("authorization", `Bearer ${adminToken}`);
 
@@ -424,7 +424,7 @@ describe("Agent approval workflow + continuation", () => {
       expect(listResponse.body.approvals[0].workflowRunId).toBe(waitingRun.id);
 
       const approvalId = listResponse.body.approvals[0].id as string;
-      const approveResponse = await request(app)
+      const approveResponse = await request(app.server)
         .post(`/api/v1/approvals/${approvalId}/approve`)
         .set("authorization", `Bearer ${adminToken}`)
         .send({
@@ -474,13 +474,13 @@ describe("Agent approval workflow + continuation", () => {
       expect(waitingRun.status).toBe("waiting");
 
       const adminToken = await loginAs(runtime, "admin");
-      const listResponse = await request(app)
+      const listResponse = await request(app.server)
         .get("/api/v1/approvals?status=pending")
         .set("authorization", `Bearer ${adminToken}`);
       expect(listResponse.status).toBe(200);
       const approvalId = listResponse.body.approvals[0].id as string;
 
-      const denyResponse = await request(app)
+      const denyResponse = await request(app.server)
         .post(`/api/v1/approvals/${approvalId}/deny`)
         .set("authorization", `Bearer ${adminToken}`)
         .send({
@@ -528,7 +528,7 @@ describe("Agent approval workflow + continuation", () => {
       });
 
       const memberToken = await loginAs(runtime, "member");
-      const listResponse = await request(app)
+      const listResponse = await request(app.server)
         .get("/api/v1/approvals")
         .set("authorization", `Bearer ${memberToken}`);
       expect(listResponse.status).toBe(403);
