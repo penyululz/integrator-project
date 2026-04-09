@@ -22,6 +22,15 @@ For launch-facing product documentation, quick start, smoke path, limitations, a
 - Canonical frontend is `apps/web`; core runtime behavior should support its contracts.
 - `integrator-platform` remains reference history only, not active runtime surface.
 
+## Runtime Classification (Cleanup 3.5B)
+
+- `Active`:
+  - workflow engine, repositories, auth, approvals, alerts, retention, observability, worker execution
+- `Legacy but still needed`:
+  - queue compatibility path used while BullMQ migration is fully hardened
+- `Deferred`:
+  - deeper enterprise hardening and advanced external service integrations listed in roadmap phases
+
 ## Phase 2 Experience Layer Context
 
 Phase 2 adds usability and guided flows in `apps/web` while preserving core runtime semantics.

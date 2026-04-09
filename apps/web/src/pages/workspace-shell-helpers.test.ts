@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { AuthSession } from "../api";
 import {
   getQuickSwitchEntries,
+  isDeferredWorkspaceRoute,
   getWorkspaceRouteContext,
   getWorkspaceShellLayoutMode,
   getVisibleWorkspaceNavGroups,
@@ -43,6 +44,8 @@ describe("workspace-shell-helpers", () => {
     expect(flattenedMember).toContain("/settings");
     expect(flattenedMember).toContain("/profile");
     expect(flattenedMember).toContain("/docs");
+    expect(flattenedMember).toContain("/communication");
+    expect(flattenedMember).toContain("/calendar");
 
     const operatorGroups = getVisibleWorkspaceNavGroups({ isOperator: true });
     const flattenedOperator = operatorGroups.flatMap((group) => group.items.map((item) => item.to));
@@ -74,12 +77,23 @@ describe("workspace-shell-helpers", () => {
 
   it("provides route context and quick switch entries", () => {
     expect(getWorkspaceRouteContext("/runs").title).toBe("Runs");
+    expect(getWorkspaceRouteContext("/facility").title).toBe("Facility Management");
     expect(getWorkspaceRouteContext("/docs").section).toBe("settings");
     expect(getWorkspaceRouteContext("/unknown").title).toBe("Dashboard");
 
     const entries = getQuickSwitchEntries({ isOperator: false });
     expect(entries.some((entry) => entry.to === "/dashboard")).toBe(true);
+    expect(entries.some((entry) => entry.to === "/communication")).toBe(true);
+    expect(entries.find((entry) => entry.to === "/communication")?.lifecycle).toBe("deferred");
     expect(entries.some((entry) => entry.to === "/alerts")).toBe(false);
+  });
+
+  it("marks deferred collaboration surfaces clearly", () => {
+    const context = getWorkspaceRouteContext("/communication");
+    expect(context.lifecycle).toBe("deferred");
+    expect(context.lifecycleNote).toContain("Deferred surface");
+    expect(isDeferredWorkspaceRoute("/communication")).toBe(true);
+    expect(isDeferredWorkspaceRoute("/runs")).toBe(false);
   });
 
   it("exposes shell mode and path matching helpers", () => {

@@ -69,6 +69,10 @@ Compatibility classification:
   - organization surface (`/organization`)
   - docs hub (`/docs`)
   - files surface (`/files`)
+  - communication workspace surface (`/communication`)
+  - facility management surface (`/facility`)
+  - maintenance system surface (`/maintenance`)
+  - operational calendar surface (`/calendar`)
   - unified nav/context metadata for these routes
   - shared future-workspace helpers with mode-aware fixture data
 - preserved from existing `apps/web` runtime:
@@ -85,7 +89,7 @@ Compatibility classification:
   - full rich editors/collaboration stack from `integrator-platform` (docs/files/chat realtime internals)
   - deep storage and document backend services (UI is ready, runtime intentionally light)
 
-`apps/web` is now the canonical frontend implementation path. `integrator-platform` remains in-repo as absorbed reference history and can be removed after final cleanup verification.
+`apps/web` is the canonical frontend implementation path. `integrator-platform` remains in-repo as migration history/reference only and is not an active runtime or feature-development target.
 
 ## Frontend Source of Truth
 
@@ -94,6 +98,20 @@ Compatibility classification:
 - Contributor rule:
   - implement new frontend work in `apps/web`
   - do not treat `integrator-platform` as the ongoing app runtime
+
+## Repository Surface Status (Cleanup 3.5B)
+
+- `Active`:
+  - `apps/web`, `apps/api`, `packages/core`, `packages/shared`, `packages/adapters/*`
+  - `Prototype Mode` + `Live Mode` runtime paths
+- `Legacy but still needed`:
+  - Fastify/Express compatibility bridge in API runtime during migration hardening
+  - BullMQ legacy queue fallback path (`INTEGRATOR_QUEUE_DRIVER=legacy`)
+- `Reference only`:
+  - `integrator-platform/` (UI migration history)
+  - `reference-apps/` (inspiration and pattern study only)
+- `Deferred`:
+  - communication/facility/maintenance/calendar surfaces are route-stable and Prototype-ready, with deeper Live Mode service integrations intentionally postponed
 
 ## Development Modes
 
@@ -199,6 +217,7 @@ Integrator is a TypeScript monorepo product similar in category to Zapier, n8n, 
 - support model split: `native`, `generic`, `community`
 - readiness tiers: `ready`, `advanced`, `coming_soon`, `developer`
 - app catalog with guided setup and connection trust states
+- active connection probes (Live Mode) for key connectors: Slack, Telegram, WhatsApp, HTTP Request, GraphQL, Email, Shopify
 
 ### Messaging
 

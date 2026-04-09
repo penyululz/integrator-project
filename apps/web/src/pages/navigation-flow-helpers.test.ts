@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  DEFERRED_WORKSPACE_ROUTES,
   getDefaultWorkspaceRoute,
   getReturnPath,
+  isDeferredWorkspaceRoute,
   isKnownWorkspaceRoute,
   redirectAfterConnection,
   STABLE_WORKSPACE_ROUTES,
@@ -11,11 +13,16 @@ describe("navigation-flow-helpers", () => {
   it("exposes stable route constants for shell navigation", () => {
     expect(getDefaultWorkspaceRoute()).toBe("/dashboard");
     expect(STABLE_WORKSPACE_ROUTES.workflows).toBe("/workflows");
+    expect(STABLE_WORKSPACE_ROUTES.communication).toBe("/communication");
     expect(STABLE_WORKSPACE_ROUTES.docs).toBe("/docs");
+    expect(DEFERRED_WORKSPACE_ROUTES).toContain("/communication");
     expect(isKnownWorkspaceRoute("/runs")).toBe(true);
+    expect(isKnownWorkspaceRoute("/maintenance")).toBe(true);
     expect(isKnownWorkspaceRoute("/files")).toBe(true);
     expect(isKnownWorkspaceRoute("/runs/abc")).toBe(true);
     expect(isKnownWorkspaceRoute("/external")).toBe(false);
+    expect(isDeferredWorkspaceRoute("/communication")).toBe(true);
+    expect(isDeferredWorkspaceRoute("/dashboard")).toBe(false);
   });
 
   it("returns safe paths for template and returnTo input", () => {

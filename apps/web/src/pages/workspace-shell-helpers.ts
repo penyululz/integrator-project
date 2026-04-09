@@ -1,13 +1,19 @@
 import type { AuthSession } from "../api";
+import { isDeferredWorkspaceRoute as isDeferredRoute } from "./navigation-flow-helpers";
 
 export type WorkspaceShellLayoutMode = "auth" | "workspace";
 export type WorkspaceNavGroupKey = "start" | "build" | "operate" | "govern" | "settings";
+export type WorkspaceSurfaceLifecycle = "active" | "deferred";
 export type WorkspaceNavIconKey =
   | "spark"
   | "home"
   | "checklist"
   | "apps"
   | "builder"
+  | "communication"
+  | "facility"
+  | "maintenance"
+  | "calendar"
   | "runs"
   | "alerts"
   | "approvals"
@@ -25,6 +31,7 @@ export type WorkspaceNavItem = {
   hint: string;
   group: WorkspaceNavGroupKey;
   iconKey: WorkspaceNavIconKey;
+  lifecycle?: WorkspaceSurfaceLifecycle;
   operatorOnly?: boolean;
 };
 
@@ -38,6 +45,8 @@ export type WorkspaceRouteContext = {
   section: WorkspaceNavGroupKey;
   title: string;
   description: string;
+  lifecycle: WorkspaceSurfaceLifecycle;
+  lifecycleNote?: string;
   primaryActionLabel?: string;
   primaryActionTo?: string;
 };
@@ -94,6 +103,42 @@ const NAV_ITEMS: WorkspaceNavItem[] = [
     hint: "Workflow builder",
     group: "build",
     iconKey: "builder",
+  },
+  {
+    key: "communication",
+    to: "/communication",
+    label: "Communication",
+    hint: "Workspace messaging",
+    group: "operate",
+    iconKey: "communication",
+    lifecycle: "deferred",
+  },
+  {
+    key: "facility",
+    to: "/facility",
+    label: "Facility",
+    hint: "Bookings and rooms",
+    group: "operate",
+    iconKey: "facility",
+    lifecycle: "deferred",
+  },
+  {
+    key: "maintenance",
+    to: "/maintenance",
+    label: "Maintenance",
+    hint: "Issue queue",
+    group: "operate",
+    iconKey: "maintenance",
+    lifecycle: "deferred",
+  },
+  {
+    key: "calendar",
+    to: "/calendar",
+    label: "Calendar",
+    hint: "Operational timeline",
+    group: "operate",
+    iconKey: "calendar",
+    lifecycle: "deferred",
   },
   {
     key: "runs",
@@ -244,6 +289,10 @@ export function isWorkspaceNavItemActive(pathname: string, itemPath: string): bo
   return pathname.startsWith(`${itemPath}/`);
 }
 
+export function isDeferredWorkspaceRoute(pathname: string): boolean {
+  return isDeferredRoute(pathname);
+}
+
 export function getWorkspaceRouteContext(pathname: string): WorkspaceRouteContext {
   if (pathname.startsWith("/integrations")) {
     return {
@@ -251,6 +300,7 @@ export function getWorkspaceRouteContext(pathname: string): WorkspaceRouteContex
       title: "Apps",
       description:
         "Connect the apps your team needs, then launch automations with confidence from templates or custom flows.",
+      lifecycle: "active",
       primaryActionLabel: "Connect an app",
       primaryActionTo: "/integrations",
     };
@@ -262,6 +312,7 @@ export function getWorkspaceRouteContext(pathname: string): WorkspaceRouteContex
       title: "Automations",
       description:
         "Design and test your automation flow with the visual builder, then move directly into run visibility.",
+      lifecycle: "active",
       primaryActionLabel: "Create automation",
       primaryActionTo: "/workflows",
     };
@@ -273,8 +324,65 @@ export function getWorkspaceRouteContext(pathname: string): WorkspaceRouteContex
       title: "Runs",
       description:
         "Track execution timelines, retries, approvals, and outcomes in one operational console.",
+      lifecycle: "active",
       primaryActionLabel: "Open run history",
       primaryActionTo: "/runs",
+    };
+  }
+
+  if (pathname.startsWith("/communication")) {
+    return {
+      section: "operate",
+      title: "Communication",
+      description:
+        "Coordinate launch and operations in a team communication surface that stays connected to runs, alerts, and docs.",
+      lifecycle: "deferred",
+      lifecycleNote:
+        "Deferred surface: route is stable and useful in Prototype Mode, but deep realtime collaboration runtime remains future work.",
+      primaryActionLabel: "Open communication",
+      primaryActionTo: "/communication",
+    };
+  }
+
+  if (pathname.startsWith("/facility")) {
+    return {
+      section: "operate",
+      title: "Facility Management",
+      description:
+        "Manage room and equipment booking queues so launch operations stay scheduled and visible.",
+      lifecycle: "deferred",
+      lifecycleNote:
+        "Deferred surface: queue UX is available now, but external facility integrations remain intentionally postponed.",
+      primaryActionLabel: "Open facility queue",
+      primaryActionTo: "/facility",
+    };
+  }
+
+  if (pathname.startsWith("/maintenance")) {
+    return {
+      section: "operate",
+      title: "Maintenance System",
+      description:
+        "Track maintenance tickets, ownership, and escalation state in one operator-friendly queue.",
+      lifecycle: "deferred",
+      lifecycleNote:
+        "Deferred surface: operational UI is ready for demos, while deeper service integrations are still roadmap work.",
+      primaryActionLabel: "Open maintenance queue",
+      primaryActionTo: "/maintenance",
+    };
+  }
+
+  if (pathname.startsWith("/calendar")) {
+    return {
+      section: "operate",
+      title: "Operational Calendar",
+      description:
+        "Review a unified timeline of bookings and maintenance activity with fast handoff into source queues.",
+      lifecycle: "deferred",
+      lifecycleNote:
+        "Deferred surface: timeline and navigation are available, but realtime sync and external calendar bridges are not complete.",
+      primaryActionLabel: "Open calendar",
+      primaryActionTo: "/calendar",
     };
   }
 
@@ -284,6 +392,7 @@ export function getWorkspaceRouteContext(pathname: string): WorkspaceRouteContex
       title: "Alerts",
       description:
         "Control incident notifications and keep operators informed when runs fail, queue pressure rises, or approvals stall.",
+      lifecycle: "active",
       primaryActionLabel: "Alert channels",
       primaryActionTo: "/alerts",
     };
@@ -295,6 +404,7 @@ export function getWorkspaceRouteContext(pathname: string): WorkspaceRouteContex
       title: "Audit Logs",
       description:
         "Review who changed what, when it happened, and how operator decisions impacted workflow execution.",
+      lifecycle: "active",
       primaryActionLabel: "View audits",
       primaryActionTo: "/audit-logs",
     };
@@ -306,6 +416,7 @@ export function getWorkspaceRouteContext(pathname: string): WorkspaceRouteContex
       title: "Approvals",
       description:
         "Handle human-in-the-loop requests safely with clear decision history and tenant-scoped controls.",
+      lifecycle: "active",
       primaryActionLabel: "Review approvals",
       primaryActionTo: "/approvals",
     };
@@ -317,6 +428,7 @@ export function getWorkspaceRouteContext(pathname: string): WorkspaceRouteContex
       title: "Onboarding",
       description:
         "Follow the first-time checklist to get your team from setup to a successful production-ready automation run.",
+      lifecycle: "active",
       primaryActionLabel: "Continue onboarding",
       primaryActionTo: "/onboarding",
     };
@@ -328,6 +440,7 @@ export function getWorkspaceRouteContext(pathname: string): WorkspaceRouteContex
       title: "First Success",
       description:
         "Pick a starter automation, run a safe test event, and verify outcomes in Runs, Alerts, and Audit.",
+      lifecycle: "active",
       primaryActionLabel: "Start guided flow",
       primaryActionTo: "/first-automation",
     };
@@ -339,6 +452,7 @@ export function getWorkspaceRouteContext(pathname: string): WorkspaceRouteContex
       title: "Settings",
       description:
         "Manage workspace preferences, profile context, and environment guidance without leaving the product shell.",
+      lifecycle: "active",
       primaryActionLabel: "Review settings",
       primaryActionTo: "/settings",
     };
@@ -350,6 +464,7 @@ export function getWorkspaceRouteContext(pathname: string): WorkspaceRouteContex
       title: "Profile",
       description:
         "Manage personal account details, session trust posture, and profile-level collaboration defaults.",
+      lifecycle: "active",
       primaryActionLabel: "Update profile",
       primaryActionTo: "/profile",
     };
@@ -361,6 +476,7 @@ export function getWorkspaceRouteContext(pathname: string): WorkspaceRouteContex
       title: "Organization",
       description:
         "Review workspace members, teams, and access readiness across governance and approval flows.",
+      lifecycle: "active",
       primaryActionLabel: "Open organization",
       primaryActionTo: "/organization",
     };
@@ -372,6 +488,7 @@ export function getWorkspaceRouteContext(pathname: string): WorkspaceRouteContex
       title: "Docs",
       description:
         "Browse workspace runbooks, playbooks, and notes that support setup, operations, and governance continuity.",
+      lifecycle: "active",
       primaryActionLabel: "Open docs",
       primaryActionTo: "/docs",
     };
@@ -383,6 +500,7 @@ export function getWorkspaceRouteContext(pathname: string): WorkspaceRouteContex
       title: "Files",
       description:
         "Access shared payload assets, exports, and operational files with dense list/table and card views.",
+      lifecycle: "active",
       primaryActionLabel: "Open files",
       primaryActionTo: "/files",
     };
@@ -393,6 +511,7 @@ export function getWorkspaceRouteContext(pathname: string): WorkspaceRouteContex
     title: "Dashboard",
     description:
       "Your workspace home for setup progress, automation activity, and the fastest path to your next successful run.",
+    lifecycle: "active",
     primaryActionLabel: "Open dashboard",
     primaryActionTo: "/dashboard",
   };

@@ -23,10 +23,14 @@ import {
 import { AlertSettingsPage } from "./pages/AlertSettingsPage";
 import { ApprovalsPage } from "./pages/ApprovalsPage";
 import { AuditLogsPage } from "./pages/AuditLogsPage";
+import { CalendarSystemPage } from "./pages/CalendarSystemPage";
+import { CommunicationPage } from "./pages/CommunicationPage";
 import { DashboardPage } from "./pages/DashboardPage";
+import { FacilityManagementPage } from "./pages/FacilityManagementPage";
 import { FirstAutomationPage } from "./pages/FirstAutomationPage";
 import { IntegrationsPage } from "./pages/IntegrationsPage";
 import { LoginPage } from "./pages/LoginPage";
+import { MaintenanceSystemPage } from "./pages/MaintenanceSystemPage";
 import { getDefaultWorkspaceRoute } from "./pages/navigation-flow-helpers";
 import { OnboardingPage } from "./pages/OnboardingPage";
 import { OrganizationPage } from "./pages/OrganizationPage";
@@ -59,6 +63,7 @@ type WorkspaceRoute = {
   label: string;
   hint: string;
   groupLabel: string;
+  lifecycle?: "active" | "deferred";
 };
 
 type AppModeState = PlatformModeResolution;
@@ -79,6 +84,14 @@ function ShellNavIcon(props: {
       <path d="M6 6.2h4.8V11H6zM13.2 6.2H18v4.8h-4.8zM9.6 13.2h4.8V18H9.6zM10.8 8.6h2.4M8.4 11v2.2M15.6 11v2.2" />
     ) : props.iconKey === "runs" ? (
       <path d="M6.2 6.5h11.6v11H6.2zM8.5 9.2h7M8.5 12h5.1M8.5 14.8h3.6" />
+    ) : props.iconKey === "communication" ? (
+      <path d="M5.4 6.6h13.2v8.4H11.8L8.4 18v-3H5.4zM8 9.5h8M8 12h5.2" />
+    ) : props.iconKey === "facility" ? (
+      <path d="M6 18.4V6.2h12v12.2M9 18.4v-3.2M12 9h0M12 12h0M15 9h0M15 12h0" />
+    ) : props.iconKey === "maintenance" ? (
+      <path d="M7.8 7.8l8.4 8.4M15.2 8.8l-1.4-1.4-2.7 2.7 1.4 1.4zM8.8 15.2l1.4 1.4 2.7-2.7-1.4-1.4zM5.4 18.6l2.3-.5-.9-.9z" />
+    ) : props.iconKey === "calendar" ? (
+      <path d="M6.2 7.2h11.6v11.2H6.2zM9 5.8v2.1M15 5.8v2.1M6.2 10h11.6M9 13h2.2M12.8 13H15M9 15.7h2.2" />
     ) : props.iconKey === "alerts" ? (
       <path d="M12 5.2a4.4 4.4 0 0 1 4.4 4.4v2.3l1.2 2.2H6.4l1.2-2.2V9.6A4.4 4.4 0 0 1 12 5.2zM10.2 16.4a1.8 1.8 0 0 0 3.6 0" />
     ) : props.iconKey === "approvals" ? (
@@ -152,6 +165,9 @@ function QuickSwitchModal(props: {
                   <p>{entry.hint}</p>
                 </div>
                 <span className="tag">{entry.groupLabel}</span>
+                {entry.lifecycle === "deferred" ? (
+                  <StatusPill tone="warning">Deferred</StatusPill>
+                ) : null}
               </Link>
             ))
           ) : (
@@ -308,7 +324,10 @@ function WorkspaceShell(props: {
                       <ShellNavIcon iconKey={item.iconKey} />
                       <div className="workspace-sidebar-link-body">
                         <span className="workspace-sidebar-link-title">{item.label}</span>
-                        <span className="workspace-sidebar-link-hint">{item.hint}</span>
+                        <span className="workspace-sidebar-link-hint">
+                          {item.hint}
+                          {item.lifecycle === "deferred" ? " - deferred" : ""}
+                        </span>
                       </div>
                     </NavLink>
                   ))}
@@ -388,6 +407,9 @@ function WorkspaceShell(props: {
                   <StatusPill tone={props.modeState.mode === PLATFORM_MODES.LIVE ? "warning" : "success"}>
                     {props.modeState.mode}
                   </StatusPill>
+                  {routeContext.lifecycle === "deferred" ? (
+                    <StatusPill tone="warning">Deferred surface</StatusPill>
+                  ) : null}
                   <span className="tag">{routeContext.section.toUpperCase()}</span>
                 </>
               }
@@ -396,6 +418,9 @@ function WorkspaceShell(props: {
                   <span className="workspace-global-chip">
                     CONTEXT: {routeContext.section.toUpperCase()}
                   </span>
+                  {routeContext.lifecycleNote ? (
+                    <span className="workspace-global-chip">{routeContext.lifecycleNote}</span>
+                  ) : null}
                 </>
               }
             />
@@ -410,6 +435,10 @@ function WorkspaceShell(props: {
                 <Route path="/onboarding" element={<OnboardingPage />} />
                 <Route path="/first-automation" element={<FirstAutomationPage />} />
                 <Route path="/workflows" element={<WorkflowsPage />} />
+                <Route path="/communication" element={<CommunicationPage />} />
+                <Route path="/facility" element={<FacilityManagementPage />} />
+                <Route path="/maintenance" element={<MaintenanceSystemPage />} />
+                <Route path="/calendar" element={<CalendarSystemPage />} />
                 <Route path="/runs" element={<RunsPage />} />
                 <Route path="/audit-logs" element={<AuditLogsPage />} />
                 <Route path="/approvals" element={<ApprovalsPage />} />

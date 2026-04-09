@@ -2,6 +2,10 @@ export const STABLE_WORKSPACE_ROUTES = {
   dashboard: "/dashboard",
   apps: "/integrations",
   workflows: "/workflows",
+  communication: "/communication",
+  facility: "/facility",
+  maintenance: "/maintenance",
+  calendar: "/calendar",
   runs: "/runs",
   alerts: "/alerts",
   audit: "/audit-logs",
@@ -13,12 +17,26 @@ export const STABLE_WORKSPACE_ROUTES = {
   files: "/files",
 } as const;
 
+// DEFERRED SURFACES: kept route-stable for Prototype Mode and planned Live Mode expansion.
+export const DEFERRED_WORKSPACE_ROUTES = [
+  STABLE_WORKSPACE_ROUTES.communication,
+  STABLE_WORKSPACE_ROUTES.facility,
+  STABLE_WORKSPACE_ROUTES.maintenance,
+  STABLE_WORKSPACE_ROUTES.calendar,
+] as const;
+
 export function getDefaultWorkspaceRoute(): string {
   return STABLE_WORKSPACE_ROUTES.dashboard;
 }
 
 export function isKnownWorkspaceRoute(pathname: string): boolean {
   return Object.values(STABLE_WORKSPACE_ROUTES).some(
+    (route) => pathname === route || pathname.startsWith(`${route}/`),
+  );
+}
+
+export function isDeferredWorkspaceRoute(pathname: string): boolean {
+  return DEFERRED_WORKSPACE_ROUTES.some(
     (route) => pathname === route || pathname.startsWith(`${route}/`),
   );
 }

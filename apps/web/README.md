@@ -34,9 +34,21 @@ React operational UI for:
   - `/runs`, `/alerts`, `/audit-logs`, `/approvals`
 - absorbed future-facing workspace surfaces (UI-ready, runtime-light):
   - `/settings`, `/profile`, `/organization`, `/docs`, `/files`
+  - `/communication`, `/facility`, `/maintenance`, `/calendar`
 - source-of-truth:
   - `apps/web` is the active frontend working area
   - `integrator-platform` is retained as absorbed reference history
+
+## Surface Lifecycle (Cleanup 3.5B)
+
+- `Active`:
+  - `/dashboard`, `/onboarding`, `/first-automation`
+  - `/integrations`, `/workflows`
+  - `/runs`, `/alerts`, `/audit-logs`, `/approvals`
+  - `/settings`, `/profile`, `/organization`, `/docs`, `/files`
+- `Deferred (UI-ready, runtime-light)`:
+  - `/communication`, `/facility`, `/maintenance`, `/calendar`
+  - These routes stay visible for Prototype Mode exploration; deeper Live Mode backends are intentionally future work.
 
 ## Runtime Modes
 

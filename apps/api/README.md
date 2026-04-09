@@ -15,6 +15,15 @@ For product overview, quick start, first-success flow, and launch docs, start at
 - `integrator-platform` is migration/reference history only.
 - API contracts should remain compatible with `apps/web` route/query/runtime boundaries.
 
+## Runtime Classification (Cleanup 3.5B)
+
+- `Active`:
+  - Fastify API runtime, worker runtime, Prototype Mode API fixtures, Live Mode route contracts
+- `Legacy but still needed`:
+  - Express route compatibility layer mounted in Fastify during parity stabilization
+- `Deferred`:
+  - deeper collaboration/facility/maintenance/calendar service backends (UI contracts exist; runtime depth comes later)
+
 ## Phase 2 Experience Layer Support
 
 Phase 2 UI/UX improvements are backed by stable API contracts in this app:
