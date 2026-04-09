@@ -17,6 +17,11 @@ For launch-facing product documentation, quick start, smoke path, limitations, a
 - observability, alerts, and retention services
 - repositories and migrations
 
+## Frontend + Runtime Boundary
+
+- Canonical frontend is `apps/web`; core runtime behavior should support its contracts.
+- `integrator-platform` remains reference history only, not active runtime surface.
+
 ## Phase 2 Experience Layer Context
 
 Phase 2 adds usability and guided flows in `apps/web` while preserving core runtime semantics.
@@ -58,6 +63,14 @@ npm run reencrypt:credentials -w @integration/core
 - Incoming trigger events use BullMQ by default (`INTEGRATOR_QUEUE_DRIVER=bullmq`).
 - Compatibility fallback remains available with `INTEGRATOR_QUEUE_DRIVER=legacy`.
 - Durable retry and wait lifecycles stay DB-backed in `retry_queue` and `scheduled_waits` for now.
+
+## Deployment Baseline Notes
+
+- Core runtime baseline assumes:
+  - PostgreSQL for persisted state
+  - Redis + BullMQ-first queue direction
+  - Fastify API + worker orchestration through Docker Compose
+- Production hardening beyond baseline (HA/tuning/advanced secret backends) remains follow-up work.
 
 ## Package-level Checks
 

@@ -87,6 +87,14 @@ Compatibility classification:
 
 `apps/web` is now the canonical frontend implementation path. `integrator-platform` remains in-repo as absorbed reference history and can be removed after final cleanup verification.
 
+## Frontend Source of Truth
+
+- Active frontend working area: `apps/web`
+- Migration/reference history: `integrator-platform` (not active runtime source)
+- Contributor rule:
+  - implement new frontend work in `apps/web`
+  - do not treat `integrator-platform` as the ongoing app runtime
+
 ## Development Modes
 
 - `Prototype Mode`: fake seeded data and simulated flows for local testing, UI review, and demos without real external setup.
@@ -421,6 +429,21 @@ VPS baseline expectations for Live Mode:
 2. Point DNS records to your VPS and set `TRAEFIK_WEB_HOST` / `TRAEFIK_API_HOST`.
 3. Keep secrets in `.env` (or external secret injection) and rotate defaults.
 4. Add TLS/cert and hardening as a follow-up phase (not required for local Prototype Mode).
+
+### Deployment Baseline (practical, honest)
+
+- Included baseline:
+  - Docker Compose orchestration
+  - Fastify API (`apps/api`)
+  - worker process (`apps/api/src/worker.ts`)
+  - PostgreSQL persistence
+  - Redis queue/cache with BullMQ-first direction
+  - optional Traefik edge profile for local/VPS routing
+- Not fully production-hardened yet:
+  - complete TLS/certificate automation defaults
+  - advanced secret management outside `.env`
+  - deep HA/partitioning/autoscaling strategy
+  - enterprise-grade SSO/SCIM and full compliance controls
 
 ### Live Mode Startup (same bootstrap, real credentials)
 

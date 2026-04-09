@@ -9,6 +9,12 @@ For product overview, quick start, first-success flow, and launch docs, start at
 - API server (`src/index.ts`): authenticated control-plane + webhook ingress
 - worker process (`src/worker.ts`): execution queue, retries, durable waits, alerts, retention
 
+## Frontend Source of Truth
+
+- Canonical product frontend is `apps/web`.
+- `integrator-platform` is migration/reference history only.
+- API contracts should remain compatible with `apps/web` route/query/runtime boundaries.
+
 ## Phase 2 Experience Layer Support
 
 Phase 2 UI/UX improvements are backed by stable API contracts in this app:
@@ -49,6 +55,18 @@ npm run worker -w @integration/api
 - Incoming trigger events use BullMQ-first transport.
 - `INTEGRATOR_QUEUE_DRIVER=legacy` keeps Redis-list compatibility while migrating.
 - Worker still processes durable retries and waits from DB-backed records.
+
+## Deployment Baseline
+
+- Baseline services:
+  - Fastify API (`apps/api`)
+  - worker (`apps/api/src/worker.ts`)
+  - PostgreSQL + Redis/BullMQ
+  - optional Traefik reverse proxy profile in Compose
+- Not fully hardened by default:
+  - end-to-end TLS automation
+  - advanced secret manager integration
+  - HA topology and autoscaling policy
 
 ## Useful Endpoints
 

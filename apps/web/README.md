@@ -38,6 +38,11 @@ React operational UI for:
   - `apps/web` is the active frontend working area
   - `integrator-platform` is retained as absorbed reference history
 
+## Runtime Modes
+
+- `Prototype Mode`: seeded local UX and simulated contract-compatible flows for demos/UI iteration
+- `Live Mode`: real API/runtime behavior with real credentials and integration paths
+
 ## Phase 2 Experience Layer
 
 Current UX direction in web app:
