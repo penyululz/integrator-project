@@ -1,8 +1,0 @@
-packages:
-  - "packages/nocodb-sdk"
-  - "packages/nocodb-sdk-v2"
-  - "packages/nc-gui"
-  - "packages/nc-mail-templates"
-  - "packages/nocodb"
-
-  - "packages/nc-secret-mgr"

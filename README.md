@@ -14,92 +14,15 @@ Self-hostable, enterprise-oriented AI automation platform for teams that want vi
 - `CI/CD: GitHub Actions`
 - `MODE: Prototype Mode | Live Mode`
 
-## Canonical Frontend Adoption (integrator-platform -> apps/web)
-
-`apps/web` now adopts the `integrator-platform` UI direction as the canonical product surface, while keeping the monorepo runtime contracts and mode behavior.
-
-### Stack Reconciliation
-
-- `integrator-platform` actual frontend stack:
-  - React + TypeScript + Vite
-  - Zustand local state
-  - Tailwind utility styling + component primitives
-  - `reactflow` (v11 package)
-  - local in-app page switching + mock-data store (no route/API contract parity layer)
-- `apps/web` active frontend stack:
-  - React + TypeScript + Vite
-  - React Router route shell
-  - TanStack Query for server-state
-  - Zustand for local UI state
-  - Tailwind + product CSS system
-  - `@xyflow/react` canvas runtime
-  - Prototype Mode / Live Mode contract-aware API integration
-- final locked target:
-  - React + TypeScript + Vite + TanStack Query + Zustand + Tailwind + React Flow / XYFlow
-
-Compatibility classification:
-
-- Fully compatible and preserved:
-  - React, TypeScript, Vite
-  - Zustand usage patterns
-  - Tailwind design language and component layering
-  - visual builder mental model
-- Partially compatible (adapted):
-  - `reactflow` from `integrator-platform` adapted to `@xyflow/react` in `apps/web`
-  - local mock-first page state adapted into route/query-driven runtime views
-- Conflicts kept out of runtime:
-  - mock-data-only page switching router
-  - frontend-local data source replacing real API contracts
-- Preserved visually only:
-  - shell/topbar hierarchy
-  - catalog/list/detail visual treatment
-  - builder palette/canvas/inspector interaction cues
-
-### Full UI-System Adoption Progress (latest migration pass)
-
-- already migrated (kept and refined in `apps/web`):
-  - persistent shell + grouped navigation + quick switch
-  - dashboard + onboarding + first automation flow
-  - workflows list + visual builder shell
-  - integrations catalog and setup flow
-  - runs, alerts, audit, approvals consoles
-- newly migrated in this pass:
-  - settings console expansion (`/settings`)
-  - profile surface (`/profile`)
-  - organization surface (`/organization`)
-  - docs hub (`/docs`)
-  - files surface (`/files`)
-  - communication workspace surface (`/communication`)
-  - facility management surface (`/facility`)
-  - maintenance system surface (`/maintenance`)
-  - operational calendar surface (`/calendar`)
-  - unified nav/context metadata for these routes
-  - shared future-workspace helpers with mode-aware fixture data
-- preserved from existing `apps/web` runtime:
-  - React Router route structure
-  - TanStack Query server-state boundaries
-  - Zustand local UI state boundaries
-  - `@xyflow/react` builder runtime
-  - Prototype Mode and Live Mode contract-aware API integration
-- adapted from `integrator-platform`:
-  - list/detail knowledge and asset UX patterns
-  - profile/organization workspace framing
-  - future-facing collaboration-style surfaces as runtime-light pages
-- deferred for later phases:
-  - full rich editors/collaboration stack from `integrator-platform` (docs/files/chat realtime internals)
-  - deep storage and document backend services (UI is ready, runtime intentionally light)
-
-`apps/web` is the canonical frontend implementation path. `integrator-platform` remains in-repo as migration history/reference only and is not an active runtime or feature-development target.
-
 ## Frontend Source of Truth
 
-- Active frontend working area: `apps/web`
-- Migration/reference history: `integrator-platform` (not active runtime source)
-- Contributor rule:
-  - implement new frontend work in `apps/web`
-  - do not treat `integrator-platform` as the ongoing app runtime
+`apps/web` is the only active frontend codebase.
 
-## Repository Surface Status (Cleanup 3.5B)
+- implement all frontend work in `apps/web`
+- do not use external/legacy frontend folders as runtime sources
+- keep route/query/state contracts aligned with `apps/api` + `packages/shared`
+
+## Repository Surface Status
 
 - `Active`:
   - `apps/web`, `apps/api`, `packages/core`, `packages/shared`, `packages/adapters/*`
@@ -107,9 +30,6 @@ Compatibility classification:
 - `Legacy but still needed`:
   - Fastify/Express compatibility bridge in API runtime during migration hardening
   - BullMQ legacy queue fallback path (`INTEGRATOR_QUEUE_DRIVER=legacy`)
-- `Reference only`:
-  - `integrator-platform/` (UI migration history)
-  - `reference-apps/` (inspiration and pattern study only)
 - `Deferred`:
   - communication/facility/maintenance/calendar surfaces are route-stable and Prototype-ready, with deeper Live Mode service integrations intentionally postponed
 
@@ -388,6 +308,12 @@ npm run setup:prototype
 npm run dev:prototype
 ```
 
+One-command startup (auto-cleans common local ports first):
+
+```bash
+npm run start:prototype
+```
+
 Open:
 
 - Web: `http://localhost:3000`
@@ -487,6 +413,12 @@ VPS baseline expectations for Live Mode:
 ```bash
 npm run setup:live
 npm run dev:live
+```
+
+Or one command:
+
+```bash
+npm run start:live
 ```
 
 ### What Can Be Tested Locally (No Public Domain Required)

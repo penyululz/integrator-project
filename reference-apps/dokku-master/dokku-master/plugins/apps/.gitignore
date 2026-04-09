@@ -1,9 +1,0 @@
-/commands
-/subcommands/*
-/triggers/*
-/triggers
-/app-*
-/post-*
-/report
-/install
-/deploy-source-set

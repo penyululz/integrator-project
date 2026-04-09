@@ -1,4 +1,0 @@
-[plugin]
-description = "dokku core scheduler-docker-local plugin"
-version = "0.37.7"
-[plugin.config]

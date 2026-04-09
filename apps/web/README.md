@@ -16,15 +16,9 @@ React operational UI for:
 
 ## Canonical UI Source
 
-- `integrator-platform` is the canonical UI reference adopted into `apps/web`.
-- Migration strategy:
-  - preserve `apps/web` route/query/mode/runtime boundaries
-  - port stronger shell/surface patterns and visual hierarchy from `integrator-platform`
-  - keep `Prototype Mode` and `Live Mode` behavior contract-compatible
-- stack reconciliation:
-  - `integrator-platform` uses React/TypeScript/Vite/Zustand/Tailwind + `reactflow`
-  - `apps/web` keeps locked stack runtime (`@xyflow/react`, TanStack Query, React Router)
-  - visual patterns are adopted; API/runtime contracts remain monorepo-owned
+- `apps/web` is the canonical and only active frontend runtime surface.
+- Keep `Prototype Mode` and `Live Mode` behavior contract-compatible.
+- Keep route/query/state behavior aligned with `apps/api` and `packages/shared`.
 
 ### Canonical Surface Coverage (current)
 
@@ -37,7 +31,6 @@ React operational UI for:
   - `/communication`, `/facility`, `/maintenance`, `/calendar`
 - source-of-truth:
   - `apps/web` is the active frontend working area
-  - `integrator-platform` is retained as absorbed reference history
 
 ## Surface Lifecycle (Cleanup 3.5B)
 

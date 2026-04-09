@@ -1,9 +1,0 @@
-/commands
-/subcommands/*
-/triggers/*
-/triggers
-/scheduler-*
-/install
-/post-*
-/report
-/core-*

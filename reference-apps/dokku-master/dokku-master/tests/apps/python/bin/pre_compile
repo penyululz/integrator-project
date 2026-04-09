@@ -1,3 +1,0 @@
-#!/usr/bin/env bash
-
-echo "Build time env var SECRET_KEY=${SECRET_KEY}"

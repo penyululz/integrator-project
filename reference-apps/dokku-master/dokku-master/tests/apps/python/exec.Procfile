@@ -1,1 +1,0 @@
-task: echo 'hi dokku'

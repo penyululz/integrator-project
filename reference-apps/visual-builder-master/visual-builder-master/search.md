@@ -1,5 +1,0 @@
----
-layout: search
----
-
-# Search

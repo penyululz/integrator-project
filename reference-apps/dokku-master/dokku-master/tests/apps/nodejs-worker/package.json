@@ -1,7 +1,0 @@
-{
-  "name": "node-example",
-  "version": "0.0.1",
-  "engines": {
-    "node": "4.2.x"
-  }
-}

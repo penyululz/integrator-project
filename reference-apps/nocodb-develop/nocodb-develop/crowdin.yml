@@ -1,3 +1,0 @@
-files:
-  - source: /packages/nc-gui/lang/en.json
-    translation: /packages/nc-gui/lang/%osx_locale%.json

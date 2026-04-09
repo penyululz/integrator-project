@@ -1,9 +1,0 @@
-/commands
-/subcommands/*
-/triggers/*
-/triggers
-/network-*
-/install
-/post-*
-/report
-/scheduler-detect

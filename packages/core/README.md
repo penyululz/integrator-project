@@ -20,7 +20,6 @@ For launch-facing product documentation, quick start, smoke path, limitations, a
 ## Frontend + Runtime Boundary
 
 - Canonical frontend is `apps/web`; core runtime behavior should support its contracts.
-- `integrator-platform` remains reference history only, not active runtime surface.
 
 ## Runtime Classification (Cleanup 3.5B)
 

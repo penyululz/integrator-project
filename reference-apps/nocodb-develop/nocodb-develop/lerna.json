@@ -1,8 +1,0 @@
-{
-  "packages": [
-    "packages/nc-gui",
-    "packages/nocodb",
-    "packages/nocodb-sdk"
-  ],
-  "version": "independent"
-}
