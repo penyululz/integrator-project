@@ -54,6 +54,25 @@ export type AdapterCredentialValidationResult = {
   reason?: string;
 };
 
+export type AdapterConnectionProbeStatus =
+  | "success"
+  | "needs_attention"
+  | "failed";
+
+export type AdapterConnectionProbeResult = {
+  status: AdapterConnectionProbeStatus;
+  message?: string;
+  providerStatusCode?: number;
+  metadata?: Record<string, unknown>;
+  recommendedCredentialStatus?: CredentialStatus;
+};
+
+export type AdapterConnectionProbeInput = {
+  integrationConfig: Record<string, unknown>;
+  credentials?: AdapterCredentials;
+  context: AdapterContext;
+};
+
 export type AdapterAuthResult = {
   authUrl?: string;
   accessToken?: string;
@@ -125,4 +144,7 @@ export interface Adapter {
     credentials: AdapterCredentials,
     context: AdapterContext,
   ): Promise<AdapterCredentialValidationResult>;
+  testConnection?(
+    input: AdapterConnectionProbeInput,
+  ): Promise<AdapterConnectionProbeResult>;
 }

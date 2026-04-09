@@ -2,6 +2,8 @@ import {
   Adapter,
   AdapterActionResult,
   AdapterAuthResult,
+  AdapterConnectionProbeInput,
+  AdapterConnectionProbeResult,
   AdapterCredentialValidationResult,
   AdapterCredentials,
   AdapterContext,
@@ -244,5 +246,76 @@ export class TelegramAdapter implements Adapter {
     return {
       status: "valid",
     };
+  }
+
+  async testConnection(
+    input: AdapterConnectionProbeInput,
+  ): Promise<AdapterConnectionProbeResult> {
+    const integrationConfig = input.integrationConfig || {};
+    const token =
+      input.credentials?.accessToken ||
+      input.credentials?.apiKey ||
+      (typeof integrationConfig.botToken === "string"
+        ? integrationConfig.botToken
+        : "") ||
+      this.config.botToken;
+
+    if (!token) {
+      return {
+        status: "failed",
+        message: "Missing Telegram bot token.",
+        recommendedCredentialStatus: "invalid",
+      };
+    }
+
+    try {
+      const response = await fetch(
+        `${this.config.apiBaseUrl}/bot${encodeURIComponent(token)}/getMe`,
+        {
+          method: "GET",
+        },
+      );
+      const body = (await response.json().catch(() => null)) as
+        | {
+            ok?: boolean;
+            description?: string;
+            result?: Record<string, unknown>;
+            error_code?: number;
+          }
+        | null;
+
+      if (!response.ok || !body?.ok) {
+        const message =
+          body?.description || `Telegram getMe failed (${response.status}).`;
+        const authFailure =
+          response.status === 401 ||
+          response.status === 403 ||
+          message.toLowerCase().includes("unauthorized");
+        return {
+          status: authFailure ? "failed" : "needs_attention",
+          message,
+          providerStatusCode: response.status,
+          recommendedCredentialStatus: authFailure ? "invalid" : undefined,
+        };
+      }
+
+      return {
+        status: "success",
+        message: "Telegram connection verified.",
+        providerStatusCode: response.status,
+        metadata: {
+          botId: body.result?.id || null,
+          username: body.result?.username || null,
+        },
+      };
+    } catch (error) {
+      return {
+        status: "needs_attention",
+        message:
+          error instanceof Error
+            ? error.message
+            : "Telegram connection probe failed.",
+      };
+    }
   }
 }

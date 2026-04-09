@@ -2,6 +2,8 @@
   Adapter,
   AdapterActionResult,
   AdapterAuthResult,
+  AdapterConnectionProbeInput,
+  AdapterConnectionProbeResult,
   AdapterCredentialValidationResult,
   AdapterCredentials,
   AdapterContext,
@@ -335,5 +337,91 @@ export class HttpApiAdapter implements Adapter {
     return {
       status: "valid",
     };
+  }
+
+  async testConnection(
+    input: AdapterConnectionProbeInput,
+  ): Promise<AdapterConnectionProbeResult> {
+    const integrationConfig = input.integrationConfig || {};
+    const credentialMetadata = isRecord(input.credentials?.metadata)
+      ? input.credentials.metadata
+      : {};
+
+    const probeUrlRaw =
+      (typeof integrationConfig.probeUrl === "string" && integrationConfig.probeUrl) ||
+      (typeof credentialMetadata.probeUrl === "string" && credentialMetadata.probeUrl) ||
+      (typeof credentialMetadata.baseUrl === "string" && credentialMetadata.baseUrl) ||
+      this.config.baseUrl;
+
+    if (!probeUrlRaw) {
+      return {
+        status: "needs_attention",
+        message: "Set baseUrl or probeUrl to run active HTTP connection tests.",
+      };
+    }
+
+    let probeUrl: string;
+    try {
+      probeUrl = toUrl(probeUrlRaw);
+    } catch {
+      return {
+        status: "failed",
+        message: "Probe URL is invalid.",
+        recommendedCredentialStatus: "invalid",
+      };
+    }
+
+    const headers = {
+      ...this.config.defaultHeaders,
+      ...toHeaderRecord(credentialMetadata.defaultHeaders),
+    };
+    const apiKey =
+      (typeof input.credentials?.apiKey === "string" && input.credentials.apiKey) ||
+      this.config.apiKey;
+    if (apiKey && !headers.Authorization && !headers.authorization) {
+      headers.Authorization = `Bearer ${apiKey}`;
+    }
+
+    const requestInit: RequestInit = {
+      method: "HEAD",
+      headers,
+    };
+
+    try {
+      let response = await fetch(probeUrl, requestInit);
+      if (response.status === 405 || response.status === 501) {
+        response = await fetch(probeUrl, {
+          ...requestInit,
+          method: "GET",
+        });
+      }
+
+      if (response.ok) {
+        return {
+          status: "success",
+          message: "HTTP endpoint reachable.",
+          providerStatusCode: response.status,
+          metadata: {
+            probeUrl,
+          },
+        };
+      }
+
+      const authFailure = response.status === 401 || response.status === 403;
+      return {
+        status: authFailure ? "failed" : "needs_attention",
+        message: `HTTP probe failed with status ${response.status}.`,
+        providerStatusCode: response.status,
+        recommendedCredentialStatus: authFailure ? "invalid" : undefined,
+      };
+    } catch (error) {
+      return {
+        status: "needs_attention",
+        message:
+          error instanceof Error
+            ? error.message
+            : "HTTP connection probe failed.",
+      };
+    }
   }
 }

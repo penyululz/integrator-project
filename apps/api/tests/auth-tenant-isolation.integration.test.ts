@@ -4,6 +4,21 @@ import path from "node:path";
 import request from "supertest";
 import { DataType, newDb } from "pg-mem";
 import type { CoreRuntime } from "@integration/core";
+import type {
+  ActionDefinition,
+  Adapter,
+  AdapterActionResult,
+  AdapterAuthResult,
+  AdapterConnectionProbeInput,
+  AdapterConnectionProbeResult,
+  AdapterCredentialValidationResult,
+  AdapterCredentials,
+  AdapterContext,
+  AdapterTokenRefreshResult,
+  AdapterTriggerResult,
+  AuthPayload,
+  TriggerDefinition,
+} from "@integration/shared";
 import { describe, expect, it } from "vitest";
 import { createApp } from "../src/app";
 import { PluginLoader } from "../../../packages/core/src/engine/plugin-loader";
@@ -39,6 +54,99 @@ class InMemoryRedisQueue {
     return {
       key,
       element,
+    };
+  }
+}
+
+class ProbeTestAdapter implements Adapter {
+  readonly key = "probe-test";
+  readonly version = "1.0.0";
+
+  async init(_config: Record<string, unknown>): Promise<void> {
+    return;
+  }
+
+  async authenticate(_payload: AuthPayload): Promise<AdapterAuthResult> {
+    return {};
+  }
+
+  async listTriggers(): Promise<TriggerDefinition[]> {
+    return [];
+  }
+
+  async listActions(): Promise<ActionDefinition[]> {
+    return [];
+  }
+
+  async runTrigger(
+    _triggerKey: string,
+    _input: Record<string, unknown>,
+    _context: AdapterContext,
+  ): Promise<AdapterTriggerResult> {
+    return { events: [] };
+  }
+
+  async runAction(
+    _actionKey: string,
+    _input: Record<string, unknown>,
+    _context: AdapterContext,
+  ): Promise<AdapterActionResult> {
+    return { success: true, output: {} };
+  }
+
+  async validateConfig(
+    _config: Record<string, unknown>,
+  ): Promise<{ valid: boolean; errors?: string[] }> {
+    return { valid: true };
+  }
+
+  async refreshToken(
+    currentCredentials: Record<string, unknown>,
+    _context: AdapterContext,
+  ): Promise<AdapterTokenRefreshResult> {
+    return {
+      accessToken: String(currentCredentials.accessToken || ""),
+    };
+  }
+
+  async validateCredentials(
+    _credentials: AdapterCredentials,
+    _context: AdapterContext,
+  ): Promise<AdapterCredentialValidationResult> {
+    return {
+      status: "valid",
+    };
+  }
+
+  async testConnection(
+    input: AdapterConnectionProbeInput,
+  ): Promise<AdapterConnectionProbeResult> {
+    const simulate =
+      typeof input.integrationConfig.simulate === "string"
+        ? input.integrationConfig.simulate
+        : "";
+
+    if (simulate === "failed") {
+      return {
+        status: "failed",
+        message: "Token rejected by provider.",
+        recommendedCredentialStatus: "invalid",
+      };
+    }
+
+    if (simulate === "needs_attention") {
+      return {
+        status: "needs_attention",
+        message: "Provider timed out.",
+      };
+    }
+
+    return {
+      status: "success",
+      message: "Connection verified.",
+      metadata: {
+        provider: "probe-test",
+      },
     };
   }
 }
@@ -221,7 +329,10 @@ async function createAuthRuntime() {
 
   const pluginLoader = new PluginLoader();
   pluginLoader.register(new WebhookAdapter());
-  await pluginLoader.initAll({});
+  pluginLoader.register(new ProbeTestAdapter());
+  await pluginLoader.initAll({
+    "probe-test": {},
+  });
 
   const redisClient = new InMemoryRedisQueue();
   const eventQueue = new EventQueue(redisClient as never);
@@ -519,6 +630,83 @@ describe("Auth + tenant isolation hardening", () => {
         .send({});
       expect(tested.status).toBe(200);
       expect(tested.body.status).toBe("valid");
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  it("returns active probe metadata and updates credential state from probe results", async () => {
+    const { app, runtime } = await createAuthRuntime();
+    try {
+      const ownerLogin = await runtime.authService.login({
+        email: "owner@org-a.com",
+        password: "owner-a-pass",
+        organizationSlug: "org-a",
+        workspaceSlug: "default",
+      });
+
+      await runtime.repositories.credentialRepository.upsert({
+        tenantId: ownerLogin.scope.tenantId,
+        organizationId: ownerLogin.scope.organizationId,
+        workspaceId: ownerLogin.scope.workspaceId,
+        providerKey: "probe-test",
+        authType: "token",
+        accessToken: "probe-token",
+      });
+
+      const failedProbe = await request(app.server)
+        .post("/api/v1/apps/probe-test/test")
+        .set("authorization", `Bearer ${ownerLogin.accessToken}`)
+        .send({
+          integrationConfig: {
+            simulate: "failed",
+          },
+        });
+
+      expect(failedProbe.status).toBe(200);
+      expect(failedProbe.body).toEqual(
+        expect.objectContaining({
+          appKey: "probe-test",
+          status: "invalid",
+          probeAttempted: true,
+          probe: expect.objectContaining({
+            status: "failed",
+            message: "Token rejected by provider.",
+          }),
+        }),
+      );
+
+      const credentials = await request(app.server)
+        .get("/api/v1/credentials")
+        .set("authorization", `Bearer ${ownerLogin.accessToken}`);
+      expect(credentials.status).toBe(200);
+      expect(credentials.body.credentials).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            provider_key: "probe-test",
+            credential_status: "invalid",
+            validation_error: "Token rejected by provider.",
+          }),
+        ]),
+      );
+
+      const successProbe = await request(app.server)
+        .post("/api/v1/apps/probe-test/test")
+        .set("authorization", `Bearer ${ownerLogin.accessToken}`)
+        .send({});
+
+      expect(successProbe.status).toBe(200);
+      expect(successProbe.body).toEqual(
+        expect.objectContaining({
+          appKey: "probe-test",
+          status: "valid",
+          probeAttempted: true,
+          probe: expect.objectContaining({
+            status: "success",
+            message: "Connection verified.",
+          }),
+        }),
+      );
     } finally {
       await runtime.close();
     }

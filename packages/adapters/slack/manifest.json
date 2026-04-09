@@ -9,7 +9,7 @@
   "auth": {
     "type": "oauth2"
   },
-  "supportedTriggers": ["dummy_test_trigger"],
+  "supportedTriggers": ["incoming_message"],
   "supportedActions": ["sendMessage"],
   "defaultEnabled": true,
   "platform": {

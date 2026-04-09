@@ -172,6 +172,40 @@ type PrototypeApproval = {
   updatedAt: string;
 };
 
+type PrototypeWorkspaceMember = {
+  id: string;
+  fullName: string;
+  email: string;
+  role: "owner" | "admin" | "member";
+  status: "active" | "invited" | "disabled";
+  team: string;
+  lastActiveAt: string | null;
+};
+
+type PrototypeKnowledgeDoc = {
+  id: string;
+  title: string;
+  category: "runbooks" | "playbooks" | "specs" | "notes";
+  updatedAt: string;
+  updatedAtLabel: string;
+  owner: string;
+  summary: string;
+  tags: string[];
+};
+
+type PrototypeWorkspaceFile = {
+  id: string;
+  name: string;
+  kind: "folder" | "file";
+  extension?: string;
+  owner: string;
+  updatedAt: string;
+  updatedAtLabel: string;
+  sizeBytes: number | null;
+  sizeLabel: string;
+  shared: boolean;
+};
+
 type PrototypeRetryRecord = {
   id: string;
   workflow_run_id: string;
@@ -215,6 +249,9 @@ type PrototypeState = {
   alertDeliveryLogs: PrototypeAlertDeliveryLog[];
   auditLogs: PrototypeAuditLog[];
   approvals: PrototypeApproval[];
+  members: PrototypeWorkspaceMember[];
+  knowledgeDocs: PrototypeKnowledgeDoc[];
+  workspaceFiles: PrototypeWorkspaceFile[];
 };
 
 type JsonObject = Record<string, unknown>;
@@ -258,6 +295,20 @@ type ApprovalsQuery = StandardListQuery & {
   status?: PrototypeAgentApprovalStatus;
   from?: string;
   to?: string;
+};
+
+type WorkspaceMembersQuery = StandardListQuery & {
+  role?: "owner" | "admin" | "member";
+  status?: "active" | "invited" | "disabled";
+};
+
+type WorkspaceKnowledgeDocsQuery = StandardListQuery & {
+  category?: "runbooks" | "playbooks" | "specs" | "notes";
+};
+
+type WorkspaceFilesQuery = StandardListQuery & {
+  kind?: "folder" | "file";
+  shared?: boolean;
 };
 
 type AlertsConfigUpdateInput = {
@@ -1027,6 +1078,115 @@ function createInitialPrototypeState(): PrototypeState {
         updatedAt: toIsoTimestamp(-89),
       },
     ],
+    members: [
+      {
+        id: userId,
+        fullName: "Prototype Admin",
+        email: "prototype.admin@integrator.local",
+        role: "owner",
+        status: "active",
+        team: "Platform",
+        lastActiveAt: toIsoTimestamp(-4),
+      },
+      {
+        id: "11111111-1111-4111-8111-111111111118",
+        fullName: "Automation Operator",
+        email: "prototype.ops@integrator.local",
+        role: "admin",
+        status: "active",
+        team: "Operations",
+        lastActiveAt: toIsoTimestamp(-9),
+      },
+      {
+        id: "11111111-1111-4111-8111-111111111119",
+        fullName: "Template Reviewer",
+        email: "prototype.reviewer@integrator.local",
+        role: "member",
+        status: "invited",
+        team: "Product",
+        lastActiveAt: null,
+      },
+    ],
+    knowledgeDocs: [
+      {
+        id: "doc_proto_1",
+        title: "Slack Escalation Playbook",
+        category: "playbooks",
+        updatedAt: toIsoTimestamp(-5),
+        updatedAtLabel: "5 minutes ago",
+        owner: "Ops Team",
+        summary: "Escalation flow for failed automation runs and approval bottlenecks.",
+        tags: ["alerts", "approvals", "ops"],
+      },
+      {
+        id: "doc_proto_2",
+        title: "Webhook Starter Guide",
+        category: "runbooks",
+        updatedAt: toIsoTimestamp(-22),
+        updatedAtLabel: "22 minutes ago",
+        owner: "Automation Team",
+        summary: "Beginner-friendly setup path for first webhook-triggered automation.",
+        tags: ["onboarding", "webhook"],
+      },
+      {
+        id: "doc_proto_3",
+        title: "Template QA Notes",
+        category: "notes",
+        updatedAt: toIsoTimestamp(-60),
+        updatedAtLabel: "1 hour ago",
+        owner: "Product",
+        summary: "Prototype acceptance notes for starter templates and first-success UX.",
+        tags: ["templates", "prototype"],
+      },
+    ],
+    workspaceFiles: [
+      {
+        id: "file_proto_1",
+        name: "automation-playbooks",
+        kind: "folder",
+        owner: "Ops Team",
+        updatedAt: toIsoTimestamp(-120),
+        updatedAtLabel: "2 hours ago",
+        sizeBytes: null,
+        sizeLabel: "-",
+        shared: true,
+      },
+      {
+        id: "file_proto_2",
+        name: "first-success-checklist.pdf",
+        kind: "file",
+        extension: "pdf",
+        owner: "Product",
+        updatedAt: toIsoTimestamp(-30),
+        updatedAtLabel: "30 minutes ago",
+        sizeBytes: 1_468_000,
+        sizeLabel: "1.4 MB",
+        shared: true,
+      },
+      {
+        id: "file_proto_3",
+        name: "workflow-simulator-payloads.json",
+        kind: "file",
+        extension: "json",
+        owner: "Automation Team",
+        updatedAt: toIsoTimestamp(-4320),
+        updatedAtLabel: "3 days ago",
+        sizeBytes: 84_000,
+        sizeLabel: "82 KB",
+        shared: false,
+      },
+      {
+        id: "file_proto_4",
+        name: "prototype-demo-assets",
+        kind: "folder",
+        owner: "Design",
+        updatedAt: toIsoTimestamp(-15),
+        updatedAtLabel: "15 minutes ago",
+        sizeBytes: null,
+        sizeLabel: "-",
+        shared: true,
+      },
+    ],
   };
 }
 
@@ -1258,6 +1418,105 @@ export function createPrototypeModeApi() {
     return toStandardListResult(withDefaultSort, query);
   };
 
+  const listWorkspaceMembers = (query: WorkspaceMembersQuery) => {
+    let rows = [...state.members];
+    if (query.role) {
+      rows = rows.filter((row) => row.role === query.role);
+    }
+    if (query.status) {
+      rows = rows.filter((row) => row.status === query.status);
+    }
+    const sorted = withFilteredRows(rows, query, [
+      "fullName",
+      "email",
+      "role",
+      "status",
+      "team",
+    ]);
+    const withDefaultSort = query.sort && query.sort.length > 0
+      ? sorted
+      : [...sorted].sort((left, right) => left.fullName.localeCompare(right.fullName));
+    return toStandardListResult(withDefaultSort, query);
+  };
+
+  const listWorkspaceKnowledgeDocs = (query: WorkspaceKnowledgeDocsQuery) => {
+    let rows = [...state.knowledgeDocs];
+    if (query.category) {
+      rows = rows.filter((row) => row.category === query.category);
+    }
+    const sorted = withFilteredRows(rows, query, [
+      "title",
+      "category",
+      "owner",
+      "summary",
+    ]);
+    const withDefaultSort = query.sort && query.sort.length > 0
+      ? sorted
+      : [...sorted].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+    return toStandardListResult(withDefaultSort, query);
+  };
+
+  const listWorkspaceFiles = (query: WorkspaceFilesQuery) => {
+    let rows = [...state.workspaceFiles];
+    if (query.kind) {
+      rows = rows.filter((row) => row.kind === query.kind);
+    }
+    if (query.shared !== undefined) {
+      rows = rows.filter((row) => row.shared === query.shared);
+    }
+    const sorted = withFilteredRows(rows, query, [
+      "name",
+      "kind",
+      "owner",
+      "extension",
+      "sizeLabel",
+    ]);
+    const withDefaultSort = query.sort && query.sort.length > 0
+      ? sorted
+      : [...sorted].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+    return toStandardListResult(withDefaultSort, query);
+  };
+
+  const settingsOverview = () => {
+    const connectedApps = state.apps.filter(
+      (entry) =>
+        isRecord(entry) &&
+        (entry.status === "connected" || entry.connected === true),
+    ).length;
+    const validCredentials = state.credentialStatuses.filter(
+      (row) => row.status === "valid",
+    ).length;
+
+    return {
+      workspace: {
+        id: state.session.scope.workspaceId,
+        slug: state.session.scope.workspaceSlug,
+        name: state.workspaces[0]?.name || "Default Workspace",
+      },
+      organization: {
+        id: state.session.scope.organizationId,
+        slug: state.session.scope.organizationSlug,
+        name: "Prototype Organization",
+      },
+      actor: {
+        userId: state.session.user.id,
+        email: state.session.user.email,
+        fullName: state.session.user.fullName,
+        orgRole: state.session.scope.orgRole,
+        workspaceRole: state.session.scope.workspaceRole,
+      },
+      counts: {
+        connectedApps,
+        validCredentials,
+        totalMembers: state.members.length,
+      },
+      mode: {
+        name: "Prototype Mode",
+        source: "prototype_api",
+      },
+    };
+  };
+
   return {
     // PROTOTYPE MODE API RESPONSE
     // CONTRACT-COMPATIBLE PROTOTYPE DATA
@@ -1285,6 +1544,49 @@ export function createPrototypeModeApi() {
     },
     workspaces() {
       return cloneValue(state.workspaces);
+    },
+    profile() {
+      return {
+        id: state.session.user.id,
+        email: state.session.user.email,
+        fullName: state.session.user.fullName,
+        orgRole: state.session.scope.orgRole,
+        workspaceRole: state.session.scope.workspaceRole,
+        security: {
+          twoFactorEnabled: true,
+          activeSessions: 1,
+          passwordRotationRecommended: true,
+        },
+      };
+    },
+    updateProfile(input: { fullName?: string | null }) {
+      if (input.fullName !== undefined) {
+        state.session.user.fullName = input.fullName;
+      }
+      return {
+        id: state.session.user.id,
+        email: state.session.user.email,
+        fullName: state.session.user.fullName,
+        orgRole: state.session.scope.orgRole,
+        workspaceRole: state.session.scope.workspaceRole,
+        security: {
+          twoFactorEnabled: true,
+          activeSessions: 1,
+          passwordRotationRecommended: true,
+        },
+      };
+    },
+    settingsOverview() {
+      return settingsOverview();
+    },
+    workspaceMembers(query: WorkspaceMembersQuery) {
+      return listWorkspaceMembers(query);
+    },
+    workspaceKnowledgeDocs(query: WorkspaceKnowledgeDocsQuery) {
+      return listWorkspaceKnowledgeDocs(query);
+    },
+    workspaceFiles(query: WorkspaceFilesQuery) {
+      return listWorkspaceFiles(query);
     },
     apps() {
       return cloneValue(state.apps);

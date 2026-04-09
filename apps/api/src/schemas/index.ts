@@ -123,6 +123,26 @@ export const alertDeliveryLogsQuerySchema = standardListQuerySchema
   .strict()
   .superRefine(validateDateRange);
 
+export const workspaceMembersQuerySchema = standardListQuerySchema
+  .extend({
+    role: z.enum(["owner", "admin", "member"]).optional(),
+    status: z.enum(["active", "invited", "disabled"]).optional(),
+  })
+  .strict();
+
+export const workspaceKnowledgeDocsQuerySchema = standardListQuerySchema
+  .extend({
+    category: z.enum(["runbooks", "playbooks", "specs", "notes"]).optional(),
+  })
+  .strict();
+
+export const workspaceFilesQuerySchema = standardListQuerySchema
+  .extend({
+    kind: z.enum(["folder", "file"]).optional(),
+    shared: z.coerce.boolean().optional(),
+  })
+  .strict();
+
 export function normalizeListQueryParams(
   raw: Record<string, unknown>,
 ): Record<string, unknown> {
@@ -182,6 +202,14 @@ export const upsertAgentMemorySchema = z
       });
     }
   });
+
+export const updateProfileSchema = z
+  .object({
+    fullName: z
+      .union([z.string().trim().min(1).max(160), z.null()])
+      .optional(),
+  })
+  .strict();
 
 export const loginSchema = z.object({
   email: z.string().email(),

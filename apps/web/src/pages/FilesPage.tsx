@@ -1,31 +1,60 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { getApiRuntimeMode } from "../api";
+import { useQuery } from "@tanstack/react-query";
+import { getApiRuntimeMode, listWorkspaceFilesQuery, type WorkspaceFileRecord } from "../api";
 import {
   Callout,
   EmptyStatePanel,
   InsightChip,
+  LoadingInline,
   PageHeader,
   ProductToolbar,
   StatusPill,
   SurfaceCard,
 } from "../components/ui-kit";
-import {
-  filterWorkspaceFiles,
-  getWorkspaceFiles,
-  getWorkspaceStorageSummary,
-} from "./workspace-future-helpers";
 
 function toFileKindTone(kind: "folder" | "file"): "info" | "success" {
   return kind === "folder" ? "info" : "success";
+}
+
+function getWorkspaceStorageSummary(files: WorkspaceFileRecord[]): {
+  files: number;
+  folders: number;
+  sharedItems: number;
+} {
+  return files.reduce(
+    (summary, file) => {
+      if (file.kind === "file") {
+        summary.files += 1;
+      } else {
+        summary.folders += 1;
+      }
+      if (file.shared) {
+        summary.sharedItems += 1;
+      }
+      return summary;
+    },
+    {
+      files: 0,
+      folders: 0,
+      sharedItems: 0,
+    },
+  );
 }
 
 export function FilesPage() {
   const mode = getApiRuntimeMode();
   const [query, setQuery] = useState("");
   const [view, setView] = useState<"table" | "cards">("table");
-  const files = useMemo(() => getWorkspaceFiles({ mode }), [mode]);
-  const visibleFiles = useMemo(() => filterWorkspaceFiles(files, query), [files, query]);
+  const filesQuery = useQuery({
+    queryKey: ["workspace-files", query],
+    queryFn: () =>
+      listWorkspaceFilesQuery({
+        limit: 100,
+        search: query.trim() || undefined,
+      }),
+  });
+  const files = filesQuery.data?.rows || [];
   const summary = useMemo(() => getWorkspaceStorageSummary(files), [files]);
 
   return (
@@ -67,8 +96,13 @@ export function FilesPage() {
             onChange={(event) => setQuery(event.target.value)}
           />
         </label>
-
-        {visibleFiles.length === 0 ? (
+        {filesQuery.isLoading ? <LoadingInline label="Loading files..." /> : null}
+        {filesQuery.error ? (
+          <Callout tone="danger" title="Unable to load files">
+            <p>{(filesQuery.error as Error).message}</p>
+          </Callout>
+        ) : null}
+        {files.length === 0 ? (
           <EmptyStatePanel
             title="No files match this query"
             description="Clear the search to view all workspace file records."
@@ -92,7 +126,7 @@ export function FilesPage() {
                 </tr>
               </thead>
               <tbody>
-                {visibleFiles.map((file) => (
+                {files.map((file) => (
                   <tr key={file.id}>
                     <td>{file.name}</td>
                     <td>
@@ -109,7 +143,7 @@ export function FilesPage() {
           </div>
         ) : (
           <div className="workspace-home-grid">
-            {visibleFiles.map((file) => (
+            {files.map((file) => (
               <article key={file.id} className="app-card">
                 <div className="inline-actions actions-between">
                   <strong>{file.name}</strong>
@@ -126,13 +160,7 @@ export function FilesPage() {
           </div>
         )}
       </SurfaceCard>
-
-      <Callout tone="info" title="Canonical UI adoption note">
-        <p>
-          Files UX is now available in apps/web as part of the absorbed integrator-platform system.
-          Deep storage backend features remain deferred for later phases.
-        </p>
-      </Callout>
     </div>
   );
 }
+

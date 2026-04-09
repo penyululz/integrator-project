@@ -12,6 +12,14 @@ import {
 } from "@integration/core";
 import {
   PLATFORM_MODES,
+  type AdapterConnectionProbeResult,
+  type ListSortDirective,
+  type StandardListQuery,
+  type WorkspaceFileRecord,
+  type WorkspaceKnowledgeDocRecord,
+  type WorkspaceMemberRecord,
+  type WorkspaceProfileView,
+  type WorkspaceSettingsOverview,
   redactSensitiveRecord,
   resolvePlatformModeFromEnv,
   type PlatformMode,
@@ -52,6 +60,10 @@ import {
   upsertAgentMemorySchema,
   validateWorkflowSchema,
   workflowsListQuerySchema,
+  workspaceFilesQuerySchema,
+  workspaceKnowledgeDocsQuerySchema,
+  workspaceMembersQuerySchema,
+  updateProfileSchema,
   workflowTestRunSchema,
   waitRescheduleSchema,
   webhookSchema,
@@ -105,6 +117,94 @@ function toStandardListEnvelope<Row>(result: StandardListResult<Row>) {
       hasMore: result.hasMore,
       nextCursor: result.nextCursor,
     },
+  };
+}
+
+type JsonObject = Record<string, unknown>;
+
+function parseListCursor(cursor: string | undefined): number {
+  if (!cursor) {
+    return 0;
+  }
+  const trimmed = cursor.trim();
+  if (!trimmed) {
+    return 0;
+  }
+  if (trimmed.startsWith("offset:")) {
+    const parsed = Number.parseInt(trimmed.slice("offset:".length), 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+  }
+  const parsed = Number.parseInt(trimmed, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+}
+
+function applyInMemoryStandardList<Row extends JsonObject>(input: {
+  rows: Row[];
+  query: StandardListQuery;
+  searchFields: string[];
+  defaultSort: ListSortDirective[];
+}): StandardListResult<Row> {
+  const normalizedSearch = input.query.search?.trim().toLowerCase();
+  let filtered = [...input.rows];
+  if (normalizedSearch) {
+    filtered = filtered.filter((row) =>
+      input.searchFields.some((field) =>
+        String(row[field] || "")
+          .toLowerCase()
+          .includes(normalizedSearch),
+      ),
+    );
+  }
+
+  const appliedSorts: ListSortDirective[] =
+    input.query.sort && input.query.sort.length > 0
+      ? input.query.sort.map((entry) => ({
+          field: entry.field,
+          direction: entry.direction === "asc" ? "asc" : "desc",
+        } as ListSortDirective))
+      : input.defaultSort.map((entry) => ({
+          field: entry.field,
+          direction: entry.direction === "asc" ? "asc" : "desc",
+        }));
+
+  filtered.sort((left, right) => {
+    for (const sort of appliedSorts) {
+      const direction = sort.direction === "asc" ? 1 : -1;
+      const leftValue = left[sort.field];
+      const rightValue = right[sort.field];
+      const leftComparable = leftValue === null || leftValue === undefined ? "" : leftValue;
+      const rightComparable = rightValue === null || rightValue === undefined ? "" : rightValue;
+      if (leftComparable < rightComparable) {
+        return -1 * direction;
+      }
+      if (leftComparable > rightComparable) {
+        return 1 * direction;
+      }
+    }
+    return 0;
+  });
+
+  const limit = Math.max(1, Math.min(Number(input.query.limit || 25), 250));
+  const offset = input.query.cursor
+    ? parseListCursor(input.query.cursor)
+    : Math.max(0, (Math.max(1, Number(input.query.page || 1)) - 1) * limit);
+  const page = input.query.cursor
+    ? Math.floor(offset / limit) + 1
+    : Math.max(1, Number(input.query.page || 1));
+
+  const rows = filtered.slice(offset, offset + limit);
+  const nextOffset = offset + rows.length;
+  const hasMore = nextOffset < filtered.length;
+
+  return {
+    rows,
+    nextCursor: hasMore ? `offset:${nextOffset}` : null,
+    totalApprox: filtered.length,
+    appliedFilters: input.query.filterGroup || null,
+    appliedSorts,
+    page,
+    limit,
+    hasMore,
   };
 }
 
@@ -476,6 +576,130 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
     });
   }
 
+  function mapWorkspaceTeam(role: "owner" | "admin" | "member"): string {
+    if (role === "owner") {
+      return "Platform";
+    }
+    if (role === "admin") {
+      return "Operations";
+    }
+    return "Product";
+  }
+
+  function buildWorkspaceKnowledgeDocs(input: {
+    mode: PlatformMode;
+    actorName: string;
+    workspaceName: string;
+  }): WorkspaceKnowledgeDocRecord[] {
+    const now = Date.now();
+    const docs: WorkspaceKnowledgeDocRecord[] = [
+      {
+        id: "doc-workspace-runbook",
+        title: `${input.workspaceName} Incident Runbook`,
+        category: "runbooks",
+        updatedAt: new Date(now - 45 * 60 * 1000).toISOString(),
+        updatedAtLabel: "45 minutes ago",
+        owner: input.actorName,
+        summary: "Recovery checklist for failed runs, retry saturation, and approval stalls.",
+        tags: ["runs", "alerts", "operations"],
+      },
+      {
+        id: "doc-workspace-playbook",
+        title: "First Automation Playbook",
+        category: "playbooks",
+        updatedAt: new Date(now - 2 * 60 * 60 * 1000).toISOString(),
+        updatedAtLabel: "2 hours ago",
+        owner: "Automation Team",
+        summary: "Beginner path for connect, build, test, and run-observe workflow handoff.",
+        tags: ["onboarding", "templates"],
+      },
+      {
+        id: "doc-workspace-security",
+        title: "Integration Security Standard",
+        category: "specs",
+        updatedAt: new Date(now - 36 * 60 * 60 * 1000).toISOString(),
+        updatedAtLabel: "1 day ago",
+        owner: "Security",
+        summary: "Credential handling and approval expectations for sensitive tool actions.",
+        tags: ["security", "approvals", "rbac"],
+      },
+    ];
+
+    if (input.mode === PLATFORM_MODES.PROTOTYPE) {
+      docs.push({
+        id: "doc-workspace-prototype",
+        title: "Prototype Mode Demo Notes",
+        category: "notes",
+        updatedAt: new Date(now - 15 * 60 * 1000).toISOString(),
+        updatedAtLabel: "15 minutes ago",
+        owner: "Product",
+        summary: "Linked walkthrough notes for seeded first-success demo records.",
+        tags: ["prototype", "demo"],
+      });
+    }
+
+    return docs;
+  }
+
+  function buildWorkspaceFiles(input: {
+    mode: PlatformMode;
+  }): WorkspaceFileRecord[] {
+    const now = Date.now();
+    const files: WorkspaceFileRecord[] = [
+      {
+        id: "file-workspace-playbooks",
+        name: "automation-playbooks",
+        kind: "folder",
+        owner: "Ops Team",
+        updatedAt: new Date(now - 3 * 60 * 60 * 1000).toISOString(),
+        updatedAtLabel: "3 hours ago",
+        sizeBytes: null,
+        sizeLabel: "-",
+        shared: true,
+      },
+      {
+        id: "file-first-success-checklist",
+        name: "first-success-checklist.pdf",
+        kind: "file",
+        extension: "pdf",
+        owner: "Product",
+        updatedAt: new Date(now - 60 * 60 * 1000).toISOString(),
+        updatedAtLabel: "1 hour ago",
+        sizeBytes: 1_468_000,
+        sizeLabel: "1.4 MB",
+        shared: true,
+      },
+      {
+        id: "file-simulator-payloads",
+        name: "workflow-simulator-payloads.json",
+        kind: "file",
+        extension: "json",
+        owner: "Automation Team",
+        updatedAt: new Date(now - 72 * 60 * 60 * 1000).toISOString(),
+        updatedAtLabel: "3 days ago",
+        sizeBytes: 84_000,
+        sizeLabel: "82 KB",
+        shared: false,
+      },
+    ];
+
+    if (input.mode === PLATFORM_MODES.PROTOTYPE) {
+      files.push({
+        id: "file-prototype-assets",
+        name: "prototype-demo-assets",
+        kind: "folder",
+        owner: "Design",
+        updatedAt: new Date(now - 20 * 60 * 1000).toISOString(),
+        updatedAtLabel: "20 minutes ago",
+        sizeBytes: null,
+        sizeLabel: "-",
+        shared: true,
+      });
+    }
+
+    return files;
+  }
+
   router.get("/health", (_req, res) => {
     const queueRuntime = runtime.eventQueue.getRuntimeState();
     // MODE: Prototype Mode | Live Mode
@@ -553,6 +777,295 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
         user: req.auth!.user,
         scope: req.auth!.scope,
         workspaces,
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get("/profile", requireAuth, async (req, res, next) => {
+    try {
+      if (prototypeApi) {
+        res.json({
+          profile: prototypeApi.profile(),
+        });
+        return;
+      }
+      const scope = req.auth!.scope;
+      const user = req.auth!.user;
+      const profile: WorkspaceProfileView = {
+        id: user.id,
+        email: user.email,
+        fullName: user.fullName,
+        orgRole: scope.orgRole,
+        workspaceRole: scope.workspaceRole,
+        security: {
+          twoFactorEnabled: true,
+          activeSessions: 1,
+          passwordRotationRecommended: true,
+        },
+      };
+
+      res.json({ profile });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.put("/profile", requireAuth, async (req, res, next) => {
+    try {
+      const body = updateProfileSchema.parse(req.body || {});
+      if (prototypeApi) {
+        const profile = prototypeApi.updateProfile({
+          fullName: body.fullName,
+        });
+        res.json({ profile });
+        return;
+      }
+
+      const scope = req.auth!.scope;
+      const currentUser = req.auth!.user;
+      const updatedUser = await runtime.repositories.authRepository.updateUserProfileScoped({
+        userId: currentUser.id,
+        tenantId: scope.tenantId,
+        organizationId: scope.organizationId,
+        fullName: body.fullName === undefined ? currentUser.fullName : body.fullName,
+      });
+      if (!updatedUser) {
+        res.status(404).json({ error: "Not found." });
+        return;
+      }
+
+      const profile: WorkspaceProfileView = {
+        id: updatedUser.id,
+        email: updatedUser.email,
+        fullName: updatedUser.fullName,
+        orgRole: scope.orgRole,
+        workspaceRole: scope.workspaceRole,
+        security: {
+          twoFactorEnabled: true,
+          activeSessions: 1,
+          passwordRotationRecommended: true,
+        },
+      };
+
+      res.json({ profile });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get("/settings/overview", requireAuth, async (req, res, next) => {
+    try {
+      if (prototypeApi) {
+        res.json({
+          overview: prototypeApi.settingsOverview(),
+        });
+        return;
+      }
+
+      const scope = req.auth!.scope;
+      const user = req.auth!.user;
+
+      const [apps, credentials, workspaceContext, membersResult] = await Promise.all([
+        listAppsForScope({
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+        }),
+        runtime.repositories.credentialRepository.list({
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+        }),
+        runtime.repositories.authRepository.getWorkspaceContextSummary({
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+        }),
+        runtime.repositories.authRepository.listWorkspaceMembersWithQuery({
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+          query: {
+            limit: 1,
+            page: 1,
+          },
+        }),
+      ]);
+
+      const overview: WorkspaceSettingsOverview = {
+        workspace: {
+          id: scope.workspaceId,
+          slug: workspaceContext?.workspace_slug || scope.workspaceSlug,
+          name: workspaceContext?.workspace_name || "Workspace",
+        },
+        organization: {
+          id: scope.organizationId,
+          slug: workspaceContext?.organization_slug || scope.organizationSlug,
+          name: workspaceContext?.organization_name || "Organization",
+        },
+        actor: {
+          userId: user.id,
+          email: user.email,
+          fullName: user.fullName,
+          orgRole: scope.orgRole,
+          workspaceRole: scope.workspaceRole,
+        },
+        counts: {
+          connectedApps: apps.filter((entry) => entry.connected).length,
+          validCredentials: credentials.filter(
+            (entry) => entry.credential_status === "valid",
+          ).length,
+          totalMembers: membersResult.totalApprox,
+        },
+        mode: {
+          name: platformMode,
+          source: platformModeSource,
+        },
+      };
+
+      res.json({ overview });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get(
+    "/organization/members",
+    requireRole(["owner", "admin"]),
+    async (req, res, next) => {
+      try {
+        const query = workspaceMembersQuerySchema.parse({
+          ...normalizeListQueryRecord(req.query as Record<string, unknown>),
+          role: resolveOptionalQueryParam(req.query.role as string | string[] | undefined),
+          status: resolveOptionalQueryParam(req.query.status as string | string[] | undefined),
+        });
+        if (prototypeApi) {
+          const result = prototypeApi.workspaceMembers(query);
+          res.json({
+            ...toStandardListEnvelope(result),
+            members: result.rows,
+          });
+          return;
+        }
+
+        const scope = req.auth!.scope;
+        const result = await runtime.repositories.authRepository.listWorkspaceMembersWithQuery({
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+          query,
+        });
+        const rows: WorkspaceMemberRecord[] = result.rows.map((entry) => ({
+          id: entry.id,
+          fullName: entry.full_name || entry.email,
+          email: entry.email,
+          role: entry.role,
+          status: entry.status,
+          team: mapWorkspaceTeam(entry.role),
+          lastActiveAt:
+            entry.last_active_at === null
+              ? null
+              : entry.last_active_at instanceof Date
+                ? entry.last_active_at.toISOString()
+                : String(entry.last_active_at),
+        }));
+
+        res.json({
+          ...toStandardListEnvelope({
+            ...result,
+            rows,
+          }),
+          members: rows,
+        });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.get("/knowledge/docs", requireAuth, async (req, res, next) => {
+    try {
+      const query = workspaceKnowledgeDocsQuerySchema.parse({
+        ...normalizeListQueryRecord(req.query as Record<string, unknown>),
+        category: resolveOptionalQueryParam(req.query.category as string | string[] | undefined),
+      });
+      if (prototypeApi) {
+        const result = prototypeApi.workspaceKnowledgeDocs(query);
+        res.json({
+          ...toStandardListEnvelope(result),
+          docs: result.rows,
+        });
+        return;
+      }
+
+      const scope = req.auth!.scope;
+      const user = req.auth!.user;
+      const workspaceContext = await runtime.repositories.authRepository.getWorkspaceContextSummary({
+        tenantId: scope.tenantId,
+        organizationId: scope.organizationId,
+        workspaceId: scope.workspaceId,
+      });
+      let docs = buildWorkspaceKnowledgeDocs({
+        mode: platformMode,
+        actorName: user.fullName || user.email,
+        workspaceName: workspaceContext?.workspace_name || scope.workspaceSlug,
+      });
+      if (query.category) {
+        docs = docs.filter((entry) => entry.category === query.category);
+      }
+      const result = applyInMemoryStandardList({
+        rows: docs.map((entry) => ({ ...entry })),
+        query,
+        searchFields: ["title", "category", "owner", "summary", "tags"],
+        defaultSort: [{ field: "updatedAt", direction: "desc" }],
+      });
+
+      res.json({
+        ...toStandardListEnvelope(result),
+        docs: result.rows,
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get("/knowledge/files", requireAuth, async (req, res, next) => {
+    try {
+      const query = workspaceFilesQuerySchema.parse({
+        ...normalizeListQueryRecord(req.query as Record<string, unknown>),
+        kind: resolveOptionalQueryParam(req.query.kind as string | string[] | undefined),
+        shared: resolveOptionalQueryParam(req.query.shared as string | string[] | undefined),
+      });
+      if (prototypeApi) {
+        const result = prototypeApi.workspaceFiles(query);
+        res.json({
+          ...toStandardListEnvelope(result),
+          files: result.rows,
+        });
+        return;
+      }
+
+      let files = buildWorkspaceFiles({
+        mode: platformMode,
+      });
+      if (query.kind) {
+        files = files.filter((entry) => entry.kind === query.kind);
+      }
+      if (query.shared !== undefined) {
+        files = files.filter((entry) => entry.shared === query.shared);
+      }
+      const result = applyInMemoryStandardList({
+        rows: files.map((entry) => ({ ...entry })),
+        query,
+        searchFields: ["name", "kind", "owner", "extension", "sizeLabel"],
+        defaultSort: [{ field: "updatedAt", direction: "desc" }],
+      });
+
+      res.json({
+        ...toStandardListEnvelope(result),
+        files: result.rows,
       });
     } catch (error) {
       next(error);
@@ -997,9 +1510,12 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
           workspaceId: scope.workspaceId,
           providerKey: appKey,
         });
+        const integrationConfig = body.integrationConfig || integration?.config_json || {};
 
         let status: "valid" | "expired" | "invalid" = "valid";
         let reason: string | null = null;
+        let probeAttempted = false;
+        let probe: AdapterConnectionProbeResult | null = null;
 
         if (adapter.validateCredentials && credentials) {
           const result = await adapter.validateCredentials(credentials, {
@@ -1010,8 +1526,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
           status = result.status;
           reason = result.reason || null;
         } else {
-          const config = body.integrationConfig || integration?.config_json || {};
-          const validation = await adapter.validateConfig(config);
+          const validation = await adapter.validateConfig(integrationConfig);
           if (!validation.valid) {
             status = "invalid";
             reason = (validation.errors || []).join("; ") || "Connection config is invalid.";
@@ -1019,6 +1534,47 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
             status = "expired";
           } else if (credentials?.status === "invalid") {
             status = "invalid";
+          }
+        }
+
+        // LIVE ROUTE SHAPE PRESERVED
+        // Best-effort active probe for real integrations while keeping validation fallback behavior.
+        if (adapter.testConnection) {
+          probeAttempted = true;
+          try {
+            probe = await adapter.testConnection({
+              integrationConfig,
+              credentials: credentials || undefined,
+              context: {
+                tenantId: scope.tenantId,
+                organizationId: scope.organizationId,
+                workspaceId: scope.workspaceId,
+              },
+            });
+          } catch (probeError) {
+            probe = {
+              status: "needs_attention",
+              message:
+                probeError instanceof Error
+                  ? probeError.message
+                  : "Connection probe failed.",
+            };
+          }
+
+          if (probe.recommendedCredentialStatus) {
+            status = probe.recommendedCredentialStatus;
+            reason = probe.message || reason;
+          } else if (status === "valid") {
+            if (probe.status === "failed") {
+              status = "invalid";
+              reason = probe.message || "Connection probe failed.";
+            } else if (probe.status === "needs_attention") {
+              reason = probe.message || reason;
+            } else if (probe.message) {
+              reason = probe.message;
+            } else {
+              reason = null;
+            }
           }
         }
 
@@ -1041,6 +1597,8 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
           hasCredential: Boolean(credentials),
           hasIntegration: Boolean(integration),
           authType: adapterMetadata.authType,
+          probeAttempted,
+          probe,
         });
       } catch (error) {
         next(error);

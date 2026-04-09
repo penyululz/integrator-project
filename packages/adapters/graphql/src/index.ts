@@ -2,6 +2,8 @@
   Adapter,
   AdapterActionResult,
   AdapterAuthResult,
+  AdapterConnectionProbeInput,
+  AdapterConnectionProbeResult,
   AdapterCredentialValidationResult,
   AdapterCredentials,
   AdapterContext,
@@ -265,5 +267,95 @@ export class GraphqlAdapter implements Adapter {
     return {
       status: "valid",
     };
+  }
+
+  async testConnection(
+    input: AdapterConnectionProbeInput,
+  ): Promise<AdapterConnectionProbeResult> {
+    const integrationConfig = input.integrationConfig || {};
+    const metadata = isRecord(input.credentials?.metadata)
+      ? input.credentials.metadata
+      : {};
+    const sensitiveConfig = isRecord(input.credentials?.sensitiveConfig)
+      ? input.credentials.sensitiveConfig
+      : {};
+
+    const endpoint =
+      (typeof integrationConfig.endpoint === "string" && integrationConfig.endpoint) ||
+      (typeof metadata.endpoint === "string" && metadata.endpoint) ||
+      this.config.endpoint;
+    if (!endpoint) {
+      return {
+        status: "failed",
+        message: "GraphQL endpoint is required for connection test.",
+        recommendedCredentialStatus: "invalid",
+      };
+    }
+
+    const token =
+      (typeof input.credentials?.apiKey === "string" && input.credentials.apiKey) ||
+      (typeof integrationConfig.authToken === "string" && integrationConfig.authToken) ||
+      (typeof sensitiveConfig.authToken === "string" && sensitiveConfig.authToken) ||
+      this.config.authToken;
+
+    const headers: Record<string, string> = {
+      "content-type": "application/json",
+    };
+    if (token) {
+      headers.Authorization = `Bearer ${token}`;
+    }
+
+    try {
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          query: "query IntegratorProbe { __typename }",
+        }),
+      });
+      const body = (await response.json().catch(() => null)) as
+        | {
+            data?: Record<string, unknown>;
+            errors?: Array<{ message?: string }>;
+          }
+        | null;
+
+      if (!response.ok) {
+        const authFailure = response.status === 401 || response.status === 403;
+        return {
+          status: authFailure ? "failed" : "needs_attention",
+          message: `GraphQL probe failed with status ${response.status}.`,
+          providerStatusCode: response.status,
+          recommendedCredentialStatus: authFailure ? "invalid" : undefined,
+        };
+      }
+
+      if (body?.errors && body.errors.length > 0) {
+        const firstError = body.errors[0]?.message || "GraphQL returned an error.";
+        const authFailure = /auth|forbidden|unauthoriz|permission/i.test(firstError);
+        return {
+          status: authFailure ? "failed" : "needs_attention",
+          message: firstError,
+          recommendedCredentialStatus: authFailure ? "invalid" : undefined,
+        };
+      }
+
+      return {
+        status: "success",
+        message: "GraphQL connection verified.",
+        providerStatusCode: response.status,
+        metadata: {
+          endpoint,
+        },
+      };
+    } catch (error) {
+      return {
+        status: "needs_attention",
+        message:
+          error instanceof Error
+            ? error.message
+            : "GraphQL connection probe failed.",
+      };
+    }
   }
 }

@@ -1,19 +1,17 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { getApiRuntimeMode } from "../api";
+import { useQuery } from "@tanstack/react-query";
+import { getApiRuntimeMode, listWorkspaceMembersQuery, type WorkspaceMemberRecord } from "../api";
 import {
   Callout,
   FilterPills,
   InsightChip,
+  LoadingInline,
   PageHeader,
   ProductToolbar,
   StatusPill,
   SurfaceCard,
 } from "../components/ui-kit";
-import {
-  getWorkspaceMembers,
-  type WorkspaceMemberRecord,
-} from "./workspace-future-helpers";
 
 const MEMBER_FILTERS = [
   { id: "all", label: "All" },
@@ -35,21 +33,30 @@ function toMemberTone(status: WorkspaceMemberRecord["status"]): "success" | "war
 export function OrganizationPage() {
   const mode = getApiRuntimeMode();
   const [filter, setFilter] = useState<(typeof MEMBER_FILTERS)[number]["id"]>("all");
-  const members = useMemo(() => getWorkspaceMembers(), []);
+  const [query, setQuery] = useState("");
 
-  const visibleMembers = useMemo(() => {
-    if (filter === "active") {
-      return members.filter((member) => member.status === "active");
-    }
-    if (filter === "invited") {
-      return members.filter((member) => member.status === "invited");
-    }
+  const membersQuery = useQuery({
+    queryKey: ["workspace-members", filter, query],
+    queryFn: () =>
+      listWorkspaceMembersQuery({
+        limit: 50,
+        search: query.trim() || undefined,
+        status:
+          filter === "active"
+            ? "active"
+            : filter === "invited"
+              ? "invited"
+              : undefined,
+      }),
+  });
+
+  const members = useMemo(() => {
+    const rows = membersQuery.data?.rows || [];
     if (filter === "admin") {
-      return members.filter((member) => member.role === "owner" || member.role === "admin");
+      return rows.filter((member) => member.role === "owner" || member.role === "admin");
     }
-    return members;
-  }, [filter, members]);
-
+    return rows;
+  }, [membersQuery.data?.rows, filter]);
   const filterPills = useMemo(
     () =>
       MEMBER_FILTERS.map((option) => ({
@@ -73,7 +80,7 @@ export function OrganizationPage() {
       <PageHeader
         eyebrow="Organization"
         title="Workspace Team Console"
-        subtitle="View member status, team assignments, and approval-ready operator roles in one place."
+        subtitle="View role status and member activity with list/query contracts shared across Prototype Mode and Live Mode."
       />
       <ProductToolbar
         left={
@@ -91,7 +98,26 @@ export function OrganizationPage() {
       />
 
       <SurfaceCard title="Members" subtitle="Team-aware visibility with role and status context.">
-        <FilterPills options={filterPills} value={filter} onChange={(next) => setFilter(next as typeof filter)} />
+        <label>
+          Search members
+          <input
+            className="field-input"
+            placeholder="Find by name, email, role, or team"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+          />
+        </label>
+        <FilterPills
+          options={filterPills}
+          value={filter}
+          onChange={(next) => setFilter(next as typeof filter)}
+        />
+        {membersQuery.isLoading ? <LoadingInline label="Loading members..." /> : null}
+        {membersQuery.error ? (
+          <Callout tone="danger" title="Unable to load members">
+            <p>{(membersQuery.error as Error).message}</p>
+          </Callout>
+        ) : null}
         <div className="table-wrap">
           <table className="table">
             <thead>
@@ -104,7 +130,7 @@ export function OrganizationPage() {
               </tr>
             </thead>
             <tbody>
-              {visibleMembers.map((member) => (
+              {members.map((member) => (
                 <tr key={member.id}>
                   <td>{member.fullName}</td>
                   <td>{member.email}</td>
@@ -121,13 +147,6 @@ export function OrganizationPage() {
           </table>
         </div>
       </SurfaceCard>
-
-      <Callout tone="info" title="UI-ready collaboration layer">
-        <p>
-          Organization UX is now available in apps/web and linked into governance routes.
-          Advanced membership administration remains runtime-light until dedicated APIs are expanded.
-        </p>
-      </Callout>
     </div>
   );
 }

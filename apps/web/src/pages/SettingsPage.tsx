@@ -1,13 +1,16 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   getApiRuntimeMode,
   getAuthSession,
+  getWorkspaceProfile,
+  getWorkspaceSettingsOverview,
   listApps,
   listCredentials,
-  type AppConnectionRecord,
-  type CredentialRecord,
+  listWorkspaceKnowledgeDocsQuery,
+  listWorkspaceMembersQuery,
+  updateWorkspaceProfile,
 } from "../api";
 import {
   Callout,
@@ -19,23 +22,60 @@ import {
   SurfaceCard,
 } from "../components/ui-kit";
 import {
-  getKnowledgeItems,
-  getSettingsSummary,
   getVisibleSettingsTabs,
   normalizeSettingsTab,
   type SettingsTabId,
 } from "./settings-view-helpers";
 
 type SettingsDataPayload = {
-  apps: AppConnectionRecord[];
-  credentials: CredentialRecord[];
+  overview: Awaited<ReturnType<typeof getWorkspaceSettingsOverview>>;
+  profile: Awaited<ReturnType<typeof getWorkspaceProfile>>;
+  apps: Awaited<ReturnType<typeof listApps>>;
+  credentials: Awaited<ReturnType<typeof listCredentials>>;
+  members: Awaited<ReturnType<typeof listWorkspaceMembersQuery>>;
+  docs: Awaited<ReturnType<typeof listWorkspaceKnowledgeDocsQuery>>;
 };
 
 async function fetchSettingsData(): Promise<SettingsDataPayload> {
-  const [apps, credentials] = await Promise.all([listApps(), listCredentials()]);
+  const [overview, profile, apps, credentials, membersResult, docsResult] = await Promise.all([
+    getWorkspaceSettingsOverview(),
+    getWorkspaceProfile(),
+    listApps(),
+    listCredentials(),
+    listWorkspaceMembersQuery({ limit: 25 }).catch(() => ({
+      rows: [],
+      nextCursor: null,
+      totalApprox: 0,
+      appliedFilters: {},
+      appliedSorts: [],
+      pagination: {
+        page: 1,
+        limit: 25,
+        total: 0,
+        hasMore: false,
+      },
+    })),
+    listWorkspaceKnowledgeDocsQuery({ limit: 6 }).catch(() => ({
+      rows: [],
+      nextCursor: null,
+      totalApprox: 0,
+      appliedFilters: {},
+      appliedSorts: [],
+      pagination: {
+        page: 1,
+        limit: 6,
+        total: 0,
+        hasMore: false,
+      },
+    })),
+  ]);
   return {
+    overview,
+    profile,
     apps,
     credentials,
+    members: membersResult,
+    docs: docsResult,
   };
 }
 
@@ -50,6 +90,7 @@ function formatTabTone(tabId: SettingsTabId): "info" | "success" | "warning" | "
 }
 
 export function SettingsPage() {
+  const queryClient = useQueryClient();
   const session = getAuthSession();
   const runtimeMode = getApiRuntimeMode();
   const isOperator =
@@ -64,33 +105,45 @@ export function SettingsPage() {
   const [activeTab, setActiveTab] = useState<SettingsTabId>(() =>
     normalizeSettingsTab("profile", visibleTabs),
   );
+  const [fullNameInput, setFullNameInput] = useState("");
 
   const settingsDataQuery = useQuery({
-    queryKey: ["settings-surface"],
+    queryKey: ["settings-surface-v2"],
     queryFn: fetchSettingsData,
+    staleTime: 15_000,
   });
 
-  const summary = useMemo(
-    () =>
-      getSettingsSummary({
-        session,
-        apps: settingsDataQuery.data?.apps || [],
-        credentials: settingsDataQuery.data?.credentials || [],
-      }),
-    [session, settingsDataQuery.data],
-  );
+  const profileMutation = useMutation({
+    mutationFn: updateWorkspaceProfile,
+    onSuccess: (profile) => {
+      queryClient.setQueryData<SettingsDataPayload | undefined>(
+        ["settings-surface-v2"],
+        (previous) =>
+          previous
+            ? {
+                ...previous,
+                profile,
+              }
+            : previous,
+      );
+    },
+  });
+
+  const summary = settingsDataQuery.data?.overview;
   const connectedApps = settingsDataQuery.data?.apps.filter((app) => app.connected) || [];
-  const knowledgeItems = useMemo(
-    () =>
-      getKnowledgeItems({
-        mode: runtimeMode,
-      }),
-    [runtimeMode],
-  );
   const selectedTabMetadata = useMemo(
     () => visibleTabs.find((tab) => tab.id === activeTab) || visibleTabs[0],
     [activeTab, visibleTabs],
   );
+
+  const effectiveProfile = settingsDataQuery.data?.profile;
+  useEffect(() => {
+    if (!effectiveProfile) {
+      return;
+    }
+    setFullNameInput(effectiveProfile.fullName || "");
+  }, [effectiveProfile?.id, effectiveProfile?.fullName]);
+  const effectiveFullName = fullNameInput;
 
   return (
     <div className="stack">
@@ -102,8 +155,14 @@ export function SettingsPage() {
       <ProductToolbar
         left={
           <>
-            <InsightChip label="Workspace" value={summary.workspace} />
-            <InsightChip label="Role" value={summary.role} />
+            <InsightChip
+              label="Workspace"
+              value={summary?.workspace.name || session?.scope.workspaceSlug || "workspace"}
+            />
+            <InsightChip
+              label="Role"
+              value={summary?.actor.workspaceRole || session?.scope.workspaceRole || "member"}
+            />
             <InsightChip label="Mode" value={runtimeMode} />
           </>
         }
@@ -148,144 +207,136 @@ export function SettingsPage() {
             highlight
           >
             <div className="metric-grid">
-              <InsightChip label="Organization" value={summary.organization} />
-              <InsightChip label="Connected apps" value={summary.connectedApps} />
-              <InsightChip label="Valid credentials" value={summary.validCredentials} />
+              <InsightChip label="Organization" value={summary?.organization.name || "-"} />
+              <InsightChip label="Connected apps" value={summary?.counts.connectedApps || 0} />
+              <InsightChip label="Valid credentials" value={summary?.counts.validCredentials || 0} />
             </div>
           </SurfaceCard>
 
-          {settingsDataQuery.isLoading ? (
-            <LoadingInline label="Loading settings data..." />
-          ) : null}
+          {settingsDataQuery.isLoading ? <LoadingInline label="Loading settings data..." /> : null}
           {settingsDataQuery.error ? (
             <Callout tone="danger" title="Unable to load settings data">
               <p>{(settingsDataQuery.error as Error).message}</p>
             </Callout>
           ) : null}
 
-          {activeTab === "profile" ? (
+          {activeTab === "profile" && effectiveProfile ? (
             <SurfaceCard title="Profile settings" subtitle="Identity and personal preferences.">
               <div className="form-grid two">
                 <label>
                   Full name
                   <input
-                    defaultValue={session?.user.fullName || ""}
+                    value={effectiveFullName}
                     placeholder="Your full name"
                     className="field-input"
+                    onChange={(event) => setFullNameInput(event.target.value)}
                   />
                 </label>
                 <label>
                   Email
-                  <input
-                    defaultValue={session?.user.email || ""}
-                    placeholder="name@example.com"
-                    className="field-input"
-                  />
+                  <input value={effectiveProfile.email} className="field-input" disabled />
                 </label>
               </div>
-              <label>
-                Bio
-                <textarea
-                  rows={4}
-                  className="field-input"
-                  defaultValue="Automation owner focused on reliable workflow outcomes."
-                />
-              </label>
               <div className="inline-actions">
-                <button type="button" className="button-primary">
-                  Save profile
+                <button
+                  type="button"
+                  className="button-primary"
+                  disabled={
+                    profileMutation.isPending ||
+                    effectiveFullName.trim() === (effectiveProfile.fullName || "")
+                  }
+                  onClick={() =>
+                    profileMutation.mutate({
+                      fullName: effectiveFullName.trim() ? effectiveFullName.trim() : null,
+                    })
+                  }
+                >
+                  {profileMutation.isPending ? "Saving..." : "Save profile"}
                 </button>
               </div>
             </SurfaceCard>
           ) : null}
 
           {activeTab === "workspace" ? (
-            <SurfaceCard title="Workspace defaults" subtitle="Shared workspace behavior and local guidance.">
+            <SurfaceCard title="Workspace defaults" subtitle="Shared workspace context and mode visibility.">
               <div className="form-grid two">
                 <label>
                   Workspace label
-                  <input defaultValue={summary.workspace} className="field-input" />
+                  <input
+                    value={summary?.workspace.name || session?.scope.workspaceSlug || "workspace"}
+                    className="field-input"
+                    disabled
+                  />
                 </label>
                 <label>
                   Organization label
-                  <input defaultValue={summary.organization} className="field-input" />
+                  <input
+                    value={summary?.organization.name || session?.scope.organizationSlug || "organization"}
+                    className="field-input"
+                    disabled
+                  />
                 </label>
               </div>
-              <label>
-                Default timezone
-                <select className="field-input">
-                  <option>UTC</option>
-                  <option>Asia/Kuala_Lumpur</option>
-                  <option>America/New_York</option>
-                </select>
-              </label>
-              <div className="inline-actions">
-                <button type="button" className="button-primary">
-                  Save workspace defaults
-                </button>
-              </div>
+              <Callout tone="info" title="Workspace profile source of truth">
+                <p>
+                  Workspace identity is now loaded from the settings overview API. Advanced
+                  workspace mutation controls are intentionally deferred.
+                </p>
+              </Callout>
             </SurfaceCard>
           ) : null}
 
           {activeTab === "team" ? (
-            <SurfaceCard title="Team and access" subtitle="Workspace-aware member visibility (operator focus).">
+            <SurfaceCard title="Team and access" subtitle="Workspace-aware member directory from list contracts.">
               <div className="table-wrap">
                 <table className="table">
                   <thead>
                     <tr>
                       <th>Member</th>
+                      <th>Email</th>
                       <th>Role</th>
                       <th>Status</th>
                     </tr>
                   </thead>
                   <tbody>
-                    <tr>
-                      <td>{session?.user.fullName || session?.user.email || "Current user"}</td>
-                      <td>{summary.role}</td>
-                      <td>
-                        <StatusPill tone="success">active</StatusPill>
-                      </td>
-                    </tr>
+                    {(settingsDataQuery.data?.members.rows || []).map((member) => (
+                      <tr key={member.id}>
+                        <td>{member.fullName}</td>
+                        <td>{member.email}</td>
+                        <td>
+                          <span className="tag">{member.role}</span>
+                        </td>
+                        <td>
+                          <StatusPill tone={member.status === "active" ? "success" : "warning"}>
+                            {member.status}
+                          </StatusPill>
+                        </td>
+                      </tr>
+                    ))}
                   </tbody>
                 </table>
               </div>
-              <Callout tone="info" title="Future-facing team UX">
-                <p>
-                  This section adopts the organization-management direction from the canonical UI
-                  system. Full member directory workflows can be expanded in later phases without
-                  changing shell contracts.
-                </p>
-              </Callout>
             </SurfaceCard>
           ) : null}
 
           {activeTab === "knowledge" ? (
             <SurfaceCard
               title="Knowledge and assets"
-              subtitle="Future-facing docs/notes/files surface adapted into the canonical settings experience."
+              subtitle="Docs and notes continuity with dedicated workspace routes."
             >
-              <Callout tone="info" title="UI-ready knowledge layer">
-                <p>
-                  Runtime-light preview using mode-aware seeded records. This keeps product UX
-                  direction visible without claiming backend-complete document storage.
-                </p>
-              </Callout>
               <div className="workspace-home-grid">
-                {knowledgeItems.map((item) => (
+                {(settingsDataQuery.data?.docs.rows || []).map((item) => (
                   <article key={item.id} className="app-card">
                     <div className="inline-actions" style={{ justifyContent: "space-between" }}>
                       <strong>{item.title}</strong>
-                      <StatusPill tone="info">{item.type}</StatusPill>
+                      <StatusPill tone="info">{item.category}</StatusPill>
                     </div>
                     <p>Owner: {item.owner}</p>
-                    <span className="tag">Updated {item.lastUpdatedLabel}</span>
+                    <span className="tag">Updated {item.updatedAtLabel}</span>
                   </article>
                 ))}
               </div>
               <div className="inline-actions">
-                <button type="button" className="button-primary">
-                  Open knowledge workspace
-                </button>
                 <Link to="/docs">Docs hub</Link>
                 <Link to="/files">Files</Link>
               </div>
@@ -297,7 +348,9 @@ export function SettingsPage() {
               <div className="stack-sm">
                 <div className="inline-actions actions-between">
                   <span>Two-factor authentication</span>
-                  <StatusPill tone="success">enabled</StatusPill>
+                  <StatusPill tone={effectiveProfile?.security.twoFactorEnabled ? "success" : "warning"}>
+                    {effectiveProfile?.security.twoFactorEnabled ? "enabled" : "disabled"}
+                  </StatusPill>
                 </div>
                 <div className="inline-actions actions-between">
                   <span>Credential encryption</span>

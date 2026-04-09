@@ -3,6 +3,8 @@ import {
   Adapter,
   AdapterActionResult,
   AdapterAuthResult,
+  AdapterConnectionProbeInput,
+  AdapterConnectionProbeResult,
   AdapterCredentialValidationResult,
   AdapterCredentials,
   AdapterContext,
@@ -86,13 +88,15 @@ export class SlackAdapter implements Adapter {
   async listTriggers(): Promise<TriggerDefinition[]> {
     return [
       {
-        key: "dummy_test_trigger",
-        name: "Dummy Trigger",
-        description: "Testing-only trigger placeholder for v1.",
+        key: "incoming_message",
+        name: "Incoming Message",
+        description: "Receive inbound Slack message-style payloads.",
         inputSchema: {
           type: "object",
           properties: {
-            message: { type: "string" },
+            event: { type: "object" },
+            text: { type: "string" },
+            channel: { type: "string" },
           },
         },
       },
@@ -118,10 +122,13 @@ export class SlackAdapter implements Adapter {
   }
 
   async runTrigger(
-    _triggerKey: string,
+    triggerKey: string,
     input: Record<string, unknown>,
     _context: AdapterContext,
   ): Promise<AdapterTriggerResult> {
+    if (triggerKey !== "incoming_message") {
+      throw new Error(`Unsupported trigger "${triggerKey}"`);
+    }
     return {
       events: [input],
     };
@@ -207,5 +214,68 @@ export class SlackAdapter implements Adapter {
     return {
       status: "valid",
     };
+  }
+
+  async testConnection(
+    input: AdapterConnectionProbeInput,
+  ): Promise<AdapterConnectionProbeResult> {
+    const integrationConfig = input.integrationConfig || {};
+    const token =
+      input.credentials?.accessToken ||
+      input.credentials?.apiKey ||
+      (typeof integrationConfig.botToken === "string"
+        ? integrationConfig.botToken
+        : "") ||
+      this.config.botToken;
+
+    if (!token) {
+      return {
+        status: "failed",
+        message: "Slack bot/user token is required.",
+        recommendedCredentialStatus: "invalid",
+      };
+    }
+
+    const client = new WebClient(token);
+    try {
+      const auth = await client.auth.test();
+      if (!auth.ok) {
+        return {
+          status: "failed",
+          message: "Slack auth test failed.",
+          recommendedCredentialStatus: "invalid",
+        };
+      }
+
+      return {
+        status: "success",
+        message: "Slack connection verified.",
+        metadata: {
+          team: auth.team || null,
+          userId: auth.user_id || null,
+          url: auth.url || null,
+        },
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Slack connection probe failed.";
+      const normalized = message.toLowerCase();
+      if (
+        normalized.includes("invalid_auth") ||
+        normalized.includes("not_authed") ||
+        normalized.includes("token_revoked") ||
+        normalized.includes("account_inactive")
+      ) {
+        return {
+          status: "failed",
+          message,
+          recommendedCredentialStatus: "invalid",
+        };
+      }
+
+      return {
+        status: "needs_attention",
+        message,
+      };
+    }
   }
 }

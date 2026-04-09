@@ -1,19 +1,17 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { getApiRuntimeMode } from "../api";
+import { useQuery } from "@tanstack/react-query";
+import { getApiRuntimeMode, listWorkspaceKnowledgeDocsQuery } from "../api";
 import {
   Callout,
   EmptyStatePanel,
   InsightChip,
+  LoadingInline,
   PageHeader,
   ProductToolbar,
   StatusPill,
   SurfaceCard,
 } from "../components/ui-kit";
-import {
-  filterWorkspaceDocuments,
-  getWorkspaceKnowledgeDocs,
-} from "./workspace-future-helpers";
 
 function toDocTone(category: string): "info" | "success" | "warning" | "danger" {
   if (category === "runbooks") {
@@ -28,21 +26,34 @@ function toDocTone(category: string): "info" | "success" | "warning" | "danger" 
 export function DocsHubPage() {
   const mode = getApiRuntimeMode();
   const [query, setQuery] = useState("");
-  const docs = useMemo(() => getWorkspaceKnowledgeDocs({ mode }), [mode]);
-  const visibleDocs = useMemo(() => filterWorkspaceDocuments(docs, query), [docs, query]);
+  const docsQuery = useQuery({
+    queryKey: ["workspace-docs", query],
+    queryFn: () =>
+      listWorkspaceKnowledgeDocsQuery({
+        limit: 60,
+        search: query.trim() || undefined,
+      }),
+  });
+  const docs = docsQuery.data?.rows || [];
+  const documentCount = docsQuery.data?.totalApprox || docs.length;
+
+  const emptyState = useMemo(
+    () => query.trim().length > 0 && docs.length === 0,
+    [query, docs.length],
+  );
 
   return (
     <div className="stack">
       <PageHeader
         eyebrow="Knowledge"
         title="Docs and Notes Hub"
-        subtitle="Outcome-focused workspace documentation adapted from the canonical UI system into route-safe apps/web pages."
+        subtitle="Search and scan workspace runbooks, playbooks, and notes with contract-backed list behavior."
       />
       <ProductToolbar
         left={
           <>
             <InsightChip label="Mode" value={mode} />
-            <InsightChip label="Documents" value={docs.length} />
+            <InsightChip label="Documents" value={documentCount} />
           </>
         }
         right={
@@ -53,7 +64,7 @@ export function DocsHubPage() {
         }
       />
 
-      <SurfaceCard title="Document catalog" subtitle="Search and scan workspace runbooks, playbooks, and reference docs.">
+      <SurfaceCard title="Document catalog" subtitle="Search by title, owner, summary, or tags.">
         <label>
           Search
           <input
@@ -63,11 +74,16 @@ export function DocsHubPage() {
             onChange={(event) => setQuery(event.target.value)}
           />
         </label>
-
-        {visibleDocs.length === 0 ? (
+        {docsQuery.isLoading ? <LoadingInline label="Loading docs..." /> : null}
+        {docsQuery.error ? (
+          <Callout tone="danger" title="Unable to load docs">
+            <p>{(docsQuery.error as Error).message}</p>
+          </Callout>
+        ) : null}
+        {emptyState ? (
           <EmptyStatePanel
             title="No docs match this search"
-            description="Try a different keyword or clear the search to view all workspace documentation records."
+            description="Try a different keyword or clear the search to view all workspace docs."
             primaryAction={
               <button type="button" className="button-primary" onClick={() => setQuery("")}>
                 Clear search
@@ -76,7 +92,7 @@ export function DocsHubPage() {
           />
         ) : (
           <div className="workspace-home-grid">
-            {visibleDocs.map((doc) => (
+            {docs.map((doc) => (
               <article key={doc.id} className="app-card">
                 <div className="inline-actions actions-between">
                   <strong>{doc.title}</strong>
@@ -97,13 +113,7 @@ export function DocsHubPage() {
           </div>
         )}
       </SurfaceCard>
-
-      <Callout tone="info" title="Future-facing but runtime-safe">
-        <p>
-          This docs surface is intentionally UI-ready. Data is mode-aware fixture content so teams can
-          review the product experience before deeper backend document services are added.
-        </p>
-      </Callout>
     </div>
   );
 }
+

@@ -37,7 +37,15 @@ import type {
   WorkflowTemplate,
   WorkflowTemplateSummary,
   WorkflowTestRunResponse,
+  WorkspaceFileRecord,
+  WorkspaceFilesQuery,
+  WorkspaceKnowledgeDocRecord,
+  WorkspaceKnowledgeDocsQuery,
+  WorkspaceMemberRecord,
+  WorkspaceMembersQuery,
+  WorkspaceProfileView,
   WorkspaceQuotaResponse,
+  WorkspaceSettingsOverview,
   WorkspaceUsageResponse,
 } from "./api";
 import { PLATFORM_MODES, type PlatformMode } from "./platform-mode";
@@ -121,6 +129,118 @@ function createSession(): AuthSession {
     },
   };
 }
+
+const PROTOTYPE_WORKSPACE_MEMBERS: WorkspaceMemberRecord[] = [
+  {
+    id: USER_ID,
+    fullName: "Prototype Admin",
+    email: "admin@example.com",
+    role: "owner",
+    status: "active",
+    team: "Platform",
+    lastActiveAt: at(-4),
+  },
+  {
+    id: "usr_proto_ops",
+    fullName: "Automation Operator",
+    email: "ops@example.com",
+    role: "admin",
+    status: "active",
+    team: "Operations",
+    lastActiveAt: at(-9),
+  },
+  {
+    id: "usr_proto_reviewer",
+    fullName: "Template Reviewer",
+    email: "reviewer@example.com",
+    role: "member",
+    status: "invited",
+    team: "Product",
+    lastActiveAt: null,
+  },
+];
+
+const PROTOTYPE_KNOWLEDGE_DOCS: WorkspaceKnowledgeDocRecord[] = [
+  {
+    id: "doc_proto_1",
+    title: "Slack Escalation Playbook",
+    category: "playbooks",
+    updatedAt: at(-5),
+    updatedAtLabel: "5 minutes ago",
+    owner: "Ops Team",
+    summary: "Escalation flow for failed automation runs and approval bottlenecks.",
+    tags: ["alerts", "approvals", "ops"],
+  },
+  {
+    id: "doc_proto_2",
+    title: "Webhook Starter Guide",
+    category: "runbooks",
+    updatedAt: at(-22),
+    updatedAtLabel: "22 minutes ago",
+    owner: "Automation Team",
+    summary: "Beginner-friendly setup path for first webhook-triggered automation.",
+    tags: ["onboarding", "webhook"],
+  },
+  {
+    id: "doc_proto_3",
+    title: "Template QA Notes",
+    category: "notes",
+    updatedAt: at(-60),
+    updatedAtLabel: "1 hour ago",
+    owner: "Product",
+    summary: "Prototype acceptance notes for starter templates and first-success UX.",
+    tags: ["templates", "prototype"],
+  },
+];
+
+const PROTOTYPE_WORKSPACE_FILES: WorkspaceFileRecord[] = [
+  {
+    id: "file_1",
+    name: "automation-playbooks",
+    kind: "folder",
+    owner: "Ops Team",
+    updatedAt: at(-120),
+    updatedAtLabel: "2 hours ago",
+    sizeBytes: null,
+    sizeLabel: "-",
+    shared: true,
+  },
+  {
+    id: "file_2",
+    name: "first-success-checklist.pdf",
+    kind: "file",
+    extension: "pdf",
+    owner: "Product",
+    updatedAt: at(-30),
+    updatedAtLabel: "30 minutes ago",
+    sizeBytes: 1_468_000,
+    sizeLabel: "1.4 MB",
+    shared: true,
+  },
+  {
+    id: "file_3",
+    name: "workflow-simulator-payloads.json",
+    kind: "file",
+    extension: "json",
+    owner: "Automation Team",
+    updatedAt: at(-4320),
+    updatedAtLabel: "3 days ago",
+    sizeBytes: 84_000,
+    sizeLabel: "82 KB",
+    shared: false,
+  },
+  {
+    id: "file_4",
+    name: "prototype-demo-assets",
+    kind: "folder",
+    owner: "Design",
+    updatedAt: at(-15),
+    updatedAtLabel: "15 minutes ago",
+    sizeBytes: null,
+    sizeLabel: "-",
+    shared: true,
+  },
+];
 
 function buildDefinition(name: string): WorkflowDefinition {
   return {
@@ -1002,6 +1122,14 @@ function standardList<Row extends Record<string, unknown>>(rows: Row[], query: S
   };
 }
 
+function includesSearch(values: Array<string | null | undefined>, query: string | undefined): boolean {
+  const normalized = (query || "").trim().toLowerCase();
+  if (!normalized) {
+    return true;
+  }
+  return values.some((value) => String(value || "").toLowerCase().includes(normalized));
+}
+
 function summarizeTemplate(template: WorkflowTemplate): WorkflowTemplateSummary {
   const actionSteps = template.workflow.steps.filter(
     (step) => step.type === "action" || step.type === undefined,
@@ -1112,6 +1240,117 @@ export function prototypeFetchMe(): {
   };
 }
 
+export function prototypeGetWorkspaceProfile(): WorkspaceProfileView {
+  return {
+    id: store.session.user.id,
+    email: store.session.user.email,
+    fullName: store.session.user.fullName,
+    orgRole: store.session.scope.orgRole,
+    workspaceRole: store.session.scope.workspaceRole,
+    security: {
+      twoFactorEnabled: true,
+      activeSessions: 1,
+      passwordRotationRecommended: true,
+    },
+  };
+}
+
+export function prototypeUpdateWorkspaceProfile(input: {
+  fullName?: string | null;
+}): WorkspaceProfileView {
+  if (input.fullName !== undefined) {
+    store.session.user.fullName = input.fullName;
+  }
+  return prototypeGetWorkspaceProfile();
+}
+
+export function prototypeGetWorkspaceSettingsOverview(): WorkspaceSettingsOverview {
+  return {
+    workspace: {
+      id: store.session.scope.workspaceId,
+      slug: store.session.scope.workspaceSlug,
+      name: "Default Workspace",
+    },
+    organization: {
+      id: store.session.scope.organizationId,
+      slug: store.session.scope.organizationSlug,
+      name: "Prototype Organization",
+    },
+    actor: {
+      userId: store.session.user.id,
+      email: store.session.user.email,
+      fullName: store.session.user.fullName,
+      orgRole: store.session.scope.orgRole,
+      workspaceRole: store.session.scope.workspaceRole,
+    },
+    counts: {
+      connectedApps: store.apps.filter((app) => app.connected).length,
+      validCredentials: store.credentials.filter((credential) => credential.credential_status === "valid").length,
+      totalMembers: PROTOTYPE_WORKSPACE_MEMBERS.length,
+    },
+    mode: {
+      name: PLATFORM_MODES.PROTOTYPE,
+      source: "prototype_fixtures",
+    },
+  };
+}
+
+export function prototypeListWorkspaceMembers(
+  query: WorkspaceMembersQuery = {},
+): StandardListResponse<WorkspaceMemberRecord> {
+  let rows = [...PROTOTYPE_WORKSPACE_MEMBERS];
+  if (query.role) {
+    rows = rows.filter((row) => row.role === query.role);
+  }
+  if (query.status) {
+    rows = rows.filter((row) => row.status === query.status);
+  }
+  rows = rows.filter((row) =>
+    includesSearch([row.fullName, row.email, row.role, row.status, row.team], query.search),
+  );
+  rows.sort((left, right) => left.fullName.localeCompare(right.fullName));
+  return standardList(rows, query, {
+    role: query.role || null,
+    status: query.status || null,
+  });
+}
+
+export function prototypeListWorkspaceKnowledgeDocs(
+  query: WorkspaceKnowledgeDocsQuery = {},
+): StandardListResponse<WorkspaceKnowledgeDocRecord> {
+  let rows = [...PROTOTYPE_KNOWLEDGE_DOCS];
+  if (query.category) {
+    rows = rows.filter((row) => row.category === query.category);
+  }
+  rows = rows.filter((row) =>
+    includesSearch([row.title, row.owner, row.summary, row.category, row.tags.join(" ")], query.search),
+  );
+  rows.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  return standardList(rows, query, {
+    category: query.category || null,
+  });
+}
+
+export function prototypeListWorkspaceFiles(
+  query: WorkspaceFilesQuery = {},
+): StandardListResponse<WorkspaceFileRecord> {
+  let rows = [...PROTOTYPE_WORKSPACE_FILES];
+  if (query.kind) {
+    rows = rows.filter((row) => row.kind === query.kind);
+  }
+  if (query.shared !== undefined) {
+    rows = rows.filter((row) => row.shared === query.shared);
+  }
+  rows = rows.filter((row) =>
+    includesSearch([row.name, row.owner, row.kind, row.extension], query.search),
+  );
+  rows.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  return standardList(rows, query, {
+    kind: query.kind || null,
+    shared: query.shared ?? null,
+  });
+}
+
 export function prototypeListAdapters(): { adapters: AdapterMetadata[]; installedAdapters: InstalledAdapter[] } {
   return {
     adapters: clone(store.adapters),
@@ -1157,13 +1396,43 @@ export function prototypeUpsertAppConnection(input: {
 export function prototypeTestAppConnection(input: {
   appKey: string;
   integrationConfig?: Record<string, unknown>;
-}): { appKey: string; status: "valid" | "expired" | "invalid"; reason: string | null; testedAt: string } {
+}): {
+  appKey: string;
+  status: "valid" | "expired" | "invalid";
+  reason: string | null;
+  testedAt: string;
+  probeAttempted: boolean;
+  probe: {
+    status: "success" | "needs_attention" | "failed";
+    message?: string;
+  } | null;
+} {
   const app = getAppOrThrow(input.appKey);
   if (app.status === "invalid") {
-    return { appKey: app.key, status: "invalid", reason: app.connection.validationError || "Validation failed", testedAt: nowIso() };
+    return {
+      appKey: app.key,
+      status: "invalid",
+      reason: app.connection.validationError || "Validation failed",
+      testedAt: nowIso(),
+      probeAttempted: true,
+      probe: {
+        status: "failed",
+        message: "Prototype connection validation failed.",
+      },
+    };
   }
   if (app.status === "expired") {
-    return { appKey: app.key, status: "expired", reason: app.connection.validationError || "Credential refresh required", testedAt: nowIso() };
+    return {
+      appKey: app.key,
+      status: "expired",
+      reason: app.connection.validationError || "Credential refresh required",
+      testedAt: nowIso(),
+      probeAttempted: true,
+      probe: {
+        status: "needs_attention",
+        message: "Prototype credential refresh required.",
+      },
+    };
   }
   if (input.integrationConfig) {
     app.connection.integrationConfig = { ...app.connection.integrationConfig, ...input.integrationConfig };
@@ -1172,7 +1441,17 @@ export function prototypeTestAppConnection(input: {
   app.connected = true;
   app.connection.updatedAt = nowIso();
   addAudit("app.connection.tested", "app", app.key);
-  return { appKey: app.key, status: "valid", reason: null, testedAt: nowIso() };
+  return {
+    appKey: app.key,
+    status: "valid",
+    reason: "Prototype connection verified.",
+    testedAt: nowIso(),
+    probeAttempted: true,
+    probe: {
+      status: "success",
+      message: "Prototype connection verified.",
+    },
+  };
 }
 
 export function prototypeDisconnectAppConnection(appKey: string): { deletedCredentials: number; app: AppConnectionRecord | null } {

@@ -2,6 +2,8 @@ import {
   Adapter,
   AdapterActionResult,
   AdapterAuthResult,
+  AdapterConnectionProbeInput,
+  AdapterConnectionProbeResult,
   AdapterCredentialValidationResult,
   AdapterCredentials,
   AdapterContext,
@@ -259,5 +261,85 @@ export class WhatsAppAdapter implements Adapter {
     return {
       status: "valid",
     };
+  }
+
+  async testConnection(
+    input: AdapterConnectionProbeInput,
+  ): Promise<AdapterConnectionProbeResult> {
+    const integrationConfig = input.integrationConfig || {};
+    const metadata = asRecord(input.credentials?.metadata);
+    const token =
+      asString(input.credentials?.accessToken) ||
+      asString(input.credentials?.apiKey) ||
+      asString(integrationConfig.accessToken) ||
+      this.config.accessToken;
+    const phoneNumberId =
+      asString(metadata.phoneNumberId) ||
+      asString(integrationConfig.phoneNumberId) ||
+      this.config.phoneNumberId;
+
+    if (!token || !phoneNumberId) {
+      return {
+        status: "failed",
+        message: "WhatsApp access token and phoneNumberId are required.",
+        recommendedCredentialStatus: "invalid",
+      };
+    }
+
+    const version =
+      asString(metadata.apiVersion) ||
+      asString(integrationConfig.apiVersion) ||
+      this.config.apiVersion ||
+      "v20.0";
+    const endpoint = `${this.config.baseUrl}/${version}/${phoneNumberId}?fields=id,display_phone_number,verified_name`;
+
+    try {
+      const response = await fetch(endpoint, {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      const body = (await response.json().catch(() => null)) as
+        | {
+            id?: string;
+            display_phone_number?: string;
+            verified_name?: string;
+            error?: { message?: string };
+          }
+        | null;
+
+      if (!response.ok) {
+        const authFailure = response.status === 401 || response.status === 403;
+        return {
+          status: authFailure ? "failed" : "needs_attention",
+          message:
+            body?.error?.message ||
+            `WhatsApp connection probe failed (${response.status}).`,
+          providerStatusCode: response.status,
+          recommendedCredentialStatus: authFailure ? "invalid" : undefined,
+        };
+      }
+
+      return {
+        status: "success",
+        message: "WhatsApp connection verified.",
+        providerStatusCode: response.status,
+        metadata: {
+          phoneNumberId: body?.id || phoneNumberId,
+          displayPhoneNumber: body?.display_phone_number || null,
+          verifiedName: body?.verified_name || null,
+        },
+      };
+    } catch (error) {
+      return {
+        status: "needs_attention",
+        message:
+          error instanceof Error
+            ? error.message
+            : "WhatsApp connection probe failed.",
+      };
+    }
   }
 }

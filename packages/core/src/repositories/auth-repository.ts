@@ -1,5 +1,15 @@
 import { Pool } from "pg";
+import type { StandardListResult } from "@integration/shared";
 import type { PlatformRole, SessionScope, SessionUser } from "../auth/types";
+import {
+  appendFilterGroupClause,
+  buildOrderByClause,
+  encodeOffsetCursor,
+  normalizeSortDirectives,
+  resolvePaginationState,
+  type SqlColumnMap,
+  type SqlListQueryInput,
+} from "./list-query";
 
 export type LoginAccountRecord = {
   user_id: string;
@@ -35,6 +45,32 @@ type SessionAccessRecord = {
 export type SessionAccess = {
   user: SessionUser;
   scope: SessionScope;
+};
+
+export type WorkspaceMemberDirectoryRecord = {
+  id: string;
+  full_name: string | null;
+  email: string;
+  role: PlatformRole;
+  status: "active" | "invited" | "disabled";
+  last_active_at: string | Date | null;
+};
+
+export type WorkspaceMemberDirectoryListQuery = SqlListQueryInput & {
+  role?: PlatformRole;
+  status?: "active" | "invited" | "disabled";
+};
+
+export type WorkspaceMemberDirectoryListResult =
+  StandardListResult<WorkspaceMemberDirectoryRecord>;
+
+export type WorkspaceContextSummary = {
+  workspace_id: string;
+  workspace_slug: string;
+  workspace_name: string;
+  organization_id: string;
+  organization_slug: string;
+  organization_name: string;
 };
 
 export class AuthRepository {
@@ -240,6 +276,177 @@ export class AuthRepository {
       [input.userId, input.organizationId],
     );
     return result.rows;
+  }
+
+  async listWorkspaceMembersWithQuery(input: {
+    tenantId: string;
+    organizationId: string;
+    workspaceId: string;
+    query: WorkspaceMemberDirectoryListQuery;
+  }): Promise<WorkspaceMemberDirectoryListResult> {
+    const predicates = [
+      "wm.tenant_id = $1",
+      "wm.organization_id = $2",
+      "wm.workspace_id = $3",
+    ];
+    const values: unknown[] = [
+      input.tenantId,
+      input.organizationId,
+      input.workspaceId,
+    ];
+
+    if (input.query.role) {
+      values.push(input.query.role);
+      predicates.push(`wm.role = $${values.length}`);
+    }
+    if (input.query.status) {
+      values.push(input.query.status);
+      predicates.push(`wm.status = $${values.length}`);
+    }
+    if (input.query.search) {
+      values.push(`%${input.query.search}%`);
+      const position = values.length;
+      predicates.push(
+        `(u.email ILIKE $${position} OR u.full_name ILIKE $${position} OR wm.role::text ILIKE $${position})`,
+      );
+    }
+
+    const filterColumns: SqlColumnMap = {
+      id: "u.id::text",
+      fullName: "u.full_name",
+      email: "u.email",
+      role: "wm.role::text",
+      status: "wm.status",
+      lastActiveAt: "u.updated_at",
+    };
+    appendFilterGroupClause({
+      predicates,
+      values,
+      filterGroup: input.query.filterGroup,
+      allowedColumns: filterColumns,
+    });
+
+    const pagination = resolvePaginationState(input.query, {
+      limit: 25,
+      maxLimit: 100,
+    });
+    const appliedSorts = normalizeSortDirectives(
+      input.query.sort,
+      filterColumns,
+      [{ field: "fullName", direction: "asc" }],
+    );
+    const orderBy = buildOrderByClause(appliedSorts, filterColumns);
+
+    const countResult = await this.pool.query<{ total: string }>(
+      `SELECT COUNT(*)::bigint AS total
+       FROM workspace_memberships wm
+       INNER JOIN users u ON u.id = wm.user_id
+       WHERE ${predicates.join("\n         AND ")}`,
+      values,
+    );
+
+    const pagedValues = [...values, pagination.limit, pagination.offset];
+    const limitPosition = pagedValues.length - 1;
+    const offsetPosition = pagedValues.length;
+    const result = await this.pool.query<WorkspaceMemberDirectoryRecord>(
+      `SELECT
+         u.id::text AS id,
+         u.full_name,
+         u.email,
+         wm.role::text AS role,
+         wm.status::text AS status,
+         u.updated_at AS last_active_at
+       FROM workspace_memberships wm
+       INNER JOIN users u ON u.id = wm.user_id
+       WHERE ${predicates.join("\n         AND ")}
+       ${orderBy}
+       LIMIT $${limitPosition}
+       OFFSET $${offsetPosition}`,
+      pagedValues,
+    );
+
+    const totalApprox = Number(countResult.rows[0]?.total || 0);
+    const hasMore = pagination.offset + result.rows.length < totalApprox;
+    const rows = result.rows.map((entry) => ({
+      ...entry,
+      last_active_at:
+        entry.last_active_at === null
+          ? null
+          : entry.last_active_at instanceof Date
+            ? entry.last_active_at.toISOString()
+            : String(entry.last_active_at),
+    }));
+
+    return {
+      rows,
+      nextCursor: hasMore
+        ? encodeOffsetCursor(pagination.offset + rows.length)
+        : null,
+      totalApprox,
+      appliedFilters: input.query.filterGroup || null,
+      appliedSorts,
+      page: pagination.page,
+      limit: pagination.limit,
+      hasMore,
+    };
+  }
+
+  async updateUserProfileScoped(input: {
+    userId: string;
+    tenantId: string;
+    organizationId: string;
+    fullName: string | null;
+  }): Promise<SessionUser | null> {
+    const result = await this.pool.query<{
+      id: string;
+      email: string;
+      full_name: string | null;
+    }>(
+      `UPDATE users
+       SET full_name = $4,
+           updated_at = NOW()
+       WHERE id = $1
+         AND tenant_id = $2
+         AND organization_id = $3
+       RETURNING id::text, email, full_name`,
+      [input.userId, input.tenantId, input.organizationId, input.fullName],
+    );
+
+    const row = result.rows[0];
+    if (!row) {
+      return null;
+    }
+
+    return {
+      id: row.id,
+      email: row.email,
+      fullName: row.full_name,
+    };
+  }
+
+  async getWorkspaceContextSummary(input: {
+    tenantId: string;
+    organizationId: string;
+    workspaceId: string;
+  }): Promise<WorkspaceContextSummary | null> {
+    const result = await this.pool.query<WorkspaceContextSummary>(
+      `SELECT
+         w.id::text AS workspace_id,
+         w.slug AS workspace_slug,
+         w.name AS workspace_name,
+         o.id::text AS organization_id,
+         o.slug AS organization_slug,
+         o.name AS organization_name
+       FROM workspaces w
+       INNER JOIN organizations o ON o.id = w.organization_id
+       WHERE w.id = $1
+         AND w.tenant_id = $2
+         AND w.organization_id = $3
+       LIMIT 1`,
+      [input.workspaceId, input.tenantId, input.organizationId],
+    );
+
+    return result.rows[0] || null;
   }
 
   async ensureOrganizationMembership(input: {

@@ -3,6 +3,8 @@ import {
   Adapter,
   AdapterActionResult,
   AdapterAuthResult,
+  AdapterConnectionProbeInput,
+  AdapterConnectionProbeResult,
   AdapterCredentialValidationResult,
   AdapterCredentials,
   AdapterContext,
@@ -225,5 +227,83 @@ export class EmailAdapter implements Adapter {
     return {
       status: "valid",
     };
+  }
+
+  async testConnection(
+    input: AdapterConnectionProbeInput,
+  ): Promise<AdapterConnectionProbeResult> {
+    const metadata = asRecord(input.credentials?.metadata);
+    const sensitiveConfig = asRecord(input.credentials?.sensitiveConfig);
+    const integrationConfig = asRecord(input.integrationConfig);
+
+    const host = String(metadata.host || integrationConfig.host || this.config.host || "");
+    const from = String(metadata.from || integrationConfig.from || this.config.from || "");
+    const port = Number(metadata.port || integrationConfig.port || this.config.port || 587);
+    const secure =
+      typeof metadata.secure === "boolean"
+        ? metadata.secure
+        : typeof integrationConfig.secure === "boolean"
+          ? integrationConfig.secure
+          : this.config.secure;
+    const user = String(metadata.user || integrationConfig.user || this.config.user || "");
+    const pass = String(
+      sensitiveConfig.pass ||
+        input.credentials?.apiKey ||
+        integrationConfig.pass ||
+        this.config.pass ||
+        "",
+    );
+
+    if (!host || !from) {
+      return {
+        status: "failed",
+        message: "SMTP host and from address are required.",
+        recommendedCredentialStatus: "invalid",
+      };
+    }
+    if (!Number.isFinite(port) || port <= 0) {
+      return {
+        status: "failed",
+        message: "SMTP port is invalid.",
+        recommendedCredentialStatus: "invalid",
+      };
+    }
+
+    const transport = nodemailer.createTransport({
+      host,
+      port,
+      secure,
+      auth:
+        user || pass
+          ? {
+              user,
+              pass,
+            }
+          : undefined,
+    });
+
+    try {
+      await transport.verify();
+      return {
+        status: "success",
+        message: "SMTP connection verified.",
+        metadata: {
+          host,
+          port,
+          secure,
+        },
+      };
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "SMTP connection probe failed.";
+      const authFailure = /auth|invalid login|password|username/i.test(
+        message.toLowerCase(),
+      );
+      return {
+        status: authFailure ? "failed" : "needs_attention",
+        message,
+        recommendedCredentialStatus: authFailure ? "invalid" : undefined,
+      };
+    }
   }
 }

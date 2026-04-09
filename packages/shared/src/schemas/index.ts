@@ -4,6 +4,13 @@ import type {
   ListSortDirective,
   StandardListQuery,
 } from "../types/query";
+import type {
+  WorkspaceFileRecord,
+  WorkspaceKnowledgeDocRecord,
+  WorkspaceMemberRecord,
+  WorkspaceProfileView,
+  WorkspaceSettingsOverview,
+} from "../types/workspace";
 
 // CONTRACT-COMPATIBLE PROTOTYPE DATA
 // LIVE ROUTE SHAPE PRESERVED
@@ -213,3 +220,104 @@ export function normalizeStandardListQueryInput(
     fields: normalizeFields(raw.fields),
   };
 }
+
+const workspaceMemberRoleSchema = z.enum(["owner", "admin", "member"]);
+const workspaceMemberStatusSchema = z.enum(["active", "invited", "disabled"]);
+
+export const workspaceMemberRecordSchema: z.ZodType<WorkspaceMemberRecord> = z
+  .object({
+    id: z.string().trim().min(1).max(120),
+    fullName: z.string().trim().min(1).max(240),
+    email: z.string().email(),
+    role: workspaceMemberRoleSchema,
+    status: workspaceMemberStatusSchema,
+    team: z.string().trim().min(1).max(120),
+    lastActiveAt: z.string().datetime().nullable(),
+  })
+  .strict();
+
+export const workspaceKnowledgeDocRecordSchema: z.ZodType<WorkspaceKnowledgeDocRecord> = z
+  .object({
+    id: z.string().trim().min(1).max(120),
+    title: z.string().trim().min(1).max(240),
+    category: z.enum(["runbooks", "playbooks", "specs", "notes"]),
+    updatedAt: z.string().datetime(),
+    updatedAtLabel: z.string().trim().min(1).max(120),
+    owner: z.string().trim().min(1).max(240),
+    summary: z.string().trim().min(1).max(500),
+    tags: z.array(z.string().trim().min(1).max(80)).max(20),
+  })
+  .strict();
+
+export const workspaceFileRecordSchema: z.ZodType<WorkspaceFileRecord> = z
+  .object({
+    id: z.string().trim().min(1).max(120),
+    name: z.string().trim().min(1).max(240),
+    kind: z.enum(["folder", "file"]),
+    extension: z.string().trim().min(1).max(40).optional(),
+    owner: z.string().trim().min(1).max(240),
+    updatedAt: z.string().datetime(),
+    updatedAtLabel: z.string().trim().min(1).max(120),
+    sizeBytes: z.number().int().nonnegative().nullable(),
+    sizeLabel: z.string().trim().min(1).max(80),
+    shared: z.boolean(),
+  })
+  .strict();
+
+export const workspaceSettingsOverviewSchema: z.ZodType<WorkspaceSettingsOverview> = z
+  .object({
+    workspace: z
+      .object({
+        id: z.string().trim().min(1).max(120),
+        slug: z.string().trim().min(1).max(120),
+        name: z.string().trim().min(1).max(240),
+      })
+      .strict(),
+    organization: z
+      .object({
+        id: z.string().trim().min(1).max(120),
+        slug: z.string().trim().min(1).max(120),
+        name: z.string().trim().min(1).max(240),
+      })
+      .strict(),
+    actor: z
+      .object({
+        userId: z.string().trim().min(1).max(120),
+        email: z.string().email(),
+        fullName: z.string().nullable(),
+        orgRole: workspaceMemberRoleSchema,
+        workspaceRole: workspaceMemberRoleSchema,
+      })
+      .strict(),
+    counts: z
+      .object({
+        connectedApps: z.number().int().nonnegative(),
+        validCredentials: z.number().int().nonnegative(),
+        totalMembers: z.number().int().nonnegative(),
+      })
+      .strict(),
+    mode: z
+      .object({
+        name: z.string().trim().min(1).max(120),
+        source: z.string().trim().min(1).max(120),
+      })
+      .strict(),
+  })
+  .strict();
+
+export const workspaceProfileViewSchema: z.ZodType<WorkspaceProfileView> = z
+  .object({
+    id: z.string().trim().min(1).max(120),
+    email: z.string().email(),
+    fullName: z.string().nullable(),
+    orgRole: workspaceMemberRoleSchema,
+    workspaceRole: workspaceMemberRoleSchema,
+    security: z
+      .object({
+        twoFactorEnabled: z.boolean(),
+        activeSessions: z.number().int().nonnegative(),
+        passwordRotationRecommended: z.boolean(),
+      })
+      .strict(),
+  })
+  .strict();

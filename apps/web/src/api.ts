@@ -25,6 +25,8 @@ import {
   prototypeGetAlertConfig,
   prototypeGetAnalyticsOverview,
   prototypeGetAuditLog,
+  prototypeGetWorkspaceProfile,
+  prototypeGetWorkspaceSettingsOverview,
   prototypeGetRetentionPolicy,
   prototypeGetRetentionStatus,
   prototypeGetRun,
@@ -45,6 +47,9 @@ import {
   prototypeListRetryJobs,
   prototypeListRuns,
   prototypeListScheduledWaits,
+  prototypeListWorkspaceFiles,
+  prototypeListWorkspaceKnowledgeDocs,
+  prototypeListWorkspaceMembers,
   prototypeListWorkflowTemplates,
   prototypeListWorkflows,
   prototypeLogin,
@@ -57,6 +62,7 @@ import {
   prototypeTestAppConnection,
   prototypeTriggerWorkflowTestRun,
   prototypeUpdateAlertConfig,
+  prototypeUpdateWorkspaceProfile,
   prototypeUpsertAgentMemory,
   prototypeUpsertAppConnection,
   prototypeValidateWorkflow,
@@ -86,6 +92,82 @@ export type SessionScope = {
   workspaceSlug: string;
   orgRole: PlatformRole;
   workspaceRole: PlatformRole;
+};
+
+export type WorkspaceMemberRecord = {
+  id: string;
+  fullName: string;
+  email: string;
+  role: PlatformRole;
+  status: "active" | "invited" | "disabled";
+  team: string;
+  lastActiveAt: string | null;
+};
+
+export type WorkspaceKnowledgeDocRecord = {
+  id: string;
+  title: string;
+  category: "runbooks" | "playbooks" | "specs" | "notes";
+  updatedAt: string;
+  updatedAtLabel: string;
+  owner: string;
+  summary: string;
+  tags: string[];
+};
+
+export type WorkspaceFileRecord = {
+  id: string;
+  name: string;
+  kind: "folder" | "file";
+  extension?: string;
+  owner: string;
+  updatedAt: string;
+  updatedAtLabel: string;
+  sizeBytes: number | null;
+  sizeLabel: string;
+  shared: boolean;
+};
+
+export type WorkspaceSettingsOverview = {
+  workspace: {
+    id: string;
+    slug: string;
+    name: string;
+  };
+  organization: {
+    id: string;
+    slug: string;
+    name: string;
+  };
+  actor: {
+    userId: string;
+    email: string;
+    fullName: string | null;
+    orgRole: PlatformRole;
+    workspaceRole: PlatformRole;
+  };
+  counts: {
+    connectedApps: number;
+    validCredentials: number;
+    totalMembers: number;
+  };
+  mode: {
+    name: string;
+    source: string;
+  };
+};
+
+export type WorkspaceProfileView = {
+  id: string;
+  email: string;
+  fullName: string | null;
+  orgRole: PlatformRole;
+  workspaceRole: PlatformRole;
+  security: {
+    twoFactorEnabled: boolean;
+    activeSessions: number;
+    passwordRotationRecommended: boolean;
+  };
 };
 
 export type AuthSession = {
@@ -731,6 +813,20 @@ export type StandardListQuery = {
   fields?: string[];
 };
 
+export type WorkspaceMembersQuery = StandardListQuery & {
+  role?: PlatformRole;
+  status?: "active" | "invited" | "disabled";
+};
+
+export type WorkspaceKnowledgeDocsQuery = StandardListQuery & {
+  category?: "runbooks" | "playbooks" | "specs" | "notes";
+};
+
+export type WorkspaceFilesQuery = StandardListQuery & {
+  kind?: "folder" | "file";
+  shared?: boolean;
+};
+
 export type StandardListResponse<Row> = {
   rows: Row[];
   nextCursor: string | null;
@@ -900,6 +996,83 @@ export async function fetchMe(): Promise<{
   return response.data;
 }
 
+export async function getWorkspaceProfile(): Promise<WorkspaceProfileView> {
+  if (isPrototypeModeRuntime()) {
+    return prototypeGetWorkspaceProfile();
+  }
+  const response = await apiClient().get("/profile");
+  return response.data.profile as WorkspaceProfileView;
+}
+
+export async function updateWorkspaceProfile(input: {
+  fullName?: string | null;
+}): Promise<WorkspaceProfileView> {
+  if (isPrototypeModeRuntime()) {
+    return prototypeUpdateWorkspaceProfile(input);
+  }
+  const response = await apiClient().put("/profile", input);
+  return response.data.profile as WorkspaceProfileView;
+}
+
+export async function getWorkspaceSettingsOverview(): Promise<WorkspaceSettingsOverview> {
+  if (isPrototypeModeRuntime()) {
+    return prototypeGetWorkspaceSettingsOverview();
+  }
+  const response = await apiClient().get("/settings/overview");
+  return response.data.overview as WorkspaceSettingsOverview;
+}
+
+export async function listWorkspaceMembersQuery(
+  query: WorkspaceMembersQuery = {},
+): Promise<StandardListResponse<WorkspaceMemberRecord>> {
+  if (isPrototypeModeRuntime()) {
+    return prototypeListWorkspaceMembers(query);
+  }
+  const response = await apiClient().get("/organization/members", {
+    params: query,
+  });
+  return toStandardListResponse<WorkspaceMemberRecord>({
+    payload: response.data || {},
+    fallbackRows: response.data.members || [],
+    defaultPage: query.page || 1,
+    defaultLimit: query.limit || 25,
+  });
+}
+
+export async function listWorkspaceKnowledgeDocsQuery(
+  query: WorkspaceKnowledgeDocsQuery = {},
+): Promise<StandardListResponse<WorkspaceKnowledgeDocRecord>> {
+  if (isPrototypeModeRuntime()) {
+    return prototypeListWorkspaceKnowledgeDocs(query);
+  }
+  const response = await apiClient().get("/knowledge/docs", {
+    params: query,
+  });
+  return toStandardListResponse<WorkspaceKnowledgeDocRecord>({
+    payload: response.data || {},
+    fallbackRows: response.data.docs || [],
+    defaultPage: query.page || 1,
+    defaultLimit: query.limit || 25,
+  });
+}
+
+export async function listWorkspaceFilesQuery(
+  query: WorkspaceFilesQuery = {},
+): Promise<StandardListResponse<WorkspaceFileRecord>> {
+  if (isPrototypeModeRuntime()) {
+    return prototypeListWorkspaceFiles(query);
+  }
+  const response = await apiClient().get("/knowledge/files", {
+    params: query,
+  });
+  return toStandardListResponse<WorkspaceFileRecord>({
+    payload: response.data || {},
+    fallbackRows: response.data.files || [],
+    defaultPage: query.page || 1,
+    defaultLimit: query.limit || 25,
+  });
+}
+
 export async function logout(): Promise<void> {
   if (isPrototypeModeRuntime()) {
     clearAuthSession();
@@ -1019,6 +1192,14 @@ export async function testAppConnection(input: {
   status: "valid" | "expired" | "invalid";
   reason: string | null;
   testedAt: string;
+  probeAttempted?: boolean;
+  probe?: {
+    status: "success" | "needs_attention" | "failed";
+    message?: string;
+    providerStatusCode?: number;
+    metadata?: Record<string, unknown>;
+    recommendedCredentialStatus?: "valid" | "expired" | "invalid";
+  } | null;
 }> {
   if (isPrototypeModeRuntime()) {
     return prototypeTestAppConnection(input);

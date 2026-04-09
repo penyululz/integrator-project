@@ -3,6 +3,8 @@ import {
   Adapter,
   AdapterActionResult,
   AdapterAuthResult,
+  AdapterConnectionProbeInput,
+  AdapterConnectionProbeResult,
   AdapterCredentialValidationResult,
   AdapterCredentials,
   AdapterContext,
@@ -219,5 +221,73 @@ export class ShopifyAdapter implements Adapter {
     return {
       status: "valid",
     };
+  }
+
+  async testConnection(
+    input: AdapterConnectionProbeInput,
+  ): Promise<AdapterConnectionProbeResult> {
+    const metadata =
+      input.credentials?.metadata &&
+      typeof input.credentials.metadata === "object" &&
+      !Array.isArray(input.credentials.metadata)
+        ? input.credentials.metadata
+        : {};
+    const integrationConfig =
+      input.integrationConfig && typeof input.integrationConfig === "object"
+        ? input.integrationConfig
+        : {};
+
+    const accessToken =
+      input.credentials?.accessToken ||
+      (typeof integrationConfig.accessToken === "string"
+        ? integrationConfig.accessToken
+        : "") ||
+      this.config.accessToken;
+    const shopName =
+      (typeof metadata.shopName === "string" ? metadata.shopName : "") ||
+      (typeof integrationConfig.shopName === "string" ? integrationConfig.shopName : "") ||
+      this.config.shopName;
+
+    if (!accessToken || !shopName) {
+      return {
+        status: "failed",
+        message: "Shopify access token and shop domain are required.",
+        recommendedCredentialStatus: "invalid",
+      };
+    }
+
+    try {
+      const client = new Shopify({
+        shopName,
+        accessToken,
+      });
+      const shop = await client.shop.get();
+      const shopRecord = shop as unknown as Record<string, unknown>;
+      return {
+        status: "success",
+        message: "Shopify connection verified.",
+        metadata: {
+          shopName:
+            (typeof shopRecord.name === "string" && shopRecord.name) || shopName,
+          domain:
+            (typeof shopRecord.myshopify_domain === "string" &&
+              shopRecord.myshopify_domain) ||
+            `${shopName}.myshopify.com`,
+        },
+      };
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Shopify connection probe failed.";
+      const authFailure = /401|403|unauthoriz|forbidden|invalid api key/i.test(
+        message.toLowerCase(),
+      );
+      return {
+        status: authFailure ? "failed" : "needs_attention",
+        message,
+        recommendedCredentialStatus: authFailure ? "invalid" : undefined,
+      };
+    }
   }
 }
