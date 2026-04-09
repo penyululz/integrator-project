@@ -266,7 +266,7 @@ async function createAuthRuntime() {
   };
 
   return {
-    app: createApp(runtime),
+    app: await createApp(runtime),
     runtime,
     fixture: {
       orgAId,
@@ -283,7 +283,7 @@ describe("Auth + tenant isolation hardening", () => {
   it("rejects unauthenticated access with 401", async () => {
     const { app, runtime } = await createAuthRuntime();
     try {
-      const response = await request(app).get("/api/v1/integrations");
+      const response = await request(app.server).get("/api/v1/integrations");
       expect(response.status).toBe(401);
     } finally {
       await runtime.close();
@@ -300,7 +300,7 @@ describe("Auth + tenant isolation hardening", () => {
         workspaceSlug: "default",
       });
 
-      const response = await request(app)
+      const response = await request(app.server)
         .get("/api/v1/integrations")
         .set("authorization", `Bearer ${login.accessToken}`);
 
@@ -308,7 +308,7 @@ describe("Auth + tenant isolation hardening", () => {
       expect(response.body.integrations).toHaveLength(1);
       expect(response.body.integrations[0].name).toBe("Org A Integration");
 
-      const adapters = await request(app)
+      const adapters = await request(app.server)
         .get("/api/v1/adapters")
         .set("authorization", `Bearer ${login.accessToken}`);
       expect(adapters.status).toBe(200);
@@ -320,7 +320,7 @@ describe("Auth + tenant isolation hardening", () => {
         ]),
       );
 
-      const credentials = await request(app)
+      const credentials = await request(app.server)
         .get("/api/v1/credentials")
         .set("authorization", `Bearer ${login.accessToken}`);
       expect(credentials.status).toBe(200);
@@ -357,7 +357,7 @@ describe("Auth + tenant isolation hardening", () => {
         [fixture.ownerAId, fixture.workspaceAId],
       );
 
-      const response = await request(app)
+      const response = await request(app.server)
         .get("/api/v1/integrations")
         .set("authorization", `Bearer ${login.accessToken}`);
 
@@ -377,7 +377,7 @@ describe("Auth + tenant isolation hardening", () => {
         workspaceSlug: "default",
       });
 
-      const forbidden = await request(app)
+      const forbidden = await request(app.server)
         .post("/api/v1/integrations")
         .set("authorization", `Bearer ${memberLogin.accessToken}`)
         .send({
@@ -395,7 +395,7 @@ describe("Auth + tenant isolation hardening", () => {
         workspaceSlug: "default",
       });
 
-      const created = await request(app)
+      const created = await request(app.server)
         .post("/api/v1/integrations")
         .set("authorization", `Bearer ${ownerLogin.accessToken}`)
         .send({
@@ -440,7 +440,7 @@ describe("Auth + tenant isolation hardening", () => {
         workspaceSlug: "default",
       });
 
-      const forbidden = await request(app)
+      const forbidden = await request(app.server)
         .put("/api/v1/apps/webhook/connection")
         .set("authorization", `Bearer ${memberLogin.accessToken}`)
         .send({
@@ -461,7 +461,7 @@ describe("Auth + tenant isolation hardening", () => {
         workspaceSlug: "default",
       });
 
-      const connected = await request(app)
+      const connected = await request(app.server)
         .put("/api/v1/apps/webhook/connection")
         .set("authorization", `Bearer ${ownerLogin.accessToken}`)
         .send({
@@ -492,7 +492,7 @@ describe("Auth + tenant isolation hardening", () => {
       });
       expect(JSON.stringify(connected.body)).not.toContain("whsec-should-not-leak");
 
-      const appsResponse = await request(app)
+      const appsResponse = await request(app.server)
         .get("/api/v1/apps")
         .set("authorization", `Bearer ${ownerLogin.accessToken}`);
       expect(appsResponse.status).toBe(200);
@@ -506,14 +506,14 @@ describe("Auth + tenant isolation hardening", () => {
       );
       expect(JSON.stringify(appsResponse.body)).not.toContain("whsec-should-not-leak");
 
-      const credentials = await request(app)
+      const credentials = await request(app.server)
         .get("/api/v1/credentials")
         .set("authorization", `Bearer ${ownerLogin.accessToken}`);
       expect(credentials.status).toBe(200);
       expect(JSON.stringify(credentials.body)).not.toContain("whsec-should-not-leak");
       expect(credentials.body.credentials[0].secret_mask).toBe("****");
 
-      const tested = await request(app)
+      const tested = await request(app.server)
         .post("/api/v1/apps/webhook/test")
         .set("authorization", `Bearer ${ownerLogin.accessToken}`)
         .send({});
@@ -534,7 +534,7 @@ describe("Auth + tenant isolation hardening", () => {
         workspaceSlug: "default",
       });
 
-      const createWorkflowResponse = await request(app)
+      const createWorkflowResponse = await request(app.server)
         .post("/api/v1/workflows")
         .set("authorization", `Bearer ${ownerLogin.accessToken}`)
         .send({
@@ -570,7 +570,7 @@ describe("Auth + tenant isolation hardening", () => {
       const workflowId = createWorkflowResponse.body.workflow.id as string;
       expect(workflowId).toBeTruthy();
 
-      const triggerResponse = await request(app)
+      const triggerResponse = await request(app.server)
         .post(`/api/v1/workflows/${workflowId}/test-run`)
         .set("authorization", `Bearer ${ownerLogin.accessToken}`)
         .send({

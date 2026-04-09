@@ -307,7 +307,7 @@ async function createAuditRuntime() {
   };
 
   return {
-    app: createApp(runtime),
+    app: await createApp(runtime),
     runtime,
     fixture: {
       tenantId,
@@ -341,7 +341,7 @@ describe("Audit logs read API", () => {
   it("rejects unauthenticated requests", async () => {
     const { app, runtime } = await createAuditRuntime();
     try {
-      const response = await request(app).get("/api/v1/audit-logs");
+      const response = await request(app.server).get("/api/v1/audit-logs");
       expect(response.status).toBe(401);
     } finally {
       await runtime.close();
@@ -352,7 +352,7 @@ describe("Audit logs read API", () => {
     const { app, runtime } = await createAuditRuntime();
     try {
       const token = await login(runtime, "member");
-      const response = await request(app)
+      const response = await request(app.server)
         .get("/api/v1/audit-logs")
         .set("authorization", `Bearer ${token}`);
       expect(response.status).toBe(403);
@@ -365,7 +365,7 @@ describe("Audit logs read API", () => {
     const { app, runtime, fixture } = await createAuditRuntime();
     try {
       const token = await login(runtime, "admin");
-      const response = await request(app)
+      const response = await request(app.server)
         .get("/api/v1/audit-logs")
         .set("authorization", `Bearer ${token}`);
 
@@ -390,7 +390,7 @@ describe("Audit logs read API", () => {
     try {
       const token = await login(runtime, "admin");
 
-      const filtered = await request(app)
+      const filtered = await request(app.server)
         .get("/api/v1/audit-logs")
         .query({
           action: "run.cancel",
@@ -406,7 +406,7 @@ describe("Audit logs read API", () => {
       expect(filtered.body.pagination.total).toBe(2);
       expect(filtered.body.pagination.hasMore).toBe(true);
 
-      const paged = await request(app)
+      const paged = await request(app.server)
         .get("/api/v1/audit-logs")
         .query({
           action: "run.cancel",
@@ -432,7 +432,7 @@ describe("Audit logs read API", () => {
     try {
       const token = await login(runtime, "admin");
 
-      const detail = await request(app)
+      const detail = await request(app.server)
         .get(`/api/v1/audit-logs/${fixture.scopedAuditId}`)
         .set("authorization", `Bearer ${token}`);
 
@@ -445,7 +445,7 @@ describe("Audit logs read API", () => {
       expect(JSON.stringify(detail.body.log)).not.toContain("super-secret-token");
       expect(JSON.stringify(detail.body.log)).toContain("****");
 
-      const outsideDetail = await request(app)
+      const outsideDetail = await request(app.server)
         .get(`/api/v1/audit-logs/${fixture.outsideAuditId}`)
         .set("authorization", `Bearer ${token}`);
       expect(outsideDetail.status).toBe(404);

@@ -488,7 +488,7 @@ async function createAlertRuntime(options?: {
   });
 
   return {
-    app: createApp(runtime),
+    app: await createApp(runtime),
     runtime,
     pool,
     recordingAlertChannel,
@@ -519,7 +519,7 @@ describe("Alert delivery service API + triggers", () => {
         workspaceSlug: "default",
       });
 
-      const forbidden = await request(app)
+      const forbidden = await request(app.server)
         .put("/api/v1/alerts/config")
         .set("authorization", `Bearer ${memberLogin.accessToken}`)
         .send({
@@ -538,7 +538,7 @@ describe("Alert delivery service API + triggers", () => {
         });
       expect(forbidden.status).toBe(403);
 
-      const updated = await request(app)
+      const updated = await request(app.server)
         .put("/api/v1/alerts/config")
         .set("authorization", `Bearer ${ownerLogin.accessToken}`)
         .send({
@@ -565,7 +565,7 @@ describe("Alert delivery service API + triggers", () => {
       expect(updated.body.config.channels.webhook.hasWebhookUrl).toBe(true);
       expect(updated.body.config.channels.webhook.hasAuthHeader).toBe(true);
 
-      const listed = await request(app)
+      const listed = await request(app.server)
         .get("/api/v1/alerts/config")
         .set("authorization", `Bearer ${ownerLogin.accessToken}`);
       expect(listed.status).toBe(200);
@@ -588,7 +588,7 @@ describe("Alert delivery service API + triggers", () => {
         workspaceSlug: "default",
       });
 
-      const trigger = await request(app)
+      const trigger = await request(app.server)
         .post("/api/v1/webhook/webhook/http_post")
         .set("authorization", `Bearer ${ownerLogin.accessToken}`)
         .send({
@@ -629,7 +629,7 @@ describe("Alert delivery service API + triggers", () => {
         workspaceSlug: "default",
       });
 
-      const testSend = await request(app)
+      const testSend = await request(app.server)
         .post("/api/v1/alerts/test")
         .set("authorization", `Bearer ${ownerLogin.accessToken}`)
         .send({
