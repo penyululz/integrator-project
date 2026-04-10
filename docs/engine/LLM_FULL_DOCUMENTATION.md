@@ -20,6 +20,11 @@ This repository intentionally avoids frontend coupling. Any UI should integrate 
 - `packages/core`: engine logic, runtime composition, repositories, auth, queue/retry/wait flows, approvals, audit, observability
 - `packages/shared`: shared contracts and schemas
 - `packages/adapters/*`: connector implementations loaded via manifests
+- `packages/core/src/facility`: reusable multi-tenant facility + booking engine module
+- `packages/core/src/maintenance`: reusable multi-tenant maintenance ticket engine module
+- `packages/core/src/calendar`: reusable calendar aggregation engine (bookings + maintenance + org/team + workflow events)
+- `packages/core/src/communication`: reusable communication engine (channels/messages/mentions/meeting logs/AI summary requests)
+- `packages/core/src/file-storage`: reusable Nextcloud-style storage engine (spaces/folders/files/shares/activity + object metadata separation)
 
 ## 3) Runtime Construction (Most Important Integration API)
 
@@ -35,9 +40,16 @@ This repository intentionally avoids frontend coupling. Any UI should integrate 
 - `adapterDiscovery`: configure adapter manifest discovery
 - `adapterInitConfig`: pass adapter-specific init config
 - `queue`: override queue settings (`queueKey`, driver options, consume behavior)
+- `modules.include` / `modules.exclude`: explicitly compose enabled engine modules
 - `features.alerts`: disable alert dispatch subsystem if needed
 - `features.retention`: disable retention cleanup subsystem if needed
+- `features.maintenanceSystem`: disable maintenance ticket subsystem if needed
+- `features.calendarAggregation`: disable calendar aggregation subsystem if needed
+- `features.communication`: disable communication subsystem if needed
+- `features.fileStorage`: disable file storage subsystem if needed
 - `closeInjectedDependencies`: close externally injected DB/Redis clients on runtime close
+
+`runtime.modules` returns the active module registration (`enabled`, `disabled`, `byLayer`) so host processes and AI agents can verify composition.
 
 ### Role behavior
 
@@ -55,6 +67,8 @@ Use `CoreBackgroundWorker` from `@integration/core` for loop orchestration:
 - stop/start lifecycle for graceful shutdown
 
 `apps/api/src/worker.ts` is the reference implementation.
+
+Host integration routing is configurable via `API_BASE_PATH` (default `/api/v1`) and runtime naming aliases use `ENGINE_*` variables.
 
 ## 5) Multi-Tenancy Model
 
@@ -137,6 +151,11 @@ When using an AI coding agent in a target project:
 - Do not bypass repository scope filters.
 - Do not replace durable retry/wait flows with in-memory state.
 - Prefer adding module-level adapters/services over editing large monolith route files.
+- Preserve booking write safety patterns (`FOR UPDATE` lock + overlap check + idempotency) when extending facility modules.
+- Preserve maintenance lifecycle transitions and visibility/assignment scope checks when extending maintenance modules.
+- Preserve calendar aggregation as the central read layer; add new event sources through the calendar module rather than route-local unions.
+- Preserve communication channel access and message idempotency semantics; do not move mention/session/summary logic into route-local ad-hoc code.
+- Preserve file storage metadata/object separation; do not couple binary object semantics directly into route-local request handlers.
 
 ## 11) What To Customize Per Target Project
 

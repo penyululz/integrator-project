@@ -12,9 +12,18 @@ import type {
   WorkspaceSettingsOverview,
 } from "../types/workspace";
 import type {
+  CommunicationAiSummaryRequestRecord,
   CalendarEventRecord,
   CommunicationMessageRecord,
+  CommunicationMeetingSessionRecord,
+  CommunicationMentionRecord,
   CommunicationThreadRecord,
+  FileStorageActivityAction,
+  FileStorageActivityRecord,
+  FileStorageBlobRecord,
+  FileStorageItemRecord,
+  FileStorageShareRecord,
+  FileStorageSpaceRecord,
   FacilityBookingRecord,
   FacilityRecord,
   MaintenanceCommentRecord,
@@ -347,6 +356,25 @@ export const communicationThreadRecordSchema: z.ZodType<CommunicationThreadRecor
     status: z.enum(["online", "away", "offline"]),
     updatedAt: z.string().datetime(),
     updatedAtLabel: z.string().trim().min(1).max(120),
+    team: z.string().trim().max(160).nullable().optional(),
+    metadata: z.record(z.unknown()).optional(),
+    messageCount: z.number().int().nonnegative().optional(),
+    createdByUserId: z.string().trim().min(1).max(120).nullable().optional(),
+    isMember: z.boolean().optional(),
+    membershipRole: z
+      .enum(["owner", "member", "observer"])
+      .nullable()
+      .optional(),
+  })
+  .strict();
+
+export const communicationMentionRecordSchema: z.ZodType<CommunicationMentionRecord> = z
+  .object({
+    id: z.string().trim().min(1).max(120),
+    messageId: z.string().trim().min(1).max(120),
+    mentionedUserId: z.string().trim().min(1).max(120).nullable(),
+    mentionToken: z.string().trim().min(1).max(120),
+    createdAt: z.string().datetime(),
   })
   .strict();
 
@@ -359,6 +387,46 @@ export const communicationMessageRecordSchema: z.ZodType<CommunicationMessageRec
     body: z.string().trim().min(1).max(5000),
     createdAt: z.string().datetime(),
     createdAtLabel: z.string().trim().min(1).max(120),
+    metadata: z.record(z.unknown()).optional(),
+    mentions: z.array(communicationMentionRecordSchema).optional(),
+    idempotencyKey: z.string().trim().min(8).max(180).nullable().optional(),
+    editedAt: z.string().datetime().nullable().optional(),
+    updatedAt: z.string().datetime().optional(),
+  })
+  .strict();
+
+export const communicationMeetingSessionRecordSchema: z.ZodType<CommunicationMeetingSessionRecord> = z
+  .object({
+    id: z.string().trim().min(1).max(120),
+    threadId: z.string().trim().min(1).max(120),
+    title: z.string().trim().min(1).max(240),
+    startedAt: z.string().datetime(),
+    endedAt: z.string().datetime().nullable(),
+    createdByUserId: z.string().trim().min(1).max(120).nullable(),
+    participantUserIds: z.array(z.string().trim().min(1).max(120)).max(500),
+    transcriptText: z.string().max(200_000).nullable(),
+    summaryText: z.string().max(50_000).nullable(),
+    metadata: z.record(z.unknown()),
+    createdAt: z.string().datetime(),
+    updatedAt: z.string().datetime(),
+  })
+  .strict();
+
+export const communicationAiSummaryRequestRecordSchema: z.ZodType<CommunicationAiSummaryRequestRecord> = z
+  .object({
+    id: z.string().trim().min(1).max(120),
+    threadId: z.string().trim().min(1).max(120),
+    sourceType: z.enum(["channel_window", "message", "meeting_session"]),
+    sourceRefId: z.string().trim().min(1).max(120).nullable(),
+    status: z.enum(["queued", "processing", "completed", "failed"]),
+    requestedByUserId: z.string().trim().min(1).max(120).nullable(),
+    prompt: z.string().max(20_000).nullable(),
+    outputText: z.string().max(100_000).nullable(),
+    failureReason: z.string().max(5000).nullable(),
+    metadata: z.record(z.unknown()),
+    createdAt: z.string().datetime(),
+    updatedAt: z.string().datetime(),
+    processedAt: z.string().datetime().nullable(),
   })
   .strict();
 
@@ -401,10 +469,30 @@ export const maintenanceTicketRecordSchema: z.ZodType<MaintenanceTicketRecord> =
     category: z.string().trim().min(1).max(120),
     priority: z.enum(["low", "medium", "high"]),
     status: z.enum(["open", "in_progress", "resolved", "closed"]),
+    assignmentTargetType: z
+      .enum(["unassigned", "user", "team", "department", "vendor"])
+      .optional(),
     assigneeUserId: z.string().trim().min(1).max(120).nullable(),
     assigneeName: z.string().trim().max(240).nullable(),
+    assigneeTeam: z.string().trim().max(160).nullable().optional(),
+    assigneeDepartment: z.string().trim().max(160).nullable().optional(),
+    assigneeVendorId: z.string().trim().max(160).nullable().optional(),
+    assigneeVendorName: z.string().trim().max(240).nullable().optional(),
+    assignedByUserId: z.string().trim().min(1).max(120).nullable().optional(),
+    assignedAt: z.string().datetime().nullable().optional(),
+    visibilityScope: z
+      .enum(["organization", "team", "department", "vendor"])
+      .optional(),
+    visibilityTeam: z.string().trim().max(160).nullable().optional(),
+    visibilityDepartment: z.string().trim().max(160).nullable().optional(),
+    visibilityVendorId: z.string().trim().max(160).nullable().optional(),
     dueAt: z.string().datetime().nullable(),
+    slaDueAt: z.string().datetime().nullable().optional(),
+    statusChangedAt: z.string().datetime().nullable().optional(),
+    resolvedAt: z.string().datetime().nullable().optional(),
+    closedAt: z.string().datetime().nullable().optional(),
     metadata: z.record(z.unknown()),
+    lifecycleMetadata: z.record(z.unknown()).optional(),
     createdAt: z.string().datetime(),
     updatedAt: z.string().datetime(),
   })
@@ -416,7 +504,11 @@ export const maintenanceCommentRecordSchema: z.ZodType<MaintenanceCommentRecord>
     ticketId: z.string().trim().min(1).max(120),
     authorUserId: z.string().trim().min(1).max(120).nullable(),
     authorName: z.string().trim().min(1).max(240),
+    commentType: z
+      .enum(["comment", "status_update", "assignment_update", "system"])
+      .optional(),
     body: z.string().trim().min(1).max(5000),
+    metadata: z.record(z.unknown()).optional(),
     createdAt: z.string().datetime(),
   })
   .strict();
@@ -424,7 +516,7 @@ export const maintenanceCommentRecordSchema: z.ZodType<MaintenanceCommentRecord>
 export const calendarEventRecordSchema: z.ZodType<CalendarEventRecord> = z
   .object({
     id: z.string().trim().min(1).max(120),
-    source: z.enum(["custom", "facility", "maintenance"]),
+    source: z.enum(["custom", "organization", "team", "facility", "maintenance", "workflow"]),
     sourceId: z.string().trim().min(1).max(120).nullable(),
     title: z.string().trim().min(1).max(240),
     startsAt: z.string().datetime(),
@@ -432,6 +524,15 @@ export const calendarEventRecordSchema: z.ZodType<CalendarEventRecord> = z
     status: z.enum(["scheduled", "in_progress", "completed", "cancelled"]),
     description: z.string().trim().max(5000).nullable(),
     metadata: z.record(z.unknown()),
+    audienceScope: z
+      .enum(["organization", "team", "department", "vendor"])
+      .optional(),
+    audienceTeam: z.string().trim().max(160).nullable().optional(),
+    audienceDepartment: z.string().trim().max(160).nullable().optional(),
+    audienceVendorId: z.string().trim().max(160).nullable().optional(),
+    createdByUserId: z.string().trim().min(1).max(120).nullable().optional(),
+    assigneeUserId: z.string().trim().min(1).max(120).nullable().optional(),
+    isDerived: z.boolean().optional(),
     createdAt: z.string().datetime(),
     updatedAt: z.string().datetime(),
   })
@@ -464,5 +565,99 @@ export const workspaceFileEntityRecordSchema: z.ZodType<WorkspaceFileEntityRecor
     metadata: z.record(z.unknown()),
     createdAt: z.string().datetime(),
     updatedAt: z.string().datetime(),
+  })
+  .strict();
+
+export const fileStorageSpaceRecordSchema: z.ZodType<FileStorageSpaceRecord> = z
+  .object({
+    id: z.string().trim().min(1).max(120),
+    spaceType: z.enum(["organization", "team", "personal"]),
+    slug: z.string().trim().min(1).max(160),
+    title: z.string().trim().min(1).max(240),
+    team: z.string().trim().max(160).nullable(),
+    ownerUserId: z.string().trim().min(1).max(120).nullable(),
+    visibilityPolicy: z.enum(["members", "restricted"]),
+    metadata: z.record(z.unknown()),
+    createdAt: z.string().datetime(),
+    updatedAt: z.string().datetime(),
+    archivedAt: z.string().datetime().nullable(),
+  })
+  .strict();
+
+export const fileStorageBlobRecordSchema: z.ZodType<FileStorageBlobRecord> = z
+  .object({
+    id: z.string().trim().min(1).max(120),
+    storageProvider: z.string().trim().min(1).max(120),
+    storageBucket: z.string().trim().min(1).max(240),
+    storageKey: z.string().trim().min(1).max(2000),
+    contentType: z.string().trim().max(240).nullable(),
+    checksumSha256: z.string().trim().max(256).nullable(),
+    sizeBytes: z.number().int().nonnegative(),
+    encryption: z.string().trim().max(240).nullable(),
+    metadata: z.record(z.unknown()),
+    createdAt: z.string().datetime(),
+    updatedAt: z.string().datetime(),
+    deletedAt: z.string().datetime().nullable(),
+  })
+  .strict();
+
+export const fileStorageItemRecordSchema: z.ZodType<FileStorageItemRecord> = z
+  .object({
+    id: z.string().trim().min(1).max(120),
+    spaceId: z.string().trim().min(1).max(120),
+    parentId: z.string().trim().min(1).max(120).nullable(),
+    kind: z.enum(["folder", "file"]),
+    name: z.string().trim().min(1).max(240),
+    normalizedName: z.string().trim().min(1).max(240),
+    extension: z.string().trim().max(40).nullable(),
+    ownerUserId: z.string().trim().min(1).max(120).nullable(),
+    blobId: z.string().trim().min(1).max(120).nullable(),
+    sizeBytes: z.number().int().nonnegative().nullable(),
+    versionNo: z.number().int().min(1),
+    metadata: z.record(z.unknown()),
+    blob: fileStorageBlobRecordSchema.nullable().optional(),
+    isDeleted: z.boolean(),
+    createdAt: z.string().datetime(),
+    updatedAt: z.string().datetime(),
+    deletedAt: z.string().datetime().nullable(),
+  })
+  .strict();
+
+export const fileStorageShareRecordSchema: z.ZodType<FileStorageShareRecord> = z
+  .object({
+    id: z.string().trim().min(1).max(120),
+    itemId: z.string().trim().min(1).max(120),
+    subjectType: z.enum(["organization", "team", "user"]),
+    subjectKey: z.string().trim().min(1).max(240),
+    permission: z.enum(["viewer", "editor", "manager"]),
+    canDownload: z.boolean(),
+    canReshare: z.boolean(),
+    expiresAt: z.string().datetime().nullable(),
+    revokedAt: z.string().datetime().nullable(),
+    metadata: z.record(z.unknown()),
+    createdAt: z.string().datetime(),
+    updatedAt: z.string().datetime(),
+  })
+  .strict();
+
+const fileStorageActivityActionSchema: z.ZodType<FileStorageActivityAction> = z.enum([
+  "space.created",
+  "item.created",
+  "item.updated",
+  "item.moved",
+  "item.deleted",
+  "share.granted",
+  "share.revoked",
+]);
+
+export const fileStorageActivityRecordSchema: z.ZodType<FileStorageActivityRecord> = z
+  .object({
+    id: z.string().trim().min(1).max(120),
+    spaceId: z.string().trim().min(1).max(120),
+    itemId: z.string().trim().min(1).max(120).nullable(),
+    actorUserId: z.string().trim().min(1).max(120).nullable(),
+    action: fileStorageActivityActionSchema,
+    metadata: z.record(z.unknown()),
+    createdAt: z.string().datetime(),
   })
   .strict();

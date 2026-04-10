@@ -19,6 +19,12 @@ async function bootstrap(): Promise<void> {
     process.env as Record<string, string | undefined>,
   );
   const queueRuntime = runtime.eventQueue.getRuntimeState();
+  const apiBasePathRaw = (process.env.API_BASE_PATH || "").trim();
+  const apiBasePath = apiBasePathRaw
+    ? apiBasePathRaw.startsWith("/")
+      ? apiBasePathRaw
+      : `/${apiBasePathRaw}`
+    : "/api/v1";
   const app = await createApp(runtime, {
     platformMode: modeResolution.mode,
     platformModeSource: modeResolution.source,
@@ -40,6 +46,9 @@ async function bootstrap(): Promise<void> {
       `[api] queue driver fallback active: ${queueRuntime.fallbackReason || "unknown reason"}`,
     );
   }
+  const enabledModules = runtime.modules?.enabled || ["runtime-foundation", "workflow-orchestration"];
+  console.log(`[api] MODULES: ${enabledModules.join(", ")}`);
+  console.log(`[api] BASE_PATH: ${apiBasePath}`);
   console.log(`API listening on ${address}`);
 
   async function shutdown(signal: string): Promise<void> {

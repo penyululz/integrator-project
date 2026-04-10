@@ -6,10 +6,18 @@ It is intentionally frontend-free and optimized for server-side reuse in other p
 
 ## Repository Modules
 
-- `apps/api`: API + worker process entrypoints
-- `packages/core`: runtime composition, workflow engine, auth, repositories, queue/retry/wait, approvals, alerts, retention
+- `packages/core`: engine core + module registration + runtime composition
 - `packages/shared`: shared contracts and schemas
+- `apps/api`: integration-layer host for API + worker entrypoints
 - `packages/adapters/*`: manifest-driven connectors
+
+## Portability Layers
+
+- engine core: `packages/core/src/*`
+- shared foundations: `packages/shared/src/*`
+- integration layer: `apps/api/src/*`
+- project-specific adapters: `packages/adapters/*`
+- optional modules: identity-auth, alerts, retention, facility-booking, maintenance-system, calendar-aggregation, communication, file-storage, collaboration
 
 ## Engine Characteristics
 
@@ -52,6 +60,7 @@ npm run dev:local
 - [LLM Full Documentation](./docs/engine/LLM_FULL_DOCUMENTATION.md)
 - [Architecture Map](./docs/engine/ARCHITECTURE_MAP.md)
 - [Integration Playbook](./docs/engine/INTEGRATION_PLAYBOOK.md)
+- [Portable Engine Guide](./docs/engine/PORTABLE_ENGINE_GUIDE.md)
 - [Scaling and Operations](./docs/engine/SCALING_AND_OPERATIONS.md)
 - [Portability Checklist](./docs/engine/PORTABILITY_CHECKLIST.md)
 - [API Readme](./apps/api/README.md)

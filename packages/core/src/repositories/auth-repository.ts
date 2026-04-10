@@ -29,6 +29,43 @@ export type WorkspaceAccessRecord = {
   workspace_role: PlatformRole;
 };
 
+export type UserCredentialRecord = {
+  user_id: string;
+  tenant_id: string;
+  email: string;
+  full_name: string | null;
+  password_hash: string;
+  account_status: "pending" | "invited" | "active" | "suspended";
+  email_verified_at: string | null;
+  last_login_at: string | null;
+};
+
+export type AccessibleOrganizationRecord = {
+  tenant_id: string;
+  organization_id: string;
+  organization_slug: string;
+  organization_name: string;
+  organization_code: string;
+  role: PlatformRole;
+  status: "active" | "invited" | "pending" | "suspended" | "disabled";
+  team: string | null;
+  department: string | null;
+  workspace_id: string | null;
+  workspace_slug: string | null;
+  workspace_name: string | null;
+  workspace_role: PlatformRole | null;
+};
+
+export type OrganizationAccountRecord = {
+  user_id: string;
+  tenant_id: string;
+  organization_id: string;
+  organization_slug: string;
+  email: string;
+  full_name: string | null;
+  org_role: PlatformRole;
+};
+
 type SessionAccessRecord = {
   user_id: string;
   email: string;
@@ -101,6 +138,117 @@ export class AuthRepository {
        LIMIT 1`,
       [input.email, input.organizationSlug],
     );
+    return result.rows[0] || null;
+  }
+
+  async findUserCredentialByEmail(input: {
+    email: string;
+  }): Promise<UserCredentialRecord | null> {
+    const result = await this.pool.query<UserCredentialRecord>(
+      `SELECT
+         u.id::text AS user_id,
+         u.tenant_id::text AS tenant_id,
+         u.email,
+         u.full_name,
+         u.password_hash,
+         u.account_status::text AS account_status,
+         u.email_verified_at::text AS email_verified_at,
+         u.last_login_at::text AS last_login_at
+       FROM users u
+       WHERE LOWER(u.email) = LOWER($1)
+       ORDER BY u.created_at ASC
+       LIMIT 1`,
+      [input.email],
+    );
+    return result.rows[0] || null;
+  }
+
+  async listAccessibleOrganizations(input: {
+    userId: string;
+  }): Promise<AccessibleOrganizationRecord[]> {
+    const result = await this.pool.query<AccessibleOrganizationRecord>(
+      `SELECT
+         om.tenant_id::text AS tenant_id,
+         om.organization_id::text AS organization_id,
+         o.slug AS organization_slug,
+         o.name AS organization_name,
+         o.organization_code,
+         om.role::text AS role,
+         om.status::text AS status,
+         om.team,
+         om.department,
+         ws.workspace_id::text AS workspace_id,
+         ws.workspace_slug,
+         ws.workspace_name,
+         ws.workspace_role::text AS workspace_role
+       FROM organization_memberships om
+       INNER JOIN organizations o ON o.id = om.organization_id
+       LEFT JOIN LATERAL (
+         SELECT
+           w.id::text AS workspace_id,
+           w.slug AS workspace_slug,
+           w.name AS workspace_name,
+           wm.role::text AS workspace_role
+         FROM workspace_memberships wm
+         INNER JOIN workspaces w ON w.id = wm.workspace_id
+         WHERE wm.organization_id = om.organization_id
+           AND wm.user_id = om.user_id
+           AND wm.status = 'active'
+         ORDER BY w.created_at ASC
+         LIMIT 1
+       ) ws ON true
+       WHERE om.user_id = $1::uuid
+       ORDER BY
+         CASE om.status
+           WHEN 'active' THEN 0
+           WHEN 'invited' THEN 1
+           WHEN 'pending' THEN 2
+           ELSE 3
+         END ASC,
+         om.created_at ASC`,
+      [input.userId],
+    );
+    return result.rows;
+  }
+
+  async resolveOrganizationAccountForUser(input: {
+    userId: string;
+    organizationId?: string;
+    organizationSlug?: string;
+  }): Promise<OrganizationAccountRecord | null> {
+    const predicates = [
+      "om.user_id = $1::uuid",
+      "om.status = 'active'",
+    ];
+    const values: unknown[] = [input.userId];
+
+    if (input.organizationId) {
+      values.push(input.organizationId);
+      predicates.push(`om.organization_id = $${values.length}::uuid`);
+    }
+    if (input.organizationSlug) {
+      values.push(input.organizationSlug);
+      predicates.push(`o.slug = $${values.length}`);
+    }
+
+    const result = await this.pool.query<OrganizationAccountRecord>(
+      `SELECT
+         u.id::text AS user_id,
+         u.tenant_id::text AS tenant_id,
+         om.organization_id::text AS organization_id,
+         o.slug AS organization_slug,
+         u.email,
+         u.full_name,
+         om.role::text AS org_role
+       FROM organization_memberships om
+       INNER JOIN users u ON u.id = om.user_id
+       INNER JOIN organizations o ON o.id = om.organization_id
+       WHERE ${predicates.join("\n         AND ")}
+       ORDER BY o.created_at ASC
+       LIMIT 1`,
+      values,
+    );
+
     return result.rows[0] || null;
   }
 

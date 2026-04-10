@@ -27,6 +27,8 @@ async function runWorker(): Promise<void> {
       `[worker] queue driver fallback active: ${queueRuntime.fallbackReason || "unknown reason"}`,
     );
   }
+  const enabledModules = runtime.modules?.enabled || ["runtime-foundation", "workflow-orchestration"];
+  console.log(`[worker] MODULES: ${enabledModules.join(", ")}`);
   const worker = new CoreBackgroundWorker(runtime, {
     eventConsumeTimeoutSeconds: 2,
     idleDelayMs: 25,

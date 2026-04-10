@@ -28,6 +28,8 @@ Designed for >50,000 concurrent users by scaling stateless API and worker replic
 - queue wait time
 - run success/failure/dead-letter rate
 - retry scheduling and exhaustion rate
+- communication write/read throughput and message lag (if `communication` is enabled)
+- file storage item/list latency, share lookup latency, and blob metadata write throughput (if `file-storage` is enabled)
 - DB connection utilization
 - Redis connectivity and reconnection events
 

@@ -29,6 +29,14 @@ type CreateAppOptions = {
   platformModeSource?: PlatformModeSource;
 };
 
+function resolveApiBasePath(rawValue: string | undefined): string {
+  const trimmed = (rawValue || "").trim();
+  if (!trimmed) {
+    return "/api/v1";
+  }
+  return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+}
+
 export async function createApp(
   runtime: CoreRuntime,
   options: CreateAppOptions = {},
@@ -42,6 +50,7 @@ export async function createApp(
       ? PLATFORM_MODES.LIVE
       : modeResolution.mode);
   const platformModeSource = options.platformModeSource || modeResolution.source;
+  const apiBasePath = resolveApiBasePath(process.env.API_BASE_PATH);
   const app = Fastify({
     logger: false,
   });
@@ -74,7 +83,7 @@ export async function createApp(
     }),
   );
   app.use(
-    "/api/v1",
+    apiBasePath,
     // SHARED BETWEEN PROTOTYPE AND LIVE
     // LIVE ROUTE SHAPE PRESERVED
     // Router internally switches Prototype Mode behavior while preserving Live route shapes.

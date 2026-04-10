@@ -143,14 +143,161 @@ export const workspaceFilesQuerySchema = standardListQuerySchema
   })
   .strict();
 
-export const communicationThreadsQuerySchema = standardListQuerySchema
+export const fileStorageSpacesQuerySchema = standardListQuerySchema
   .extend({
-    channelType: z.enum(["channel", "team", "direct", "incident"]).optional(),
-    archived: z.coerce.boolean().optional(),
+    spaceType: z.enum(["organization", "team", "personal"]).optional(),
+    team: z.string().trim().min(1).max(160).optional(),
+    includeArchived: z.coerce.boolean().optional(),
+    ensureDefaults: z.coerce.boolean().optional(),
   })
   .strict();
 
-export const communicationMessagesQuerySchema = standardListQuerySchema.strict();
+export const fileStorageSpaceCreateSchema = z
+  .object({
+    spaceType: z.enum(["organization", "team", "personal"]),
+    slug: z.string().trim().min(1).max(160).optional(),
+    title: z.string().trim().min(1).max(240),
+    team: z.string().trim().min(1).max(160).optional(),
+    ownerUserId: z.string().uuid().optional(),
+    visibilityPolicy: z.enum(["members", "restricted"]).optional(),
+    metadata: z.record(z.unknown()).optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.spaceType === "team" && !value.team) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["team"],
+        message: "team spaces require team.",
+      });
+    }
+    if (value.spaceType === "personal" && !value.ownerUserId) {
+      // ownerUserId can be inferred from actor in API layer, so this stays informational.
+    }
+  });
+
+export const fileStorageItemsQuerySchema = standardListQuerySchema
+  .extend({
+    spaceId: z.string().uuid(),
+    parentId: z.union([z.string().uuid(), z.null()]).optional(),
+    kind: z.enum(["folder", "file"]).optional(),
+    includeDeleted: z.coerce.boolean().optional(),
+  })
+  .strict();
+
+const fileStorageBlobInputSchema = z
+  .object({
+    storageProvider: z.string().trim().min(1).max(120).optional(),
+    storageBucket: z.string().trim().min(1).max(240).optional(),
+    storageKey: z.string().trim().min(1).max(2000),
+    contentType: z.union([z.string().trim().max(240), z.null()]).optional(),
+    checksumSha256: z.union([z.string().trim().max(256), z.null()]).optional(),
+    sizeBytes: z.coerce.number().int().min(0).max(10_000_000_000),
+    encryption: z.union([z.string().trim().max(240), z.null()]).optional(),
+    metadata: z.record(z.unknown()).optional(),
+  })
+  .strict();
+
+export const fileStorageItemCreateSchema = z
+  .object({
+    spaceId: z.string().uuid(),
+    parentId: z.union([z.string().uuid(), z.null()]).optional(),
+    kind: z.enum(["folder", "file"]),
+    name: z.string().trim().min(1).max(240),
+    extension: z.string().trim().max(40).optional(),
+    ownerUserId: z.string().uuid().optional(),
+    metadata: z.record(z.unknown()).optional(),
+    blob: fileStorageBlobInputSchema.optional(),
+  })
+  .strict();
+
+export const fileStorageItemUpdateSchema = z
+  .object({
+    parentId: z.union([z.string().uuid(), z.null()]).optional(),
+    name: z.string().trim().min(1).max(240).optional(),
+    extension: z.union([z.string().trim().max(40), z.null()]).optional(),
+    ownerUserId: z.string().uuid().optional(),
+    metadata: z.record(z.unknown()).optional(),
+    blob: fileStorageBlobInputSchema.optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (
+      value.parentId === undefined &&
+      value.name === undefined &&
+      value.extension === undefined &&
+      value.ownerUserId === undefined &&
+      value.metadata === undefined &&
+      value.blob === undefined
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["name"],
+        message: "At least one mutable field is required.",
+      });
+    }
+  });
+
+export const fileStorageSharesQuerySchema = standardListQuerySchema
+  .extend({
+    includeRevoked: z.coerce.boolean().optional(),
+  })
+  .strict();
+
+export const fileStorageShareCreateSchema = z
+  .object({
+    subjectType: z.enum(["organization", "team", "user"]),
+    subjectKey: z.string().trim().min(1).max(240),
+    permission: z.enum(["viewer", "editor", "manager"]).optional(),
+    canDownload: z.boolean().optional(),
+    canReshare: z.boolean().optional(),
+    expiresAt: isoDateTimeSchema.optional(),
+    metadata: z.record(z.unknown()).optional(),
+  })
+  .strict();
+
+export const fileStorageShareRevokeSchema = z
+  .object({
+    reason: z.string().trim().min(1).max(500).optional(),
+  })
+  .strict();
+
+export const fileStorageActivityQuerySchema = standardListQuerySchema
+  .extend({
+    spaceId: z.string().uuid().optional(),
+    itemId: z.string().uuid().optional(),
+    action: z
+      .enum([
+        "space.created",
+        "item.created",
+        "item.updated",
+        "item.moved",
+        "item.deleted",
+        "share.granted",
+        "share.revoked",
+      ])
+      .optional(),
+    from: isoDateTimeSchema.optional(),
+    to: isoDateTimeSchema.optional(),
+  })
+  .strict()
+  .superRefine(validateDateRange);
+
+export const communicationThreadsQuerySchema = standardListQuerySchema
+  .extend({
+    channelType: z.enum(["channel", "team", "direct"]).optional(),
+    archived: z.coerce.boolean().optional(),
+    team: z.string().trim().min(1).max(160).optional(),
+  })
+  .strict();
+
+export const communicationMessagesQuerySchema = standardListQuerySchema
+  .extend({
+    from: isoDateTimeSchema.optional(),
+    to: isoDateTimeSchema.optional(),
+  })
+  .strict()
+  .superRefine(validateDateRange);
 
 export const facilitiesQuerySchema = standardListQuerySchema
   .extend({
@@ -174,12 +321,37 @@ export const maintenanceTicketsQuerySchema = standardListQuerySchema
     status: z.enum(["open", "in_progress", "resolved", "closed"]).optional(),
     priority: z.enum(["low", "medium", "high"]).optional(),
     category: z.string().trim().min(1).max(120).optional(),
+    assignmentTargetType: z
+      .enum(["unassigned", "user", "team", "department", "vendor"])
+      .optional(),
+    assigneeUserId: z.string().uuid().optional(),
+    assigneeTeam: z.string().trim().min(1).max(160).optional(),
+    assigneeDepartment: z.string().trim().min(1).max(160).optional(),
+    assigneeVendorId: z.string().trim().min(1).max(160).optional(),
+    dueFrom: isoDateTimeSchema.optional(),
+    dueTo: isoDateTimeSchema.optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((value, ctx) => {
+    if (!value.dueFrom || !value.dueTo) {
+      return;
+    }
+    const from = Date.parse(value.dueFrom);
+    const to = Date.parse(value.dueTo);
+    if (Number.isFinite(from) && Number.isFinite(to) && from > to) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["dueFrom"],
+        message: "`dueFrom` must be less than or equal to `dueTo`.",
+      });
+    }
+  });
 
 export const calendarEventsQuerySchema = standardListQuerySchema
   .extend({
-    source: z.enum(["custom", "facility", "maintenance"]).optional(),
+    source: z
+      .enum(["custom", "organization", "team", "facility", "maintenance", "workflow"])
+      .optional(),
     status: z.enum(["scheduled", "in_progress", "completed", "cancelled"]).optional(),
     from: isoDateTimeSchema.optional(),
     to: isoDateTimeSchema.optional(),
@@ -258,16 +430,113 @@ export const updateProfileSchema = z
 export const communicationThreadCreateSchema = z
   .object({
     title: z.string().trim().min(1).max(240),
-    channelType: z.enum(["channel", "team", "direct", "incident"]).optional(),
+    channelType: z.enum(["channel", "team", "direct"]).optional(),
     topic: z.string().trim().max(500).optional(),
+    team: z.string().trim().min(1).max(160).optional(),
+    participantUserIds: z.array(z.string().uuid()).max(100).optional(),
+    metadata: z.record(z.unknown()).optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((value, ctx) => {
+    const channelType = value.channelType || "channel";
+    if (channelType === "team" && !value.team) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["team"],
+        message: "team channels require a team value.",
+      });
+    }
+    if (channelType === "direct" && (!value.participantUserIds || value.participantUserIds.length === 0)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["participantUserIds"],
+        message: "direct channels require at least one participant user id.",
+      });
+    }
+  });
 
 export const communicationMessageCreateSchema = z
   .object({
     body: z.string().trim().min(1).max(5000),
+    mentionUserIds: z.array(z.string().uuid()).max(200).optional(),
+    metadata: z.record(z.unknown()).optional(),
+    idempotencyKey: z.string().trim().min(8).max(180).optional(),
   })
   .strict();
+
+export const communicationMeetingSessionsQuerySchema = standardListQuerySchema
+  .extend({
+    from: isoDateTimeSchema.optional(),
+    to: isoDateTimeSchema.optional(),
+  })
+  .strict()
+  .superRefine(validateDateRange);
+
+export const communicationMeetingSessionCreateSchema = z
+  .object({
+    title: z.string().trim().min(1).max(240),
+    startedAt: isoDateTimeSchema,
+    endedAt: z.union([isoDateTimeSchema, z.null()]).optional(),
+    participantUserIds: z.array(z.string().uuid()).max(500).optional(),
+    transcriptText: z.union([z.string().max(200_000), z.null()]).optional(),
+    summaryText: z.union([z.string().max(50_000), z.null()]).optional(),
+    metadata: z.record(z.unknown()).optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (!value.endedAt) {
+      return;
+    }
+    const startedAtTs = Date.parse(value.startedAt);
+    const endedAtTs = Date.parse(value.endedAt);
+    if (Number.isFinite(startedAtTs) && Number.isFinite(endedAtTs) && startedAtTs > endedAtTs) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["startedAt"],
+        message: "`startedAt` must be less than or equal to `endedAt`.",
+      });
+    }
+  });
+
+export const communicationAiSummariesQuerySchema = standardListQuerySchema
+  .extend({
+    status: z.enum(["queued", "processing", "completed", "failed"]).optional(),
+    sourceType: z.enum(["channel_window", "message", "meeting_session"]).optional(),
+  })
+  .strict();
+
+export const communicationAiSummaryRequestSchema = z
+  .object({
+    sourceType: z.enum(["channel_window", "message", "meeting_session"]).optional(),
+    sourceRefId: z.string().uuid().optional(),
+    from: isoDateTimeSchema.optional(),
+    to: isoDateTimeSchema.optional(),
+    prompt: z.string().trim().max(20_000).optional(),
+    metadata: z.record(z.unknown()).optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    const sourceType = value.sourceType || "channel_window";
+    if ((sourceType === "message" || sourceType === "meeting_session") && !value.sourceRefId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["sourceRefId"],
+        message: `${sourceType} summary requests require sourceRefId.`,
+      });
+    }
+    if (!value.from || !value.to) {
+      return;
+    }
+    const fromTs = Date.parse(value.from);
+    const toTs = Date.parse(value.to);
+    if (Number.isFinite(fromTs) && Number.isFinite(toTs) && fromTs > toTs) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["from"],
+        message: "`from` must be less than or equal to `to`.",
+      });
+    }
+  });
 
 export const facilityCreateSchema = z
   .object({
@@ -276,6 +545,8 @@ export const facilityCreateSchema = z
     status: z.enum(["available", "limited", "maintenance"]).optional(),
     location: z.string().trim().max(240).optional(),
     capacity: z.coerce.number().int().min(0).max(100_000).optional(),
+    bookingRequiresApproval: z.boolean().optional(),
+    bookingPolicy: z.record(z.unknown()).optional(),
     metadata: z.record(z.unknown()).optional(),
   })
   .strict();
@@ -287,6 +558,8 @@ export const facilityUpdateSchema = z
     status: z.enum(["available", "limited", "maintenance"]).optional(),
     location: z.union([z.string().trim().max(240), z.null()]).optional(),
     capacity: z.coerce.number().int().min(0).max(100_000).nullable().optional(),
+    bookingRequiresApproval: z.boolean().optional(),
+    bookingPolicy: z.record(z.unknown()).optional(),
     metadata: z.record(z.unknown()).optional(),
   })
   .strict();
@@ -297,19 +570,21 @@ export const facilityBookingCreateSchema = z
     title: z.string().trim().min(1).max(240),
     startsAt: isoDateTimeSchema,
     endsAt: isoDateTimeSchema,
-    status: z.enum(["pending", "approved", "rejected", "cancelled"]).optional(),
+    status: z.enum(["pending", "approved"]).optional(),
     notes: z.string().trim().max(1000).optional(),
+    idempotencyKey: z.string().trim().min(8).max(160).optional(),
+    requireApproval: z.boolean().optional(),
     metadata: z.record(z.unknown()).optional(),
   })
   .strict()
   .superRefine((value, ctx) => {
     const from = Date.parse(value.startsAt);
     const to = Date.parse(value.endsAt);
-    if (Number.isFinite(from) && Number.isFinite(to) && from > to) {
+    if (Number.isFinite(from) && Number.isFinite(to) && from >= to) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["startsAt"],
-        message: "`startsAt` must be less than or equal to `endsAt`.",
+        message: "`startsAt` must be less than `endsAt`.",
       });
     }
   });
@@ -321,6 +596,34 @@ export const facilityBookingUpdateSchema = z
   })
   .strict();
 
+export const facilityAvailabilityQuerySchema = z
+  .object({
+    startsAt: isoDateTimeSchema,
+    endsAt: isoDateTimeSchema,
+    excludeBookingId: z.string().uuid().optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    const from = Date.parse(value.startsAt);
+    const to = Date.parse(value.endsAt);
+    if (Number.isFinite(from) && Number.isFinite(to) && from >= to) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["startsAt"],
+        message: "`startsAt` must be less than `endsAt`.",
+      });
+    }
+  });
+
+export const facilityBookingTransitionSchema = z
+  .object({
+    action: z.enum(["approve", "reject", "cancel"]),
+    reason: z.string().trim().max(1000).optional(),
+    notes: z.union([z.string().trim().max(1000), z.null()]).optional(),
+    metadata: z.record(z.unknown()).optional(),
+  })
+  .strict();
+
 export const maintenanceTicketCreateSchema = z
   .object({
     title: z.string().trim().min(1).max(240),
@@ -328,51 +631,275 @@ export const maintenanceTicketCreateSchema = z
     category: z.string().trim().min(1).max(120),
     priority: z.enum(["low", "medium", "high"]).optional(),
     status: z.enum(["open", "in_progress", "resolved", "closed"]).optional(),
+    assigneeUserId: z.string().uuid().optional(),
     assigneeName: z.string().trim().max(240).optional(),
     dueAt: isoDateTimeSchema.optional(),
+    assignment: z
+      .object({
+        targetType: z.enum(["unassigned", "user", "team", "department", "vendor"]),
+        userId: z.string().uuid().optional(),
+        userDisplayName: z.string().trim().max(240).optional(),
+        team: z.string().trim().min(1).max(160).optional(),
+        department: z.string().trim().min(1).max(160).optional(),
+        vendorId: z.string().trim().min(1).max(160).optional(),
+        vendorName: z.string().trim().max(240).optional(),
+      })
+      .strict()
+      .optional(),
+    visibility: z
+      .object({
+        scope: z.enum(["organization", "team", "department", "vendor"]),
+        team: z.string().trim().min(1).max(160).optional(),
+        department: z.string().trim().min(1).max(160).optional(),
+        vendorId: z.string().trim().min(1).max(160).optional(),
+      })
+      .strict()
+      .optional(),
     metadata: z.record(z.unknown()).optional(),
+    lifecycleMetadata: z.record(z.unknown()).optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((value, ctx) => {
+    const assignment = value.assignment;
+    if (assignment?.targetType === "user" && !assignment.userId && !assignment.userDisplayName) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["assignment", "userId"],
+        message: "user assignment requires userId or userDisplayName.",
+      });
+    }
+    if (assignment?.targetType === "team" && !assignment.team) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["assignment", "team"],
+        message: "team assignment requires team.",
+      });
+    }
+    if (assignment?.targetType === "department" && !assignment.department) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["assignment", "department"],
+        message: "department assignment requires department.",
+      });
+    }
+    if (assignment?.targetType === "vendor" && !assignment.vendorId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["assignment", "vendorId"],
+        message: "vendor assignment requires vendorId.",
+      });
+    }
+
+    const visibility = value.visibility;
+    if (visibility?.scope === "team" && !visibility.team) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["visibility", "team"],
+        message: "team visibility requires team.",
+      });
+    }
+    if (visibility?.scope === "department" && !visibility.department) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["visibility", "department"],
+        message: "department visibility requires department.",
+      });
+    }
+    if (visibility?.scope === "vendor" && !visibility.vendorId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["visibility", "vendorId"],
+        message: "vendor visibility requires vendorId.",
+      });
+    }
+  });
 
 export const maintenanceTicketUpdateSchema = z
   .object({
+    title: z.string().trim().min(1).max(240).optional(),
+    category: z.string().trim().min(1).max(120).optional(),
     status: z.enum(["open", "in_progress", "resolved", "closed"]).optional(),
     priority: z.enum(["low", "medium", "high"]).optional(),
+    assigneeUserId: z.union([z.string().uuid(), z.null()]).optional(),
     assigneeName: z.union([z.string().trim().max(240), z.null()]).optional(),
     dueAt: z.union([isoDateTimeSchema, z.null()]).optional(),
     summary: z.string().trim().min(1).max(2000).optional(),
+    visibility: z
+      .object({
+        scope: z.enum(["organization", "team", "department", "vendor"]),
+        team: z.string().trim().min(1).max(160).optional(),
+        department: z.string().trim().min(1).max(160).optional(),
+        vendorId: z.string().trim().min(1).max(160).optional(),
+      })
+      .strict()
+      .optional(),
+    metadata: z.record(z.unknown()).optional(),
+    lifecycleMetadata: z.record(z.unknown()).optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    const visibility = value.visibility;
+    if (visibility?.scope === "team" && !visibility.team) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["visibility", "team"],
+        message: "team visibility requires team.",
+      });
+    }
+    if (visibility?.scope === "department" && !visibility.department) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["visibility", "department"],
+        message: "department visibility requires department.",
+      });
+    }
+    if (visibility?.scope === "vendor" && !visibility.vendorId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["visibility", "vendorId"],
+        message: "vendor visibility requires vendorId.",
+      });
+    }
+  });
+
+export const maintenanceTicketAssignSchema = z
+  .object({
+    assignment: z
+      .object({
+        targetType: z.enum(["unassigned", "user", "team", "department", "vendor"]),
+        userId: z.string().uuid().optional(),
+        userDisplayName: z.string().trim().max(240).optional(),
+        team: z.string().trim().min(1).max(160).optional(),
+        department: z.string().trim().min(1).max(160).optional(),
+        vendorId: z.string().trim().min(1).max(160).optional(),
+        vendorName: z.string().trim().max(240).optional(),
+      })
+      .strict(),
+    reason: z.string().trim().max(500).optional(),
     metadata: z.record(z.unknown()).optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((value, ctx) => {
+    const assignment = value.assignment;
+    if (assignment.targetType === "user" && !assignment.userId && !assignment.userDisplayName) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["assignment", "userId"],
+        message: "user assignment requires userId or userDisplayName.",
+      });
+    }
+    if (assignment.targetType === "team" && !assignment.team) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["assignment", "team"],
+        message: "team assignment requires team.",
+      });
+    }
+    if (assignment.targetType === "department" && !assignment.department) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["assignment", "department"],
+        message: "department assignment requires department.",
+      });
+    }
+    if (assignment.targetType === "vendor" && !assignment.vendorId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["assignment", "vendorId"],
+        message: "vendor assignment requires vendorId.",
+      });
+    }
+  });
 
 export const maintenanceCommentCreateSchema = z
   .object({
     body: z.string().trim().min(1).max(5000),
+    commentType: z.enum(["comment", "status_update", "assignment_update", "system"]).optional(),
+    metadata: z.record(z.unknown()).optional(),
   })
   .strict();
 
 export const calendarEventCreateSchema = z
   .object({
+    source: z.enum(["custom", "organization", "team"]).optional(),
     title: z.string().trim().min(1).max(240),
     startsAt: isoDateTimeSchema,
     endsAt: z.union([isoDateTimeSchema, z.null()]).optional(),
     status: z.enum(["scheduled", "in_progress", "completed", "cancelled"]).optional(),
     description: z.string().trim().max(5000).optional(),
     metadata: z.record(z.unknown()).optional(),
+    audience: z
+      .object({
+        scope: z.enum(["organization", "team", "department", "vendor"]),
+        team: z.string().trim().min(1).max(160).optional(),
+        department: z.string().trim().min(1).max(160).optional(),
+        vendorId: z.string().trim().min(1).max(160).optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .superRefine((value, ctx) => {
     if (!value.endsAt) {
-      return;
+      // Continue with audience/source validation when no endsAt is provided.
+    } else {
+      const from = Date.parse(value.startsAt);
+      const to = Date.parse(value.endsAt);
+      if (Number.isFinite(from) && Number.isFinite(to) && from > to) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["startsAt"],
+          message: "`startsAt` must be less than or equal to `endsAt`.",
+        });
+      }
     }
-    const from = Date.parse(value.startsAt);
-    const to = Date.parse(value.endsAt);
-    if (Number.isFinite(from) && Number.isFinite(to) && from > to) {
+
+    const audience = value.audience;
+    if (audience?.scope === "team" && !audience.team) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        path: ["startsAt"],
-        message: "`startsAt` must be less than or equal to `endsAt`.",
+        path: ["audience", "team"],
+        message: "team audience requires team.",
       });
+    }
+    if (audience?.scope === "department" && !audience.department) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["audience", "department"],
+        message: "department audience requires department.",
+      });
+    }
+    if (audience?.scope === "vendor" && !audience.vendorId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["audience", "vendorId"],
+        message: "vendor audience requires vendorId.",
+      });
+    }
+
+    const source = value.source || "organization";
+    if (source === "organization" && audience && audience.scope !== "organization") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["audience", "scope"],
+        message: "organization events must use organization audience.",
+      });
+    }
+    if (source === "team") {
+      if (!audience || audience.scope !== "team") {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["audience", "scope"],
+          message: "team events must use team audience.",
+        });
+      }
+      if (!audience?.team) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["audience", "team"],
+          message: "team events require audience.team.",
+        });
+      }
     }
   });
 
@@ -384,19 +911,52 @@ export const calendarEventUpdateSchema = z
     status: z.enum(["scheduled", "in_progress", "completed", "cancelled"]).optional(),
     description: z.union([z.string().trim().max(5000), z.null()]).optional(),
     metadata: z.record(z.unknown()).optional(),
+    audience: z
+      .object({
+        scope: z.enum(["organization", "team", "department", "vendor"]),
+        team: z.string().trim().min(1).max(160).optional(),
+        department: z.string().trim().min(1).max(160).optional(),
+        vendorId: z.string().trim().min(1).max(160).optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .superRefine((value, ctx) => {
     if (!value.endsAt || !value.startsAt) {
-      return;
+      // Continue with audience validation when partial window updates are used.
+    } else {
+      const from = Date.parse(value.startsAt);
+      const to = Date.parse(value.endsAt);
+      if (Number.isFinite(from) && Number.isFinite(to) && from > to) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["startsAt"],
+          message: "`startsAt` must be less than or equal to `endsAt`.",
+        });
+      }
     }
-    const from = Date.parse(value.startsAt);
-    const to = Date.parse(value.endsAt);
-    if (Number.isFinite(from) && Number.isFinite(to) && from > to) {
+
+    const audience = value.audience;
+    if (audience?.scope === "team" && !audience.team) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        path: ["startsAt"],
-        message: "`startsAt` must be less than or equal to `endsAt`.",
+        path: ["audience", "team"],
+        message: "team audience requires team.",
+      });
+    }
+    if (audience?.scope === "department" && !audience.department) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["audience", "department"],
+        message: "department audience requires department.",
+      });
+    }
+    if (audience?.scope === "vendor" && !audience.vendorId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["audience", "vendorId"],
+        message: "vendor audience requires vendorId.",
       });
     }
   });
@@ -505,6 +1065,102 @@ export const inviteAcceptSchema = z.object({
   password: z.string().min(8).max(256).optional(),
   fullName: z.string().trim().min(1).max(160).optional(),
 });
+
+export const onboardingEntryLoginSchema = z
+  .object({
+    email: z.string().email(),
+    password: z.string().min(1),
+  })
+  .strict();
+
+export const onboardingCreateOrganizationSchema = z
+  .object({
+    email: z.string().email(),
+    password: z.string().min(8).max(256),
+    fullName: z.string().trim().min(1).max(160).optional(),
+    organizationName: z.string().trim().min(1).max(160),
+    organizationSlug: z.string().trim().min(1).max(160).optional(),
+    workspaceName: z.string().trim().min(1).max(160).optional(),
+    workspaceSlug: z.string().trim().min(1).max(160).optional(),
+    defaultInviteRole: z.enum(["owner", "admin", "member"]).optional(),
+    defaultInviteUsageLimit: z.coerce.number().int().min(1).max(100_000).optional(),
+    defaultInviteExpiresInHours: z.coerce.number().int().min(1).max(720).optional(),
+  })
+  .strict();
+
+export const onboardingJoinOrganizationSchema = z
+  .object({
+    email: z.string().email(),
+    password: z.string().min(8).max(256),
+    fullName: z.string().trim().min(1).max(160).optional(),
+    organizationSlug: z.string().trim().min(1).max(160).optional(),
+    organizationCode: z.string().trim().min(1).max(80).optional(),
+    joinCode: z.string().trim().min(1).max(80).optional(),
+    inviteToken: z.string().min(16).optional(),
+    requestNote: z.string().trim().min(1).max(500).optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (!value.organizationSlug && !value.organizationCode && !value.joinCode && !value.inviteToken) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["organizationSlug"],
+        message: "Provide inviteToken, organizationSlug, organizationCode, or joinCode.",
+      });
+    }
+  });
+
+export const organizationSwitchSchema = z
+  .object({
+    organizationId: z.string().uuid().optional(),
+    organizationSlug: z.string().trim().min(1).max(160).optional(),
+    workspaceSlug: z.string().trim().min(1).max(160).optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (!value.organizationId && !value.organizationSlug) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["organizationId"],
+        message: "organizationId or organizationSlug is required.",
+      });
+    }
+  });
+
+export const organizationInviteTokenCreateSchema = z
+  .object({
+    role: z.enum(["owner", "admin", "member"]).optional(),
+    team: z.string().trim().min(1).max(160).optional(),
+    department: z.string().trim().min(1).max(160).optional(),
+    email: z.string().email().optional(),
+    label: z.string().trim().min(1).max(160).optional(),
+    expiresInHours: z.coerce.number().int().min(1).max(720).optional(),
+    usageLimit: z.coerce.number().int().min(1).max(100_000).optional(),
+  })
+  .strict();
+
+export const organizationInviteTokenRevokeSchema = z
+  .object({
+    reason: z.string().trim().min(1).max(500).optional(),
+  })
+  .strict();
+
+export const organizationJoinRequestsQuerySchema = z
+  .object({
+    status: z.enum(["pending", "approved", "rejected", "cancelled"]).optional(),
+    limit: z.coerce.number().int().min(1).max(500).optional(),
+  })
+  .strict();
+
+export const organizationJoinRequestDecisionSchema = z
+  .object({
+    decision: z.enum(["approved", "rejected"]),
+    role: z.enum(["owner", "admin", "member"]).optional(),
+    team: z.string().trim().min(1).max(160).optional(),
+    department: z.string().trim().min(1).max(160).optional(),
+    note: z.string().trim().min(1).max(500).optional(),
+  })
+  .strict();
 
 export const emailLogsQuerySchema = z
   .object({

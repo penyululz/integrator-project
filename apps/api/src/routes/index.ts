@@ -7,16 +7,37 @@ import {
   getScaleLimitsFromEnv,
   getDefaultAlertThresholds,
   listWorkflowTemplateSummaries,
+  type CommunicationAiSummaryRequestRecord as EngineCommunicationAiSummaryRequestRecord,
+  type CommunicationChannelRecord as EngineCommunicationChannelRecord,
+  type CommunicationMeetingSessionRecord as EngineCommunicationMeetingSessionRecord,
+  type CommunicationMessageRecord as EngineCommunicationMessageRecord,
   validateWorkflowDefinition,
+  type CalendarAggregatedEventRecord as EngineCalendarAggregatedEventRecord,
+  type FacilityBookingRecord as EngineFacilityBookingRecord,
+  type FacilityRecord as EngineFacilityRecord,
+  type FileStorageActivityRecord as EngineFileStorageActivityRecord,
+  type FileStorageItemRecord as EngineFileStorageItemRecord,
+  type FileStorageShareRecord as EngineFileStorageShareRecord,
+  type FileStorageSpaceRecord as EngineFileStorageSpaceRecord,
+  type MaintenanceCommentRecord as EngineMaintenanceCommentRecord,
+  type MaintenanceTicketRecord as EngineMaintenanceTicketRecord,
   type CoreRuntime,
+  type PlatformRole,
 } from "@integration/core";
 import {
   PLATFORM_MODES,
   type CalendarEventRecord,
+  type CommunicationAiSummaryRequestRecord,
   type CommunicationMessageRecord,
+  type CommunicationMeetingSessionRecord,
   type CommunicationThreadRecord,
   type FacilityBookingRecord,
   type FacilityRecord,
+  type FileStorageActivityRecord,
+  type FileStorageBlobRecord,
+  type FileStorageItemRecord,
+  type FileStorageShareRecord,
+  type FileStorageSpaceRecord,
   type AdapterConnectionProbeResult,
   type ListSortDirective,
   type MaintenanceCommentRecord,
@@ -34,6 +55,7 @@ import {
   type PlatformMode,
   type PlatformModeSource,
   type StandardListResult,
+  standardListQuerySchema,
 } from "@integration/shared";
 import { requireAuth, requireRole } from "../middleware/auth";
 import {
@@ -53,6 +75,10 @@ import {
   calendarEventsQuerySchema,
   communicationMessageCreateSchema,
   communicationMessagesQuerySchema,
+  communicationMeetingSessionCreateSchema,
+  communicationMeetingSessionsQuerySchema,
+  communicationAiSummariesQuerySchema,
+  communicationAiSummaryRequestSchema,
   communicationThreadCreateSchema,
   communicationThreadsQuerySchema,
   appConnectionSchema,
@@ -68,20 +94,40 @@ import {
   emailLogsQuerySchema,
   emailVerificationConfirmSchema,
   emailVerificationRequestSchema,
+  fileStorageActivityQuerySchema,
+  fileStorageItemCreateSchema,
+  fileStorageItemUpdateSchema,
+  fileStorageItemsQuerySchema,
+  fileStorageShareCreateSchema,
+  fileStorageShareRevokeSchema,
+  fileStorageSharesQuerySchema,
+  fileStorageSpaceCreateSchema,
+  fileStorageSpacesQuerySchema,
   facilitiesQuerySchema,
   facilityBookingCreateSchema,
+  facilityBookingTransitionSchema,
   facilityBookingUpdateSchema,
   facilityBookingsQuerySchema,
+  facilityAvailabilityQuerySchema,
   facilityCreateSchema,
   facilityUpdateSchema,
   knowledgeDocCreateSchema,
   knowledgeDocUpdateSchema,
   inviteAcceptSchema,
   inviteCreateSchema,
+  onboardingCreateOrganizationSchema,
+  onboardingEntryLoginSchema,
+  onboardingJoinOrganizationSchema,
   loginSchema,
   loginOtpRequestSchema,
   loginOtpVerifySchema,
+  organizationInviteTokenCreateSchema,
+  organizationInviteTokenRevokeSchema,
+  organizationJoinRequestDecisionSchema,
+  organizationJoinRequestsQuerySchema,
+  organizationSwitchSchema,
   maintenanceCommentCreateSchema,
+  maintenanceTicketAssignSchema,
   maintenanceTicketCreateSchema,
   maintenanceTicketUpdateSchema,
   maintenanceTicketsQuerySchema,
@@ -155,6 +201,25 @@ function toStandardListEnvelope<Row>(result: StandardListResult<Row>) {
       total: result.totalApprox,
       hasMore: result.hasMore,
       nextCursor: result.nextCursor,
+    },
+  };
+}
+
+function toEmptyListEnvelope(query: StandardListQuery) {
+  const page = Math.max(1, Number(query.page || 1));
+  const limit = Math.max(1, Math.min(Number(query.limit || 25), 250));
+  return {
+    rows: [],
+    nextCursor: null,
+    totalApprox: 0,
+    appliedFilters: query.filterGroup || null,
+    appliedSorts: query.sort || [],
+    pagination: {
+      page,
+      limit,
+      total: 0,
+      hasMore: false,
+      nextCursor: null,
     },
   };
 }
@@ -266,6 +331,542 @@ function requireRetentionCleanupService(runtime: CoreRuntime) {
     throw createHttpError(503, "Retention cleanup service is unavailable.");
   }
   return runtime.retentionCleanupService;
+}
+
+function requireOrganizationMembershipService(runtime: CoreRuntime) {
+  if (!runtime.organizationMembershipService) {
+    throw createHttpError(503, "Organization onboarding service is unavailable.");
+  }
+  return runtime.organizationMembershipService;
+}
+
+function requireFacilityBookingService(runtime: CoreRuntime) {
+  if (!runtime.facilityBookingService) {
+    throw createHttpError(503, "Facility booking module is unavailable.");
+  }
+  return runtime.facilityBookingService;
+}
+
+function requireMaintenanceSystemService(runtime: CoreRuntime) {
+  if (!runtime.maintenanceSystemService) {
+    throw createHttpError(503, "Maintenance system module is unavailable.");
+  }
+  return runtime.maintenanceSystemService;
+}
+
+function requireCalendarAggregationService(runtime: CoreRuntime) {
+  if (!runtime.calendarAggregationService) {
+    throw createHttpError(503, "Calendar aggregation module is unavailable.");
+  }
+  return runtime.calendarAggregationService;
+}
+
+function requireCommunicationService(runtime: CoreRuntime) {
+  if (!runtime.communicationService) {
+    throw createHttpError(503, "Communication module is unavailable.");
+  }
+  return runtime.communicationService;
+}
+
+function requireFileStorageService(runtime: CoreRuntime) {
+  if (!runtime.fileStorageService) {
+    throw createHttpError(503, "File storage module is unavailable.");
+  }
+  return runtime.fileStorageService;
+}
+
+function resolveEffectiveRole(scope: {
+  orgRole: PlatformRole;
+  workspaceRole: PlatformRole;
+}): PlatformRole {
+  if (scope.orgRole === "owner" || scope.workspaceRole === "owner") {
+    return "owner";
+  }
+  if (scope.orgRole === "admin" || scope.workspaceRole === "admin") {
+    return "admin";
+  }
+  return "member";
+}
+
+function toFacilityActorFromAuth(auth: NonNullable<Express.Request["auth"]>) {
+  return {
+    userId: auth.user.id,
+    displayName: auth.user.fullName || auth.user.email,
+    email: auth.user.email,
+    role: resolveEffectiveRole(auth.scope),
+  };
+}
+
+function parseDelimitedHeader(raw: string | undefined): string[] {
+  if (!raw) {
+    return [];
+  }
+  return Array.from(
+    new Set(
+      raw
+        .split(",")
+        .map((entry) => entry.trim())
+        .filter(Boolean),
+    ),
+  );
+}
+
+function resolveHeaderAsCsv(
+  req: unknown,
+  headerName: string,
+): string | undefined {
+  if (!req || typeof req !== "object") {
+    return undefined;
+  }
+  const headers = (req as { headers?: Record<string, unknown> }).headers;
+  if (!headers || typeof headers !== "object") {
+    return undefined;
+  }
+  const raw = headers[headerName.toLowerCase()];
+  if (Array.isArray(raw)) {
+    return raw.map((entry) => String(entry)).join(",");
+  }
+  return typeof raw === "string" ? raw : undefined;
+}
+
+async function toMaintenanceActorFromAuth(
+  runtime: CoreRuntime,
+  req: Express.Request,
+): Promise<{
+  userId: string | null;
+  displayName: string;
+  email?: string | null;
+  role: PlatformRole;
+  team?: string | null;
+  department?: string | null;
+  vendorIds?: string[];
+}> {
+  const auth = req.auth!;
+  const memberships = await runtime.repositories.authRepository.listAccessibleOrganizations({
+    userId: auth.user.id,
+  });
+  const membership =
+    memberships.find(
+      (entry) =>
+        entry.organization_id === auth.scope.organizationId &&
+        entry.status === "active",
+    ) ||
+    memberships.find(
+      (entry) => entry.organization_id === auth.scope.organizationId,
+    );
+
+  const vendorIds = Array.from(
+    new Set([
+      ...parseDelimitedHeader(resolveHeaderAsCsv(req, "x-integrator-vendor-ids")),
+      ...parseDelimitedHeader(resolveHeaderAsCsv(req, "x-vendor-ids")),
+      ...parseDelimitedHeader(resolveHeaderAsCsv(req, "x-vendor-id")),
+    ]),
+  );
+
+  return {
+    userId: auth.user.id,
+    displayName: auth.user.fullName || auth.user.email,
+    email: auth.user.email,
+    role: resolveEffectiveRole(auth.scope),
+    team: membership?.team || null,
+    department: membership?.department || null,
+    vendorIds,
+  };
+}
+
+function mapFacilityForResponse(entry: EngineFacilityRecord): FacilityRecord {
+  return {
+    id: entry.id,
+    name: entry.name,
+    category: entry.category,
+    status: entry.status,
+    location: entry.location,
+    capacity: entry.capacity,
+    bookingRequiresApproval: entry.bookingRequiresApproval,
+    bookingPolicy: entry.bookingPolicy,
+    metadata: entry.metadata,
+    createdAt: entry.createdAt,
+    updatedAt: entry.updatedAt,
+  };
+}
+
+function mapFacilityBookingForResponse(
+  entry: EngineFacilityBookingRecord,
+): FacilityBookingRecord {
+  return {
+    id: entry.id,
+    facilityId: entry.facilityId,
+    title: entry.title,
+    requestedByUserId: entry.requestedByUserId,
+    requestedByName: entry.requestedByName,
+    startsAt: entry.startsAt,
+    endsAt: entry.endsAt,
+    status: entry.status,
+    approvalRequired: entry.approvalRequired,
+    idempotencyKey: entry.idempotencyKey,
+    approvedByUserId: entry.approvedByUserId,
+    approvedAt: entry.approvedAt,
+    rejectedByUserId: entry.rejectedByUserId,
+    rejectedAt: entry.rejectedAt,
+    rejectionReason: entry.rejectionReason,
+    cancelledByUserId: entry.cancelledByUserId,
+    cancelledAt: entry.cancelledAt,
+    cancellationReason: entry.cancellationReason,
+    notes: entry.notes,
+    metadata: entry.metadata,
+    lifecycleMetadata: entry.lifecycleMetadata,
+    createdAt: entry.createdAt,
+    updatedAt: entry.updatedAt,
+  };
+}
+
+function mapMaintenanceTicketForResponse(
+  entry: EngineMaintenanceTicketRecord,
+): MaintenanceTicketRecord {
+  return {
+    id: entry.id,
+    title: entry.title,
+    summary: entry.summary,
+    category: entry.category,
+    priority: entry.priority,
+    status: entry.status,
+    assignmentTargetType: entry.assignmentTargetType,
+    assigneeUserId: entry.assigneeUserId,
+    assigneeName: entry.assigneeName,
+    assigneeTeam: entry.assigneeTeam,
+    assigneeDepartment: entry.assigneeDepartment,
+    assigneeVendorId: entry.assigneeVendorId,
+    assigneeVendorName: entry.assigneeVendorName,
+    assignedByUserId: entry.assignedByUserId,
+    assignedAt: entry.assignedAt,
+    visibilityScope: entry.visibilityScope,
+    visibilityTeam: entry.visibilityTeam,
+    visibilityDepartment: entry.visibilityDepartment,
+    visibilityVendorId: entry.visibilityVendorId,
+    dueAt: entry.dueAt,
+    slaDueAt: entry.slaDueAt,
+    statusChangedAt: entry.statusChangedAt,
+    resolvedAt: entry.resolvedAt,
+    closedAt: entry.closedAt,
+    metadata: entry.metadata,
+    lifecycleMetadata: entry.lifecycleMetadata,
+    createdAt: entry.createdAt,
+    updatedAt: entry.updatedAt,
+  };
+}
+
+function mapMaintenanceCommentForResponse(
+  entry: EngineMaintenanceCommentRecord,
+): MaintenanceCommentRecord {
+  return {
+    id: entry.id,
+    ticketId: entry.ticketId,
+    authorUserId: entry.authorUserId,
+    authorName: entry.authorName,
+    commentType: entry.commentType,
+    body: entry.body,
+    metadata: entry.metadata,
+    createdAt: entry.createdAt,
+  };
+}
+
+function mapCalendarEventForResponse(
+  entry: EngineCalendarAggregatedEventRecord,
+): CalendarEventRecord {
+  return {
+    id: entry.id,
+    source: entry.source,
+    sourceId: entry.sourceId,
+    title: entry.title,
+    startsAt: entry.startsAt,
+    endsAt: entry.endsAt,
+    status: entry.status,
+    description: entry.description,
+    metadata: entry.metadata,
+    audienceScope: entry.audienceScope,
+    audienceTeam: entry.audienceTeam,
+    audienceDepartment: entry.audienceDepartment,
+    audienceVendorId: entry.audienceVendorId,
+    createdByUserId: entry.createdByUserId,
+    assigneeUserId: entry.assigneeUserId,
+    isDerived: entry.isDerived,
+    createdAt: entry.createdAt,
+    updatedAt: entry.updatedAt,
+  };
+}
+
+function mapCommunicationChannelForResponse(
+  entry: EngineCommunicationChannelRecord,
+): CommunicationThreadRecord {
+  return {
+    id: entry.id,
+    title: entry.title,
+    channelType: entry.channelType,
+    topic: entry.topic,
+    archived: entry.archived,
+    participantsCount: entry.participantsCount,
+    unreadCount: entry.unreadCount,
+    lastMessagePreview: entry.lastMessagePreview,
+    lastMessageAt: entry.lastMessageAt,
+    status: "offline",
+    updatedAt: entry.updatedAt,
+    updatedAtLabel: entry.updatedAt,
+    team: entry.team,
+    metadata: entry.metadata,
+    messageCount: entry.messageCount,
+    createdByUserId: entry.createdByUserId,
+    isMember: entry.isMember,
+    membershipRole: entry.membershipRole,
+  };
+}
+
+function mapCommunicationMessageForResponse(
+  entry: EngineCommunicationMessageRecord,
+): CommunicationMessageRecord {
+  return {
+    id: entry.id,
+    threadId: entry.channelId,
+    authorUserId: entry.authorUserId,
+    authorName: entry.authorName,
+    body: entry.body,
+    createdAt: entry.createdAt,
+    createdAtLabel: entry.createdAt,
+    metadata: entry.metadata,
+    mentions: entry.mentions.map((mention) => ({
+      id: mention.id,
+      messageId: mention.messageId,
+      mentionedUserId: mention.mentionedUserId,
+      mentionToken: mention.mentionToken,
+      createdAt: mention.createdAt,
+    })),
+    idempotencyKey: entry.idempotencyKey,
+    editedAt: entry.editedAt,
+    updatedAt: entry.updatedAt,
+  };
+}
+
+function mapCommunicationMeetingSessionForResponse(
+  entry: EngineCommunicationMeetingSessionRecord,
+): CommunicationMeetingSessionRecord {
+  return {
+    id: entry.id,
+    threadId: entry.channelId,
+    title: entry.title,
+    startedAt: entry.startedAt,
+    endedAt: entry.endedAt,
+    createdByUserId: entry.createdByUserId,
+    participantUserIds: entry.participantUserIds,
+    transcriptText: entry.transcriptText,
+    summaryText: entry.summaryText,
+    metadata: entry.metadata,
+    createdAt: entry.createdAt,
+    updatedAt: entry.updatedAt,
+  };
+}
+
+function mapCommunicationAiSummaryForResponse(
+  entry: EngineCommunicationAiSummaryRequestRecord,
+): CommunicationAiSummaryRequestRecord {
+  return {
+    id: entry.id,
+    threadId: entry.channelId,
+    sourceType: entry.sourceType,
+    sourceRefId: entry.sourceRefId,
+    status: entry.status,
+    requestedByUserId: entry.requestedByUserId,
+    prompt: entry.prompt,
+    outputText: entry.outputText,
+    failureReason: entry.failureReason,
+    metadata: entry.metadata,
+    createdAt: entry.createdAt,
+    updatedAt: entry.updatedAt,
+    processedAt: entry.processedAt,
+  };
+}
+
+function mapFileStorageSpaceForResponse(
+  entry: EngineFileStorageSpaceRecord,
+): FileStorageSpaceRecord {
+  return {
+    id: entry.id,
+    spaceType: entry.spaceType,
+    slug: entry.slug,
+    title: entry.title,
+    team: entry.team,
+    ownerUserId: entry.ownerUserId,
+    visibilityPolicy: entry.visibilityPolicy,
+    metadata: entry.metadata,
+    createdAt: entry.createdAt,
+    updatedAt: entry.updatedAt,
+    archivedAt: entry.archivedAt,
+  };
+}
+
+function mapFileStorageBlobForResponse(
+  value: unknown,
+): FileStorageBlobRecord | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const blob = value as Record<string, unknown>;
+  const id = typeof blob.id === "string" ? blob.id : null;
+  if (!id) {
+    return null;
+  }
+  return {
+    id,
+    storageProvider: String(blob.storageProvider || "internal"),
+    storageBucket: String(blob.storageBucket || "default"),
+    storageKey: String(blob.storageKey || ""),
+    contentType:
+      typeof blob.contentType === "string" && blob.contentType.length > 0
+        ? blob.contentType
+        : null,
+    checksumSha256:
+      typeof blob.checksumSha256 === "string" && blob.checksumSha256.length > 0
+        ? blob.checksumSha256
+        : null,
+    sizeBytes: Number(blob.sizeBytes || 0),
+    encryption:
+      typeof blob.encryption === "string" && blob.encryption.length > 0
+        ? blob.encryption
+        : null,
+    metadata:
+      typeof blob.metadata === "object" &&
+      blob.metadata !== null &&
+      !Array.isArray(blob.metadata)
+        ? (blob.metadata as Record<string, unknown>)
+        : {},
+    createdAt: String(blob.createdAt || new Date().toISOString()),
+    updatedAt: String(blob.updatedAt || new Date().toISOString()),
+    deletedAt:
+      typeof blob.deletedAt === "string" && blob.deletedAt.length > 0
+        ? blob.deletedAt
+        : null,
+  };
+}
+
+function mapFileStorageItemForResponse(
+  entry: EngineFileStorageItemRecord,
+): FileStorageItemRecord {
+  const blob = mapFileStorageBlobForResponse(
+    entry.metadata ? (entry.metadata as Record<string, unknown>).blob : null,
+  );
+  return {
+    id: entry.id,
+    spaceId: entry.spaceId,
+    parentId: entry.parentId,
+    kind: entry.kind,
+    name: entry.name,
+    normalizedName: entry.normalizedName,
+    extension: entry.extension,
+    ownerUserId: entry.ownerUserId,
+    blobId: entry.blobId,
+    sizeBytes: entry.sizeBytes,
+    versionNo: entry.versionNo,
+    metadata: entry.metadata,
+    blob,
+    isDeleted: entry.isDeleted,
+    createdAt: entry.createdAt,
+    updatedAt: entry.updatedAt,
+    deletedAt: entry.deletedAt,
+  };
+}
+
+function mapFileStorageShareForResponse(
+  entry: EngineFileStorageShareRecord,
+): FileStorageShareRecord {
+  return {
+    id: entry.id,
+    itemId: entry.itemId,
+    subjectType: entry.subjectType,
+    subjectKey: entry.subjectKey,
+    permission: entry.permission,
+    canDownload: entry.canDownload,
+    canReshare: entry.canReshare,
+    expiresAt: entry.expiresAt,
+    revokedAt: entry.revokedAt,
+    metadata: entry.metadata,
+    createdAt: entry.createdAt,
+    updatedAt: entry.updatedAt,
+  };
+}
+
+function mapFileStorageActivityForResponse(
+  entry: EngineFileStorageActivityRecord,
+): FileStorageActivityRecord {
+  return {
+    id: entry.id,
+    spaceId: entry.spaceId,
+    itemId: entry.itemId,
+    actorUserId: entry.actorUserId,
+    action: entry.action,
+    metadata: entry.metadata,
+    createdAt: entry.createdAt,
+  };
+}
+
+function formatBytesLabel(sizeBytes: number | null): string {
+  if (sizeBytes === null || !Number.isFinite(sizeBytes) || sizeBytes <= 0) {
+    return "-";
+  }
+  if (sizeBytes < 1024) {
+    return `${sizeBytes} B`;
+  }
+  const kb = sizeBytes / 1024;
+  if (kb < 1024) {
+    return `${Math.round(kb)} KB`;
+  }
+  const mb = kb / 1024;
+  if (mb < 1024) {
+    return `${mb.toFixed(1)} MB`;
+  }
+  const gb = mb / 1024;
+  return `${gb.toFixed(1)} GB`;
+}
+
+function mapFileStorageItemToWorkspaceFile(
+  entry: FileStorageItemRecord,
+): WorkspaceFileRecord {
+  return {
+    id: entry.id,
+    name: entry.name,
+    kind: entry.kind,
+    extension: entry.extension || undefined,
+    owner: entry.ownerUserId || "Workspace",
+    updatedAt: entry.updatedAt,
+    updatedAtLabel: entry.updatedAt,
+    sizeBytes: entry.sizeBytes,
+    sizeLabel: formatBytesLabel(entry.sizeBytes),
+    shared: false,
+  };
+}
+
+function hasMaintenanceTicketUpdateFields(payload: {
+  title?: string;
+  summary?: string;
+  category?: string;
+  priority?: "low" | "medium" | "high";
+  dueAt?: string | null;
+  metadata?: Record<string, unknown>;
+  lifecycleMetadata?: Record<string, unknown>;
+  visibility?: {
+    scope: "organization" | "team" | "department" | "vendor";
+    team?: string;
+    department?: string;
+    vendorId?: string;
+  };
+}): boolean {
+  return (
+    payload.title !== undefined ||
+    payload.summary !== undefined ||
+    payload.category !== undefined ||
+    payload.priority !== undefined ||
+    payload.dueAt !== undefined ||
+    payload.metadata !== undefined ||
+    payload.lifecycleMetadata !== undefined ||
+    payload.visibility !== undefined
+  );
 }
 
 function toNullableString(value: unknown): string | null {
@@ -680,65 +1281,6 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
     return docs;
   }
 
-  function buildWorkspaceFiles(input: {
-    mode: PlatformMode;
-  }): WorkspaceFileRecord[] {
-    const now = Date.now();
-    const files: WorkspaceFileRecord[] = [
-      {
-        id: "file-workspace-playbooks",
-        name: "automation-playbooks",
-        kind: "folder",
-        owner: "Ops Team",
-        updatedAt: new Date(now - 3 * 60 * 60 * 1000).toISOString(),
-        updatedAtLabel: "3 hours ago",
-        sizeBytes: null,
-        sizeLabel: "-",
-        shared: true,
-      },
-      {
-        id: "file-first-success-checklist",
-        name: "first-success-checklist.pdf",
-        kind: "file",
-        extension: "pdf",
-        owner: "Product",
-        updatedAt: new Date(now - 60 * 60 * 1000).toISOString(),
-        updatedAtLabel: "1 hour ago",
-        sizeBytes: 1_468_000,
-        sizeLabel: "1.4 MB",
-        shared: true,
-      },
-      {
-        id: "file-simulator-payloads",
-        name: "workflow-simulator-payloads.json",
-        kind: "file",
-        extension: "json",
-        owner: "Automation Team",
-        updatedAt: new Date(now - 72 * 60 * 60 * 1000).toISOString(),
-        updatedAtLabel: "3 days ago",
-        sizeBytes: 84_000,
-        sizeLabel: "82 KB",
-        shared: false,
-      },
-    ];
-
-    if (input.mode === PLATFORM_MODES.PROTOTYPE) {
-      files.push({
-        id: "file-prototype-assets",
-        name: "prototype-demo-assets",
-        kind: "folder",
-        owner: "Design",
-        updatedAt: new Date(now - 20 * 60 * 1000).toISOString(),
-        updatedAtLabel: "20 minutes ago",
-        sizeBytes: null,
-        sizeLabel: "-",
-        shared: true,
-      });
-    }
-
-    return files;
-  }
-
   router.get("/health", (_req, res) => {
     const queueRuntime = runtime.eventQueue.getRuntimeState();
     // MODE: Prototype Mode | Live Mode
@@ -777,6 +1319,122 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
         userAgent: req.header("user-agent") || undefined,
       });
       res.status(200).json(session);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post("/auth/entry", async (req, res, next) => {
+    try {
+      const body = onboardingEntryLoginSchema.parse(req.body || {});
+      if (prototypeApi) {
+        res.status(200).json({
+          status: "authenticated",
+          session: prototypeApi.login({}),
+          organizations: [
+            {
+              tenantId: "prototype-tenant",
+              organizationId: "prototype-organization",
+              organizationSlug: "prototype-org",
+              organizationName: "Prototype Organization",
+              organizationCode: "PROTO001",
+              role: "owner",
+              status: "active",
+              team: null,
+              department: null,
+              workspaceId: "prototype-workspace",
+              workspaceSlug: "default",
+              workspaceName: "Default Workspace",
+              workspaceRole: "owner",
+            },
+          ],
+          requiresOrganizationSelection: false,
+        });
+        return;
+      }
+
+      const organizationMembershipService = requireOrganizationMembershipService(runtime);
+      const result = await organizationMembershipService.loginEntry(body, {
+        ipAddress: req.ip,
+        userAgent: req.header("user-agent") || undefined,
+      });
+      res.status(200).json(result);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post("/auth/onboarding/create-organization", async (req, res, next) => {
+    try {
+      const body = onboardingCreateOrganizationSchema.parse(req.body || {});
+      if (prototypeApi) {
+        const session = prototypeApi.login({
+          organizationSlug: "prototype-org",
+          workspaceSlug: "default",
+        });
+        res.status(201).json({
+          session,
+          organization: {
+            id: "prototype-organization",
+            tenantId: "prototype-tenant",
+            name: body.organizationName,
+            slug: body.organizationSlug || "prototype-org",
+            code: "PROTO001",
+          },
+          defaultInvite: {
+            token: "prototype-token",
+            link: "https://example.local/accept-invite?token=prototype-token",
+            expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+            usageLimit: body.defaultInviteUsageLimit || 100,
+            role: body.defaultInviteRole || "member",
+          },
+        });
+        return;
+      }
+
+      const organizationMembershipService = requireOrganizationMembershipService(runtime);
+      const result = await organizationMembershipService.createOrganizationAndSignIn(body, {
+        ipAddress: req.ip,
+        userAgent: req.header("user-agent") || undefined,
+      });
+      res.status(201).json(result);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post("/auth/onboarding/join-organization", async (req, res, next) => {
+    try {
+      const body = onboardingJoinOrganizationSchema.parse(req.body || {});
+      if (prototypeApi) {
+        const session = prototypeApi.login({
+          organizationSlug: body.organizationSlug || "prototype-org",
+          workspaceSlug: "default",
+        });
+        res.status(200).json({
+          status: "joined",
+          session,
+          organization: {
+            id: "prototype-organization",
+            slug: body.organizationSlug || "prototype-org",
+            code: body.organizationCode || body.joinCode || "PROTO001",
+            name: "Prototype Organization",
+          },
+          assignment: {
+            role: "member",
+            team: null,
+            department: null,
+          },
+        });
+        return;
+      }
+
+      const organizationMembershipService = requireOrganizationMembershipService(runtime);
+      const result = await organizationMembershipService.joinOrganization(body, {
+        ipAddress: req.ip,
+        userAgent: req.header("user-agent") || undefined,
+      });
+      res.status(200).json(result);
     } catch (error) {
       next(error);
     }
@@ -995,15 +1653,261 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
         userId: req.auth!.user.id,
         organizationId: req.auth!.scope.organizationId,
       });
+      const organizations = runtime.organizationMembershipService
+        ? await runtime.organizationMembershipService.listUserOrganizations(req.auth!.user.id)
+        : [];
       res.json({
         user: req.auth!.user,
         scope: req.auth!.scope,
         workspaces,
+        organizations,
       });
     } catch (error) {
       next(error);
     }
   });
+
+  router.get("/auth/organizations", requireAuth, async (req, res, next) => {
+    try {
+      if (prototypeApi) {
+        const me = prototypeApi.me();
+        res.json({
+          organizations: [
+            {
+              tenantId: me.scope.tenantId,
+              organizationId: me.scope.organizationId,
+              organizationSlug: me.scope.organizationSlug,
+              organizationName: "Prototype Organization",
+              organizationCode: "PROTO001",
+              role: me.scope.orgRole,
+              status: "active",
+              team: null,
+              department: null,
+              workspaceId: me.scope.workspaceId,
+              workspaceSlug: me.scope.workspaceSlug,
+              workspaceName: "Default Workspace",
+              workspaceRole: me.scope.workspaceRole,
+            },
+          ],
+        });
+        return;
+      }
+
+      const organizationMembershipService = requireOrganizationMembershipService(runtime);
+      const organizations = await organizationMembershipService.listUserOrganizations(
+        req.auth!.user.id,
+      );
+      res.json({
+        organizations,
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post("/auth/switch-organization", requireAuth, async (req, res, next) => {
+    try {
+      const body = organizationSwitchSchema.parse(req.body || {});
+      if (prototypeApi) {
+        const session = prototypeApi.login({
+          organizationSlug: body.organizationSlug,
+          workspaceSlug: body.workspaceSlug,
+        });
+        res.status(200).json(session);
+        return;
+      }
+
+      const organizationMembershipService = requireOrganizationMembershipService(runtime);
+      const session = await organizationMembershipService.switchOrganization(
+        {
+          userId: req.auth!.user.id,
+          organizationId: body.organizationId,
+          organizationSlug: body.organizationSlug,
+          workspaceSlug: body.workspaceSlug,
+        },
+        {
+          ipAddress: req.ip,
+          userAgent: req.header("user-agent") || undefined,
+        },
+      );
+      res.status(200).json(session);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get(
+    "/organization/invite-tokens",
+    requireRole(["owner", "admin"]),
+    async (req, res, next) => {
+      try {
+        if (prototypeApi) {
+          res.status(200).json({
+            tokens: [],
+          });
+          return;
+        }
+
+        const organizationMembershipService = requireOrganizationMembershipService(runtime);
+        const limitValue = resolveOptionalQueryParam(
+          req.query.limit as string | string[] | undefined,
+        );
+        const limit = limitValue ? Number.parseInt(limitValue, 10) : undefined;
+        const scope = req.auth!.scope;
+        const tokens = await organizationMembershipService.listInviteTokens({
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          limit: Number.isFinite(limit || Number.NaN) ? limit : undefined,
+        });
+        res.status(200).json({
+          tokens,
+        });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.post(
+    "/organization/invite-tokens",
+    requireRole(["owner", "admin"]),
+    async (req, res, next) => {
+      try {
+        const body = organizationInviteTokenCreateSchema.parse(req.body || {});
+        if (prototypeApi) {
+          res.status(201).json({
+            id: "prototype-token-id",
+            token: "prototype-token",
+            link: "https://example.local/accept-invite?token=prototype-token",
+            role: body.role || "member",
+            team: body.team || null,
+            department: body.department || null,
+            email: body.email || null,
+            usageLimit: body.usageLimit || 100,
+            usageCount: 0,
+            status: "active",
+            expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+            createdByUserId: req.auth!.user.id,
+          });
+          return;
+        }
+
+        const organizationMembershipService = requireOrganizationMembershipService(runtime);
+        const scope = req.auth!.scope;
+        const result = await organizationMembershipService.createInviteToken({
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          actorUserId: req.auth!.user.id,
+          role: body.role,
+          team: body.team,
+          department: body.department,
+          email: body.email,
+          label: body.label,
+          expiresInHours: body.expiresInHours,
+          usageLimit: body.usageLimit,
+        });
+        res.status(201).json(result);
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.post(
+    "/organization/invite-tokens/:tokenId/revoke",
+    requireRole(["owner", "admin"]),
+    async (req, res, next) => {
+      try {
+        const tokenId = resolveRouteParam(req.params.tokenId);
+        const body = organizationInviteTokenRevokeSchema.parse(req.body || {});
+        if (prototypeApi) {
+          res.status(200).json({
+            revoked: true,
+          });
+          return;
+        }
+        const scope = req.auth!.scope;
+        const organizationMembershipService = requireOrganizationMembershipService(runtime);
+        const revoked = await organizationMembershipService.revokeInviteToken({
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          tokenId,
+          actorUserId: req.auth!.user.id,
+          reason: body.reason,
+        });
+        res.status(200).json({
+          revoked,
+        });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.get(
+    "/organization/join-requests",
+    requireRole(["owner", "admin"]),
+    async (req, res, next) => {
+      try {
+        const query = organizationJoinRequestsQuerySchema.parse(req.query || {});
+        if (prototypeApi) {
+          res.status(200).json({
+            joinRequests: [],
+          });
+          return;
+        }
+        const scope = req.auth!.scope;
+        const organizationMembershipService = requireOrganizationMembershipService(runtime);
+        const joinRequests = await organizationMembershipService.listJoinRequests({
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          status: query.status,
+          limit: query.limit,
+        });
+        res.status(200).json({
+          joinRequests,
+        });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.post(
+    "/organization/join-requests/:joinRequestId/decision",
+    requireRole(["owner", "admin"]),
+    async (req, res, next) => {
+      try {
+        const joinRequestId = resolveRouteParam(req.params.joinRequestId);
+        const body = organizationJoinRequestDecisionSchema.parse(req.body || {});
+        if (prototypeApi) {
+          res.status(200).json({
+            id: joinRequestId,
+            status: body.decision,
+          });
+          return;
+        }
+        const scope = req.auth!.scope;
+        const organizationMembershipService = requireOrganizationMembershipService(runtime);
+        const decision = await organizationMembershipService.decideJoinRequest({
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          joinRequestId,
+          actorUserId: req.auth!.user.id,
+          decision: body.decision,
+          role: body.role,
+          team: body.team,
+          department: body.department,
+          note: body.note,
+        });
+        res.status(200).json({
+          decision,
+        });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
 
   router.get(
     "/auth/email-logs",
@@ -1236,6 +2140,1016 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
     },
   );
 
+  router.get("/communication/channels", requireAuth, async (req, res, next) => {
+    try {
+      const query = communicationThreadsQuerySchema.parse({
+        ...normalizeListQueryRecord(req.query as Record<string, unknown>),
+        channelType: resolveOptionalQueryParam(
+          req.query.channelType as string | string[] | undefined,
+        ),
+        archived: resolveOptionalQueryParam(
+          req.query.archived as string | string[] | undefined,
+        ),
+        team: resolveOptionalQueryParam(req.query.team as string | string[] | undefined),
+      });
+
+      if (prototypeApi) {
+        res.json({
+          ...toEmptyListEnvelope(query),
+          channels: [],
+        });
+        return;
+      }
+
+      const scope = req.auth!.scope;
+      const actor = await toMaintenanceActorFromAuth(runtime, req);
+      const service = requireCommunicationService(runtime);
+      const { channelType, archived, team, ...listQuery } = query;
+      const result = await service.listChannels({
+        scope: {
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+        },
+        actor,
+        channelType,
+        archived,
+        team,
+        query: listQuery,
+      });
+      const rows = result.rows.map(mapCommunicationChannelForResponse);
+
+      res.json({
+        ...toStandardListEnvelope({
+          ...result,
+          rows,
+        }),
+        channels: rows,
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post("/communication/channels", requireAuth, async (req, res, next) => {
+    try {
+      const body = communicationThreadCreateSchema.parse(req.body || {});
+
+      if (prototypeApi) {
+        res.status(201).json({
+          channel: {
+            id: "prototype-communication-channel",
+            title: body.title,
+            channelType: body.channelType || "channel",
+            topic: body.topic || null,
+            archived: false,
+            participantsCount: body.participantUserIds?.length || 1,
+            unreadCount: 0,
+            lastMessagePreview: null,
+            lastMessageAt: null,
+            status: "offline",
+            updatedAt: new Date().toISOString(),
+            updatedAtLabel: new Date().toISOString(),
+            team: body.team || null,
+            metadata: body.metadata || {},
+            messageCount: 0,
+            createdByUserId: req.auth!.user.id,
+            isMember: true,
+            membershipRole: "owner",
+          } satisfies CommunicationThreadRecord,
+        });
+        return;
+      }
+
+      const scope = req.auth!.scope;
+      const actor = await toMaintenanceActorFromAuth(runtime, req);
+      const service = requireCommunicationService(runtime);
+      const channel = await service.createChannel({
+        scope: {
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+        },
+        actor,
+        data: {
+          title: body.title,
+          channelType: body.channelType,
+          topic: body.topic,
+          team: body.team,
+          participantUserIds: body.participantUserIds,
+          metadata: body.metadata,
+        },
+      });
+
+      res.status(201).json({
+        channel: mapCommunicationChannelForResponse(channel),
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get("/communication/channels/:channelId/messages", requireAuth, async (req, res, next) => {
+    try {
+      const channelId = resolveRouteParam(req.params.channelId);
+      const query = communicationMessagesQuerySchema.parse({
+        ...normalizeListQueryRecord(req.query as Record<string, unknown>),
+        from: resolveOptionalQueryParam(req.query.from as string | string[] | undefined),
+        to: resolveOptionalQueryParam(req.query.to as string | string[] | undefined),
+      });
+
+      if (prototypeApi) {
+        res.json({
+          ...toEmptyListEnvelope(query),
+          messages: [],
+        });
+        return;
+      }
+
+      const scope = req.auth!.scope;
+      const actor = await toMaintenanceActorFromAuth(runtime, req);
+      const service = requireCommunicationService(runtime);
+      const { from, to, ...listQuery } = query;
+      const result = await service.listMessages({
+        scope: {
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+        },
+        actor,
+        channelId,
+        from,
+        to,
+        query: listQuery,
+      });
+      const rows = result.rows.map(mapCommunicationMessageForResponse);
+
+      res.json({
+        ...toStandardListEnvelope({
+          ...result,
+          rows,
+        }),
+        messages: rows,
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post("/communication/channels/:channelId/messages", requireAuth, async (req, res, next) => {
+    try {
+      const channelId = resolveRouteParam(req.params.channelId);
+      const body = communicationMessageCreateSchema.parse(req.body || {});
+
+      if (prototypeApi) {
+        const now = new Date().toISOString();
+        res.status(201).json({
+          idempotencyReplay: false,
+          message: {
+            id: "prototype-communication-message",
+            threadId: channelId,
+            authorUserId: req.auth!.user.id,
+            authorName: req.auth!.user.fullName || req.auth!.user.email,
+            body: body.body,
+            createdAt: now,
+            createdAtLabel: now,
+            metadata: body.metadata || {},
+            mentions: [],
+            idempotencyKey: body.idempotencyKey || null,
+            editedAt: null,
+            updatedAt: now,
+          } satisfies CommunicationMessageRecord,
+        });
+        return;
+      }
+
+      const scope = req.auth!.scope;
+      const actor = await toMaintenanceActorFromAuth(runtime, req);
+      const service = requireCommunicationService(runtime);
+      const result = await service.createMessage({
+        scope: {
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+        },
+        actor,
+        channelId,
+        data: {
+          body: body.body,
+          mentionUserIds: body.mentionUserIds,
+          metadata: body.metadata,
+          idempotencyKey: body.idempotencyKey,
+        },
+      });
+
+      res.status(201).json({
+        idempotencyReplay: result.idempotencyReplay,
+        message: mapCommunicationMessageForResponse(result.message),
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post("/communication/channels/:channelId/read", requireAuth, async (req, res, next) => {
+    try {
+      const channelId = resolveRouteParam(req.params.channelId);
+
+      if (prototypeApi) {
+        res.status(202).json({ ok: true });
+        return;
+      }
+
+      const scope = req.auth!.scope;
+      const actor = await toMaintenanceActorFromAuth(runtime, req);
+      const service = requireCommunicationService(runtime);
+      await service.markChannelRead({
+        scope: {
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+        },
+        actor,
+        channelId,
+      });
+
+      res.status(202).json({ ok: true });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get(
+    "/communication/channels/:channelId/meeting-sessions",
+    requireAuth,
+    async (req, res, next) => {
+      try {
+        const channelId = resolveRouteParam(req.params.channelId);
+        const query = communicationMeetingSessionsQuerySchema.parse({
+          ...normalizeListQueryRecord(req.query as Record<string, unknown>),
+          from: resolveOptionalQueryParam(req.query.from as string | string[] | undefined),
+          to: resolveOptionalQueryParam(req.query.to as string | string[] | undefined),
+        });
+
+        if (prototypeApi) {
+          res.json({
+            ...toEmptyListEnvelope(query),
+            sessions: [],
+          });
+          return;
+        }
+
+        const scope = req.auth!.scope;
+        const actor = await toMaintenanceActorFromAuth(runtime, req);
+        const service = requireCommunicationService(runtime);
+        const { from, to, ...listQuery } = query;
+        const result = await service.listMeetingSessions({
+          scope: {
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+          },
+          actor,
+          channelId,
+          from,
+          to,
+          query: listQuery,
+        });
+        const rows = result.rows.map(mapCommunicationMeetingSessionForResponse);
+
+        res.json({
+          ...toStandardListEnvelope({
+            ...result,
+            rows,
+          }),
+          sessions: rows,
+        });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.post(
+    "/communication/channels/:channelId/meeting-sessions",
+    requireAuth,
+    async (req, res, next) => {
+      try {
+        const channelId = resolveRouteParam(req.params.channelId);
+        const body = communicationMeetingSessionCreateSchema.parse(req.body || {});
+
+        if (prototypeApi) {
+          const now = new Date().toISOString();
+          res.status(201).json({
+            session: {
+              id: "prototype-meeting-session",
+              threadId: channelId,
+              title: body.title,
+              startedAt: body.startedAt,
+              endedAt: body.endedAt || null,
+              createdByUserId: req.auth!.user.id,
+              participantUserIds: body.participantUserIds || [req.auth!.user.id],
+              transcriptText: body.transcriptText || null,
+              summaryText: body.summaryText || null,
+              metadata: body.metadata || {},
+              createdAt: now,
+              updatedAt: now,
+            } satisfies CommunicationMeetingSessionRecord,
+          });
+          return;
+        }
+
+        const scope = req.auth!.scope;
+        const actor = await toMaintenanceActorFromAuth(runtime, req);
+        const service = requireCommunicationService(runtime);
+        const session = await service.createMeetingSession({
+          scope: {
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+          },
+          actor,
+          channelId,
+          data: {
+            title: body.title,
+            startedAt: body.startedAt,
+            endedAt: body.endedAt,
+            participantUserIds: body.participantUserIds,
+            transcriptText: body.transcriptText,
+            summaryText: body.summaryText,
+            metadata: body.metadata,
+          },
+        });
+
+        res.status(201).json({
+          session: mapCommunicationMeetingSessionForResponse(session),
+        });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.get(
+    "/communication/channels/:channelId/ai-summaries",
+    requireAuth,
+    async (req, res, next) => {
+      try {
+        const channelId = resolveRouteParam(req.params.channelId);
+        const query = communicationAiSummariesQuerySchema.parse({
+          ...normalizeListQueryRecord(req.query as Record<string, unknown>),
+          status: resolveOptionalQueryParam(req.query.status as string | string[] | undefined),
+          sourceType: resolveOptionalQueryParam(
+            req.query.sourceType as string | string[] | undefined,
+          ),
+        });
+
+        if (prototypeApi) {
+          res.json({
+            ...toEmptyListEnvelope(query),
+            summaries: [],
+          });
+          return;
+        }
+
+        const scope = req.auth!.scope;
+        const actor = await toMaintenanceActorFromAuth(runtime, req);
+        const service = requireCommunicationService(runtime);
+        const { status, sourceType, ...listQuery } = query;
+        const result = await service.listAiSummaryRequests({
+          scope: {
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+          },
+          actor,
+          channelId,
+          status,
+          sourceType,
+          query: listQuery,
+        });
+        const rows = result.rows.map(mapCommunicationAiSummaryForResponse);
+
+        res.json({
+          ...toStandardListEnvelope({
+            ...result,
+            rows,
+          }),
+          summaries: rows,
+        });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.post(
+    "/communication/channels/:channelId/ai-summaries",
+    requireAuth,
+    async (req, res, next) => {
+      try {
+        const channelId = resolveRouteParam(req.params.channelId);
+        const body = communicationAiSummaryRequestSchema.parse(req.body || {});
+
+        if (prototypeApi) {
+          const now = new Date().toISOString();
+          res.status(202).json({
+            summary: {
+              id: "prototype-ai-summary",
+              threadId: channelId,
+              sourceType: body.sourceType || "channel_window",
+              sourceRefId: body.sourceRefId || null,
+              status: "queued",
+              requestedByUserId: req.auth!.user.id,
+              prompt: body.prompt || null,
+              outputText: null,
+              failureReason: null,
+              metadata: {
+                ...(body.metadata || {}),
+                from: body.from || null,
+                to: body.to || null,
+              },
+              createdAt: now,
+              updatedAt: now,
+              processedAt: null,
+            } satisfies CommunicationAiSummaryRequestRecord,
+          });
+          return;
+        }
+
+        const scope = req.auth!.scope;
+        const actor = await toMaintenanceActorFromAuth(runtime, req);
+        const service = requireCommunicationService(runtime);
+        const summary = await service.requestAiSummary({
+          scope: {
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+          },
+          actor,
+          channelId,
+          data: {
+            sourceType: body.sourceType,
+            sourceRefId: body.sourceRefId,
+            from: body.from,
+            to: body.to,
+            prompt: body.prompt,
+            metadata: body.metadata,
+          },
+        });
+
+        res.status(202).json({
+          summary: mapCommunicationAiSummaryForResponse(summary),
+        });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.get("/file-storage/spaces", requireAuth, async (req, res, next) => {
+    try {
+      const query = fileStorageSpacesQuerySchema.parse({
+        ...normalizeListQueryRecord(req.query as Record<string, unknown>),
+        spaceType: resolveOptionalQueryParam(
+          req.query.spaceType as string | string[] | undefined,
+        ),
+        team: resolveOptionalQueryParam(req.query.team as string | string[] | undefined),
+        includeArchived: resolveOptionalQueryParam(
+          req.query.includeArchived as string | string[] | undefined,
+        ),
+        ensureDefaults: resolveOptionalQueryParam(
+          req.query.ensureDefaults as string | string[] | undefined,
+        ),
+      });
+
+      if (prototypeApi) {
+        res.json({
+          ...toEmptyListEnvelope(query),
+          spaces: [],
+        });
+        return;
+      }
+
+      const scope = req.auth!.scope;
+      const actor = await toMaintenanceActorFromAuth(runtime, req);
+      const service = requireFileStorageService(runtime);
+      const { spaceType, team, includeArchived, ensureDefaults, ...listQuery } = query;
+      const result = await service.listSpaces({
+        scope: {
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+        },
+        actor,
+        spaceType,
+        team,
+        includeArchived,
+        ensureDefaults,
+        query: listQuery,
+      });
+      const rows = result.rows.map(mapFileStorageSpaceForResponse);
+
+      res.json({
+        ...toStandardListEnvelope({
+          ...result,
+          rows,
+        }),
+        spaces: rows,
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post("/file-storage/spaces", requireAuth, async (req, res, next) => {
+    try {
+      const body = fileStorageSpaceCreateSchema.parse(req.body || {});
+
+      if (prototypeApi) {
+        const now = new Date().toISOString();
+        res.status(201).json({
+          space: {
+            id: "prototype-file-storage-space",
+            spaceType: body.spaceType,
+            slug: body.slug || "prototype-space",
+            title: body.title,
+            team: body.team || null,
+            ownerUserId: body.ownerUserId || req.auth!.user.id,
+            visibilityPolicy: body.visibilityPolicy || "members",
+            metadata: body.metadata || {},
+            createdAt: now,
+            updatedAt: now,
+            archivedAt: null,
+          } satisfies FileStorageSpaceRecord,
+        });
+        return;
+      }
+
+      const scope = req.auth!.scope;
+      const actor = await toMaintenanceActorFromAuth(runtime, req);
+      const service = requireFileStorageService(runtime);
+      const space = await service.createSpace({
+        scope: {
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+        },
+        actor,
+        data: {
+          spaceType: body.spaceType,
+          slug: body.slug,
+          title: body.title,
+          team: body.team,
+          ownerUserId: body.ownerUserId || actor.userId || undefined,
+          visibilityPolicy: body.visibilityPolicy,
+          metadata: body.metadata,
+        },
+      });
+
+      res.status(201).json({
+        space: mapFileStorageSpaceForResponse(space),
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get("/file-storage/items", requireAuth, async (req, res, next) => {
+    try {
+      const query = fileStorageItemsQuerySchema.parse({
+        ...normalizeListQueryRecord(req.query as Record<string, unknown>),
+        spaceId: resolveOptionalQueryParam(req.query.spaceId as string | string[] | undefined),
+        parentId: resolveOptionalQueryParam(req.query.parentId as string | string[] | undefined),
+        kind: resolveOptionalQueryParam(req.query.kind as string | string[] | undefined),
+        includeDeleted: resolveOptionalQueryParam(
+          req.query.includeDeleted as string | string[] | undefined,
+        ),
+      });
+
+      if (prototypeApi) {
+        res.json({
+          ...toEmptyListEnvelope(query),
+          items: [],
+        });
+        return;
+      }
+
+      const scope = req.auth!.scope;
+      const actor = await toMaintenanceActorFromAuth(runtime, req);
+      const service = requireFileStorageService(runtime);
+      const { spaceId, parentId, kind, includeDeleted, ...listQuery } = query;
+      const result = await service.listItems({
+        scope: {
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+        },
+        actor,
+        spaceId,
+        parentId,
+        kind,
+        includeDeleted,
+        query: listQuery,
+      });
+      const rows = result.rows.map(mapFileStorageItemForResponse);
+
+      res.json({
+        ...toStandardListEnvelope({
+          ...result,
+          rows,
+        }),
+        items: rows,
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post("/file-storage/items", requireAuth, async (req, res, next) => {
+    try {
+      const body = fileStorageItemCreateSchema.parse(req.body || {});
+
+      if (prototypeApi) {
+        const now = new Date().toISOString();
+        res.status(201).json({
+          item: {
+            id: "prototype-file-storage-item",
+            spaceId: body.spaceId,
+            parentId: body.parentId || null,
+            kind: body.kind,
+            name: body.name,
+            normalizedName: body.name.trim().toLowerCase(),
+            extension: body.extension || null,
+            ownerUserId: body.ownerUserId || req.auth!.user.id,
+            blobId: null,
+            sizeBytes: body.blob?.sizeBytes ?? null,
+            versionNo: 1,
+            metadata: body.metadata || {},
+            blob: body.blob
+              ? {
+                  id: "prototype-blob",
+                  storageProvider: body.blob.storageProvider || "internal",
+                  storageBucket: body.blob.storageBucket || "default",
+                  storageKey: body.blob.storageKey,
+                  contentType: body.blob.contentType || null,
+                  checksumSha256: body.blob.checksumSha256 || null,
+                  sizeBytes: body.blob.sizeBytes,
+                  encryption: body.blob.encryption || null,
+                  metadata: body.blob.metadata || {},
+                  createdAt: now,
+                  updatedAt: now,
+                  deletedAt: null,
+                }
+              : null,
+            isDeleted: false,
+            createdAt: now,
+            updatedAt: now,
+            deletedAt: null,
+          } satisfies FileStorageItemRecord,
+        });
+        return;
+      }
+
+      const scope = req.auth!.scope;
+      const actor = await toMaintenanceActorFromAuth(runtime, req);
+      const service = requireFileStorageService(runtime);
+      const item = await service.createItem({
+        scope: {
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+        },
+        actor,
+        data: {
+          spaceId: body.spaceId,
+          parentId: body.parentId,
+          kind: body.kind,
+          name: body.name,
+          extension: body.extension,
+          ownerUserId: body.ownerUserId,
+          metadata: body.metadata,
+          blob: body.blob
+            ? {
+                storageProvider: body.blob.storageProvider,
+                storageBucket: body.blob.storageBucket,
+                storageKey: body.blob.storageKey,
+                contentType: body.blob.contentType,
+                checksumSha256: body.blob.checksumSha256,
+                sizeBytes: body.blob.sizeBytes,
+                encryption: body.blob.encryption,
+                metadata: body.blob.metadata,
+              }
+            : undefined,
+        },
+      });
+
+      res.status(201).json({
+        item: mapFileStorageItemForResponse(item),
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.patch("/file-storage/items/:itemId", requireAuth, async (req, res, next) => {
+    try {
+      const itemId = resolveRouteParam(req.params.itemId);
+      const body = fileStorageItemUpdateSchema.parse(req.body || {});
+
+      if (prototypeApi) {
+        res.json({
+          item: {
+            id: itemId,
+            ...body,
+          },
+        });
+        return;
+      }
+
+      const scope = req.auth!.scope;
+      const actor = await toMaintenanceActorFromAuth(runtime, req);
+      const service = requireFileStorageService(runtime);
+      const item = await service.updateItem({
+        scope: {
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+        },
+        actor,
+        itemId,
+        data: {
+          parentId: body.parentId,
+          name: body.name,
+          extension: body.extension,
+          ownerUserId: body.ownerUserId,
+          metadata: body.metadata,
+          blob: body.blob
+            ? {
+                storageProvider: body.blob.storageProvider,
+                storageBucket: body.blob.storageBucket,
+                storageKey: body.blob.storageKey,
+                contentType: body.blob.contentType,
+                checksumSha256: body.blob.checksumSha256,
+                sizeBytes: body.blob.sizeBytes,
+                encryption: body.blob.encryption,
+                metadata: body.blob.metadata,
+              }
+            : undefined,
+        },
+      });
+
+      res.json({
+        item: mapFileStorageItemForResponse(item),
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.delete("/file-storage/items/:itemId", requireAuth, async (req, res, next) => {
+    try {
+      const itemId = resolveRouteParam(req.params.itemId);
+
+      if (prototypeApi) {
+        res.status(202).json({
+          affectedCount: 1,
+          item: {
+            id: itemId,
+            isDeleted: true,
+          },
+        });
+        return;
+      }
+
+      const scope = req.auth!.scope;
+      const actor = await toMaintenanceActorFromAuth(runtime, req);
+      const service = requireFileStorageService(runtime);
+      const result = await service.deleteItem({
+        scope: {
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+        },
+        actor,
+        itemId,
+      });
+
+      res.status(202).json({
+        affectedCount: result.affectedCount,
+        item: mapFileStorageItemForResponse(result.item),
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get(
+    "/file-storage/items/:itemId/shares",
+    requireAuth,
+    async (req, res, next) => {
+      try {
+        const itemId = resolveRouteParam(req.params.itemId);
+        const query = fileStorageSharesQuerySchema.parse({
+          ...normalizeListQueryRecord(req.query as Record<string, unknown>),
+          includeRevoked: resolveOptionalQueryParam(
+            req.query.includeRevoked as string | string[] | undefined,
+          ),
+        });
+
+        if (prototypeApi) {
+          res.json({
+            ...toEmptyListEnvelope(query),
+            shares: [],
+          });
+          return;
+        }
+
+        const scope = req.auth!.scope;
+        const actor = await toMaintenanceActorFromAuth(runtime, req);
+        const service = requireFileStorageService(runtime);
+        const { includeRevoked, ...listQuery } = query;
+        const result = await service.listShares({
+          scope: {
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+          },
+          actor,
+          itemId,
+          includeRevoked,
+          query: listQuery,
+        });
+        const rows = result.rows.map(mapFileStorageShareForResponse);
+
+        res.json({
+          ...toStandardListEnvelope({
+            ...result,
+            rows,
+          }),
+          shares: rows,
+        });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.post(
+    "/file-storage/items/:itemId/shares",
+    requireAuth,
+    async (req, res, next) => {
+      try {
+        const itemId = resolveRouteParam(req.params.itemId);
+        const body = fileStorageShareCreateSchema.parse(req.body || {});
+
+        if (prototypeApi) {
+          const now = new Date().toISOString();
+          res.status(201).json({
+            share: {
+              id: "prototype-file-share",
+              itemId,
+              subjectType: body.subjectType,
+              subjectKey: body.subjectKey,
+              permission: body.permission || "viewer",
+              canDownload: body.canDownload ?? true,
+              canReshare: body.canReshare ?? false,
+              expiresAt: body.expiresAt || null,
+              revokedAt: null,
+              metadata: body.metadata || {},
+              createdAt: now,
+              updatedAt: now,
+            } satisfies FileStorageShareRecord,
+          });
+          return;
+        }
+
+        const scope = req.auth!.scope;
+        const actor = await toMaintenanceActorFromAuth(runtime, req);
+        const service = requireFileStorageService(runtime);
+        const share = await service.shareItem({
+          scope: {
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+          },
+          actor,
+          itemId,
+          data: {
+            subjectType: body.subjectType,
+            subjectKey: body.subjectKey,
+            permission: body.permission,
+            canDownload: body.canDownload,
+            canReshare: body.canReshare,
+            expiresAt: body.expiresAt,
+            metadata: body.metadata,
+          },
+        });
+
+        res.status(201).json({
+          share: mapFileStorageShareForResponse(share),
+        });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.delete(
+    "/file-storage/items/:itemId/shares/:shareId",
+    requireAuth,
+    async (req, res, next) => {
+      try {
+        const itemId = resolveRouteParam(req.params.itemId);
+        const shareId = resolveRouteParam(req.params.shareId);
+        const body = fileStorageShareRevokeSchema.parse(req.body || {});
+
+        if (prototypeApi) {
+          res.status(202).json({
+            share: {
+              id: shareId,
+              itemId,
+              revokedAt: new Date().toISOString(),
+            },
+          });
+          return;
+        }
+
+        const scope = req.auth!.scope;
+        const actor = await toMaintenanceActorFromAuth(runtime, req);
+        const service = requireFileStorageService(runtime);
+        const share = await service.revokeShare({
+          scope: {
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+          },
+          actor,
+          itemId,
+          shareId,
+          reason: body.reason,
+        });
+
+        res.status(202).json({
+          share: mapFileStorageShareForResponse(share),
+        });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.get("/file-storage/activity", requireAuth, async (req, res, next) => {
+    try {
+      const query = fileStorageActivityQuerySchema.parse({
+        ...normalizeListQueryRecord(req.query as Record<string, unknown>),
+        spaceId: resolveOptionalQueryParam(req.query.spaceId as string | string[] | undefined),
+        itemId: resolveOptionalQueryParam(req.query.itemId as string | string[] | undefined),
+        action: resolveOptionalQueryParam(req.query.action as string | string[] | undefined),
+        from: resolveOptionalQueryParam(req.query.from as string | string[] | undefined),
+        to: resolveOptionalQueryParam(req.query.to as string | string[] | undefined),
+      });
+
+      if (prototypeApi) {
+        res.json({
+          ...toEmptyListEnvelope(query),
+          activity: [],
+        });
+        return;
+      }
+
+      const scope = req.auth!.scope;
+      const actor = await toMaintenanceActorFromAuth(runtime, req);
+      const service = requireFileStorageService(runtime);
+      const { spaceId, itemId, action, from, to, ...listQuery } = query;
+      const result = await service.listActivity({
+        scope: {
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+        },
+        actor,
+        spaceId,
+        itemId,
+        action,
+        from,
+        to,
+        query: listQuery,
+      });
+      const rows = result.rows.map(mapFileStorageActivityForResponse);
+
+      res.json({
+        ...toStandardListEnvelope({
+          ...result,
+          rows,
+        }),
+        activity: rows,
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.get("/knowledge/docs", requireAuth, async (req, res, next) => {
     try {
       const query = workspaceKnowledgeDocsQuerySchema.parse({
@@ -1298,25 +3212,1059 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
         return;
       }
 
-      let files = buildWorkspaceFiles({
-        mode: platformMode,
-      });
-      if (query.kind) {
-        files = files.filter((entry) => entry.kind === query.kind);
-      }
-      if (query.shared !== undefined) {
-        files = files.filter((entry) => entry.shared === query.shared);
-      }
-      const result = applyInMemoryStandardList({
-        rows: files.map((entry) => ({ ...entry })),
-        query,
-        searchFields: ["name", "kind", "owner", "extension", "sizeLabel"],
-        defaultSort: [{ field: "updatedAt", direction: "desc" }],
+      const scope = req.auth!.scope;
+      const actor = await toMaintenanceActorFromAuth(runtime, req);
+      const service = requireFileStorageService(runtime);
+      const space = await service.getOrCreateDefaultSpace({
+        scope: {
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+        },
+        actor,
+        preference: "organization",
       });
 
+      if (query.shared === true) {
+        res.json({
+          ...toEmptyListEnvelope(query),
+          files: [],
+        });
+        return;
+      }
+
+      const { kind, ...listQuery } = query;
+      const result = await service.listItems({
+        scope: {
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+        },
+        actor,
+        spaceId: space.id,
+        kind,
+        query: listQuery,
+      });
+      const rows = result.rows.map(mapFileStorageItemToWorkspaceFile);
+
       res.json({
-        ...toStandardListEnvelope(result),
-        files: result.rows,
+        ...toStandardListEnvelope({
+          ...result,
+          rows,
+        }),
+        files: rows,
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get("/calendar-events", requireAuth, async (req, res, next) => {
+    try {
+      const query = calendarEventsQuerySchema.parse({
+        ...normalizeListQueryRecord(req.query as Record<string, unknown>),
+        source: resolveOptionalQueryParam(req.query.source as string | string[] | undefined),
+        status: resolveOptionalQueryParam(req.query.status as string | string[] | undefined),
+        from: resolveOptionalQueryParam(req.query.from as string | string[] | undefined),
+        to: resolveOptionalQueryParam(req.query.to as string | string[] | undefined),
+      });
+
+      if (prototypeApi) {
+        res.json({
+          ...toEmptyListEnvelope(query),
+          events: [],
+        });
+        return;
+      }
+
+      const scope = req.auth!.scope;
+      const actor = await toMaintenanceActorFromAuth(runtime, req);
+      const service = requireCalendarAggregationService(runtime);
+      const { source, status, from, to, ...listQuery } = query;
+      const result = await service.listEvents({
+        scope: {
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+        },
+        actor,
+        source,
+        status,
+        from,
+        to,
+        query: listQuery,
+      });
+      const rows = result.rows.map(mapCalendarEventForResponse);
+
+      res.json({
+        ...toStandardListEnvelope({
+          ...result,
+          rows,
+        }),
+        events: rows,
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post("/calendar-events", requireRole(["owner", "admin"]), async (req, res, next) => {
+    try {
+      const body = calendarEventCreateSchema.parse(req.body || {});
+      if (prototypeApi) {
+        res.status(201).json({
+          event: {
+            id: "prototype-calendar-event",
+            source: body.source || "organization",
+            sourceId: null,
+            title: body.title,
+            startsAt: body.startsAt,
+            endsAt: body.endsAt || null,
+            status: body.status || "scheduled",
+            description: body.description || null,
+            metadata: body.metadata || {},
+            audienceScope: body.audience?.scope || "organization",
+            audienceTeam: body.audience?.team || null,
+            audienceDepartment: body.audience?.department || null,
+            audienceVendorId: body.audience?.vendorId || null,
+            createdByUserId: req.auth!.user.id,
+            assigneeUserId: null,
+            isDerived: false,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          },
+        });
+        return;
+      }
+
+      const scope = req.auth!.scope;
+      const actor = await toMaintenanceActorFromAuth(runtime, req);
+      const service = requireCalendarAggregationService(runtime);
+      const event = await service.createManualEvent({
+        scope: {
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+        },
+        actor,
+        data: {
+          source: body.source,
+          title: body.title,
+          startsAt: body.startsAt,
+          endsAt: body.endsAt,
+          status: body.status,
+          description: body.description,
+          metadata: body.metadata,
+          audience: body.audience
+            ? {
+                scope: body.audience.scope,
+                team: body.audience.team,
+                department: body.audience.department,
+                vendorId: body.audience.vendorId,
+              }
+            : undefined,
+        },
+      });
+
+      res.status(201).json({
+        event: mapCalendarEventForResponse(event),
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.patch(
+    "/calendar-events/:eventId",
+    requireRole(["owner", "admin"]),
+    async (req, res, next) => {
+      try {
+        const eventId = resolveRouteParam(req.params.eventId);
+        const body = calendarEventUpdateSchema.parse(req.body || {});
+        if (prototypeApi) {
+          res.json({
+            event: {
+              id: eventId,
+              ...body,
+            },
+          });
+          return;
+        }
+
+        const scope = req.auth!.scope;
+        const actor = await toMaintenanceActorFromAuth(runtime, req);
+        const service = requireCalendarAggregationService(runtime);
+        const event = await service.updateManualEvent({
+          scope: {
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+          },
+          actor,
+          eventId,
+          data: {
+            title: body.title,
+            startsAt: body.startsAt,
+            endsAt: body.endsAt,
+            status: body.status,
+            description: body.description,
+            metadata: body.metadata,
+            audience: body.audience
+              ? {
+                  scope: body.audience.scope,
+                  team: body.audience.team,
+                  department: body.audience.department,
+                  vendorId: body.audience.vendorId,
+                }
+              : undefined,
+          },
+        });
+        if (!event) {
+          res.status(404).json({
+            error: "Calendar event not found.",
+          });
+          return;
+        }
+
+        res.json({
+          event: mapCalendarEventForResponse(event),
+        });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.get("/facilities", requireAuth, async (req, res, next) => {
+    try {
+      const query = facilitiesQuerySchema.parse({
+        ...normalizeListQueryRecord(req.query as Record<string, unknown>),
+        status: resolveOptionalQueryParam(req.query.status as string | string[] | undefined),
+        category: resolveOptionalQueryParam(req.query.category as string | string[] | undefined),
+      });
+
+      if (prototypeApi) {
+        res.json({
+          ...toEmptyListEnvelope(query),
+          facilities: [],
+        });
+        return;
+      }
+
+      const scope = req.auth!.scope;
+      const { status, category, ...listQuery } = query;
+      const service = requireFacilityBookingService(runtime);
+      const result = await service.listFacilities({
+        scope: {
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+        },
+        status,
+        category,
+        query: listQuery,
+      });
+      const rows = result.rows.map(mapFacilityForResponse);
+
+      res.json({
+        ...toStandardListEnvelope({
+          ...result,
+          rows,
+        }),
+        facilities: rows,
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post("/facilities", requireRole(["owner", "admin"]), async (req, res, next) => {
+    try {
+      const body = facilityCreateSchema.parse(req.body || {});
+      if (prototypeApi) {
+        res.status(201).json({
+          facility: {
+            id: "prototype-facility",
+            ...body,
+          },
+        });
+        return;
+      }
+
+      const scope = req.auth!.scope;
+      const service = requireFacilityBookingService(runtime);
+      const facility = await service.createFacility({
+        scope: {
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+        },
+        actor: toFacilityActorFromAuth(req.auth!),
+        data: body,
+      });
+      res.status(201).json({
+        facility: mapFacilityForResponse(facility),
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.patch(
+    "/facilities/:facilityId",
+    requireRole(["owner", "admin"]),
+    async (req, res, next) => {
+      try {
+        const body = facilityUpdateSchema.parse(req.body || {});
+        if (prototypeApi) {
+          res.json({
+            facility: {
+              id: req.params.facilityId,
+              ...body,
+            },
+          });
+          return;
+        }
+
+        const scope = req.auth!.scope;
+        const facilityId = resolveRouteParam(req.params.facilityId);
+        const service = requireFacilityBookingService(runtime);
+        const updated = await service.updateFacility({
+          scope: {
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+          },
+          facilityId,
+          data: body,
+        });
+        if (!updated) {
+          res.status(404).json({
+            error: "Facility not found.",
+          });
+          return;
+        }
+        res.json({
+          facility: mapFacilityForResponse(updated),
+        });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.get("/facilities/:facilityId/availability", requireAuth, async (req, res, next) => {
+    try {
+      const facilityId = resolveRouteParam(req.params.facilityId);
+      const query = facilityAvailabilityQuerySchema.parse({
+        startsAt: resolveOptionalQueryParam(req.query.startsAt as string | string[] | undefined),
+        endsAt: resolveOptionalQueryParam(req.query.endsAt as string | string[] | undefined),
+        excludeBookingId: resolveOptionalQueryParam(
+          req.query.excludeBookingId as string | string[] | undefined,
+        ),
+      });
+
+      if (prototypeApi) {
+        res.json({
+          available: true,
+          conflicts: [],
+        });
+        return;
+      }
+
+      const scope = req.auth!.scope;
+      const service = requireFacilityBookingService(runtime);
+      const availability = await service.checkAvailability({
+        scope: {
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+        },
+        facilityId,
+        startsAt: query.startsAt,
+        endsAt: query.endsAt,
+        excludeBookingId: query.excludeBookingId,
+      });
+      res.json(availability);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get("/facility-bookings", requireAuth, async (req, res, next) => {
+    try {
+      const query = facilityBookingsQuerySchema.parse({
+        ...normalizeListQueryRecord(req.query as Record<string, unknown>),
+        facilityId: resolveOptionalQueryParam(req.query.facilityId as string | string[] | undefined),
+        status: resolveOptionalQueryParam(req.query.status as string | string[] | undefined),
+        from: resolveOptionalQueryParam(req.query.from as string | string[] | undefined),
+        to: resolveOptionalQueryParam(req.query.to as string | string[] | undefined),
+      });
+
+      if (prototypeApi) {
+        res.json({
+          ...toEmptyListEnvelope(query),
+          bookings: [],
+        });
+        return;
+      }
+
+      const scope = req.auth!.scope;
+      const service = requireFacilityBookingService(runtime);
+      const { facilityId, status, from, to, ...listQuery } = query;
+      const result = await service.listBookings({
+        scope: {
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+        },
+        facilityId,
+        status,
+        from,
+        to,
+        query: listQuery,
+      });
+      const rows = result.rows.map(mapFacilityBookingForResponse);
+
+      res.json({
+        ...toStandardListEnvelope({
+          ...result,
+          rows,
+        }),
+        bookings: rows,
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get("/facility-bookings/:bookingId", requireAuth, async (req, res, next) => {
+    try {
+      if (prototypeApi) {
+        res.status(404).json({
+          error: "Booking not found.",
+        });
+        return;
+      }
+
+      const bookingId = resolveRouteParam(req.params.bookingId);
+      const scope = req.auth!.scope;
+      const service = requireFacilityBookingService(runtime);
+      const booking = await service.getBooking({
+        scope: {
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+        },
+        bookingId,
+      });
+      if (!booking) {
+        res.status(404).json({
+          error: "Booking not found.",
+        });
+        return;
+      }
+
+      res.json({
+        booking: mapFacilityBookingForResponse(booking),
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post("/facility-bookings", requireAuth, async (req, res, next) => {
+    try {
+      const body = facilityBookingCreateSchema.parse(req.body || {});
+      if (prototypeApi) {
+        res.status(201).json({
+          booking: {
+            id: "prototype-booking",
+            ...body,
+            status: body.status || "pending",
+          },
+          idempotencyReplay: false,
+          approvalRequired: body.requireApproval || false,
+        });
+        return;
+      }
+
+      const scope = req.auth!.scope;
+      const service = requireFacilityBookingService(runtime);
+      const result = await service.createBooking({
+        scope: {
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+        },
+        actor: toFacilityActorFromAuth(req.auth!),
+        data: body,
+      });
+
+      res.status(result.idempotencyReplay ? 200 : 201).json({
+        booking: mapFacilityBookingForResponse(result.booking),
+        idempotencyReplay: result.idempotencyReplay,
+        approvalRequired: result.approvalRequired,
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.patch("/facility-bookings/:bookingId", requireAuth, async (req, res, next) => {
+    try {
+      const bookingId = resolveRouteParam(req.params.bookingId);
+      const body = facilityBookingUpdateSchema.parse(req.body || {});
+      if (prototypeApi) {
+        res.json({
+          booking: {
+            id: bookingId,
+            ...body,
+          },
+        });
+        return;
+      }
+
+      const scope = req.auth!.scope;
+      const service = requireFacilityBookingService(runtime);
+      const existing = await service.getBooking({
+        scope: {
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+        },
+        bookingId,
+      });
+      if (!existing) {
+        res.status(404).json({
+          error: "Booking not found.",
+        });
+        return;
+      }
+
+      if (body.status && body.status !== existing.status) {
+        const actionByStatus = {
+          approved: "approve",
+          rejected: "reject",
+          cancelled: "cancel",
+        } as const;
+        const action = actionByStatus[body.status as "approved" | "rejected" | "cancelled"];
+        if (!action) {
+          throw createHttpError(
+            409,
+            "Status transition to pending is not supported from this endpoint.",
+          );
+        }
+
+        const transitioned = await service.transitionBooking({
+          scope: {
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+          },
+          actor: toFacilityActorFromAuth(req.auth!),
+          data: {
+            bookingId,
+            action,
+            notes: body.notes,
+            reason: typeof body.notes === "string" ? body.notes : undefined,
+          },
+        });
+        res.json({
+          booking: mapFacilityBookingForResponse(transitioned),
+        });
+        return;
+      }
+
+      const patched = await service.patchBooking({
+        scope: {
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+        },
+        actor: toFacilityActorFromAuth(req.auth!),
+        bookingId,
+        data: {
+          notes: body.notes,
+        },
+      });
+      res.json({
+        booking: mapFacilityBookingForResponse(patched),
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post(
+    "/facility-bookings/:bookingId/transition",
+    requireAuth,
+    async (req, res, next) => {
+      try {
+        const bookingId = resolveRouteParam(req.params.bookingId);
+        const body = facilityBookingTransitionSchema.parse(req.body || {});
+        if (prototypeApi) {
+          res.json({
+            booking: {
+              id: bookingId,
+              status: body.action === "approve"
+                ? "approved"
+                : body.action === "reject"
+                  ? "rejected"
+                  : "cancelled",
+            },
+          });
+          return;
+        }
+
+        const scope = req.auth!.scope;
+        const service = requireFacilityBookingService(runtime);
+        const booking = await service.transitionBooking({
+          scope: {
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+          },
+          actor: toFacilityActorFromAuth(req.auth!),
+          data: {
+            bookingId,
+            action: body.action,
+            reason: body.reason,
+            notes: body.notes,
+            metadata: body.metadata,
+          },
+        });
+
+        res.json({
+          booking: mapFacilityBookingForResponse(booking),
+        });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.get("/maintenance-tickets", requireAuth, async (req, res, next) => {
+    try {
+      const query = maintenanceTicketsQuerySchema.parse({
+        ...normalizeListQueryRecord(req.query as Record<string, unknown>),
+        status: resolveOptionalQueryParam(req.query.status as string | string[] | undefined),
+        priority: resolveOptionalQueryParam(req.query.priority as string | string[] | undefined),
+        category: resolveOptionalQueryParam(req.query.category as string | string[] | undefined),
+        assignmentTargetType: resolveOptionalQueryParam(
+          req.query.assignmentTargetType as string | string[] | undefined,
+        ),
+        assigneeUserId: resolveOptionalQueryParam(
+          req.query.assigneeUserId as string | string[] | undefined,
+        ),
+        assigneeTeam: resolveOptionalQueryParam(
+          req.query.assigneeTeam as string | string[] | undefined,
+        ),
+        assigneeDepartment: resolveOptionalQueryParam(
+          req.query.assigneeDepartment as string | string[] | undefined,
+        ),
+        assigneeVendorId: resolveOptionalQueryParam(
+          req.query.assigneeVendorId as string | string[] | undefined,
+        ),
+        dueFrom: resolveOptionalQueryParam(req.query.dueFrom as string | string[] | undefined),
+        dueTo: resolveOptionalQueryParam(req.query.dueTo as string | string[] | undefined),
+      });
+
+      if (prototypeApi) {
+        res.json({
+          ...toEmptyListEnvelope(query),
+          tickets: [],
+        });
+        return;
+      }
+
+      const scope = req.auth!.scope;
+      const actor = await toMaintenanceActorFromAuth(runtime, req);
+      const service = requireMaintenanceSystemService(runtime);
+      const {
+        status,
+        priority,
+        category,
+        assignmentTargetType,
+        assigneeUserId,
+        assigneeTeam,
+        assigneeDepartment,
+        assigneeVendorId,
+        dueFrom,
+        dueTo,
+        ...listQuery
+      } = query;
+
+      const result = await service.listTickets({
+        scope: {
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+        },
+        actor,
+        status,
+        priority,
+        category,
+        assignmentTargetType,
+        assigneeUserId,
+        assigneeTeam,
+        assigneeDepartment,
+        assigneeVendorId,
+        dueFrom,
+        dueTo,
+        query: listQuery,
+      });
+      const rows = result.rows.map(mapMaintenanceTicketForResponse);
+
+      res.json({
+        ...toStandardListEnvelope({
+          ...result,
+          rows,
+        }),
+        tickets: rows,
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get("/maintenance-tickets/:ticketId", requireAuth, async (req, res, next) => {
+    try {
+      if (prototypeApi) {
+        res.status(404).json({
+          error: "Maintenance ticket not found.",
+        });
+        return;
+      }
+
+      const scope = req.auth!.scope;
+      const actor = await toMaintenanceActorFromAuth(runtime, req);
+      const service = requireMaintenanceSystemService(runtime);
+      const ticket = await service.getTicket({
+        scope: {
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+        },
+        actor,
+        ticketId: resolveRouteParam(req.params.ticketId),
+      });
+      if (!ticket) {
+        res.status(404).json({
+          error: "Maintenance ticket not found.",
+        });
+        return;
+      }
+
+      res.json({
+        ticket: mapMaintenanceTicketForResponse(ticket),
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post("/maintenance-tickets", requireAuth, async (req, res, next) => {
+    try {
+      const body = maintenanceTicketCreateSchema.parse(req.body || {});
+      if (prototypeApi) {
+        res.status(201).json({
+          ticket: {
+            id: "prototype-maintenance-ticket",
+            ...body,
+            status: body.status || "open",
+            priority: body.priority || "medium",
+          },
+        });
+        return;
+      }
+
+      const scope = req.auth!.scope;
+      const actor = await toMaintenanceActorFromAuth(runtime, req);
+      const service = requireMaintenanceSystemService(runtime);
+      const assignment =
+        body.assignment ||
+        (body.assigneeUserId || body.assigneeName
+          ? {
+              targetType: "user" as const,
+              userId: body.assigneeUserId,
+              userDisplayName: body.assigneeName,
+            }
+          : undefined);
+      const ticket = await service.createTicket({
+        scope: {
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+        },
+        actor,
+        data: {
+          title: body.title,
+          summary: body.summary,
+          category: body.category,
+          priority: body.priority,
+          status: body.status,
+          dueAt: body.dueAt,
+          metadata: body.metadata,
+          lifecycleMetadata: body.lifecycleMetadata,
+          assignment,
+          visibility: body.visibility,
+        },
+      });
+
+      res.status(201).json({
+        ticket: mapMaintenanceTicketForResponse(ticket),
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.patch("/maintenance-tickets/:ticketId", requireAuth, async (req, res, next) => {
+    try {
+      const ticketId = resolveRouteParam(req.params.ticketId);
+      const body = maintenanceTicketUpdateSchema.parse(req.body || {});
+      if (prototypeApi) {
+        res.json({
+          ticket: {
+            id: ticketId,
+            ...body,
+          },
+        });
+        return;
+      }
+
+      const scope = req.auth!.scope;
+      const actor = await toMaintenanceActorFromAuth(runtime, req);
+      const service = requireMaintenanceSystemService(runtime);
+      let ticket = await service.getTicket({
+        scope: {
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+        },
+        actor,
+        ticketId,
+      });
+      if (!ticket) {
+        res.status(404).json({
+          error: "Maintenance ticket not found.",
+        });
+        return;
+      }
+
+      if (body.status && body.status !== ticket.status) {
+        ticket = await service.transitionTicket({
+          scope: {
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+          },
+          actor,
+          data: {
+            ticketId,
+            status: body.status,
+            reason: typeof body.summary === "string" ? body.summary : undefined,
+            metadata: body.lifecycleMetadata,
+          },
+        });
+      }
+
+      if (body.assigneeUserId !== undefined || body.assigneeName !== undefined) {
+        const hasAssignee = Boolean(
+          body.assigneeUserId ||
+            (typeof body.assigneeName === "string" && body.assigneeName.trim().length > 0),
+        );
+        ticket = await service.assignTicket({
+          scope: {
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+          },
+          actor,
+          data: {
+            ticketId,
+            assignment: hasAssignee
+              ? {
+                  targetType: "user",
+                  userId: body.assigneeUserId || undefined,
+                  userDisplayName: body.assigneeName || undefined,
+                }
+              : {
+                  targetType: "unassigned",
+                },
+            reason: "legacy ticket patch assignment",
+          },
+        });
+      }
+
+      if (
+        hasMaintenanceTicketUpdateFields({
+          title: body.title,
+          summary: body.summary,
+          category: body.category,
+          priority: body.priority,
+          dueAt: body.dueAt,
+          metadata: body.metadata,
+          lifecycleMetadata: body.lifecycleMetadata,
+          visibility: body.visibility,
+        })
+      ) {
+        ticket = await service.updateTicket({
+          scope: {
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+          },
+          actor,
+          ticketId,
+          data: {
+            title: body.title,
+            summary: body.summary,
+            category: body.category,
+            priority: body.priority,
+            dueAt: body.dueAt,
+            metadata: body.metadata,
+            lifecycleMetadata: body.lifecycleMetadata,
+            visibility: body.visibility,
+          },
+        });
+      }
+
+      res.json({
+        ticket: mapMaintenanceTicketForResponse(ticket),
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post(
+    "/maintenance-tickets/:ticketId/assignment",
+    requireAuth,
+    async (req, res, next) => {
+      try {
+        const ticketId = resolveRouteParam(req.params.ticketId);
+        const body = maintenanceTicketAssignSchema.parse(req.body || {});
+        if (prototypeApi) {
+          res.json({
+            ticket: {
+              id: ticketId,
+              assignmentTargetType: body.assignment.targetType,
+            },
+          });
+          return;
+        }
+
+        const scope = req.auth!.scope;
+        const actor = await toMaintenanceActorFromAuth(runtime, req);
+        const service = requireMaintenanceSystemService(runtime);
+        const ticket = await service.assignTicket({
+          scope: {
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+          },
+          actor,
+          data: {
+            ticketId,
+            assignment: body.assignment,
+            reason: body.reason,
+            metadata: body.metadata,
+          },
+        });
+
+        res.json({
+          ticket: mapMaintenanceTicketForResponse(ticket),
+        });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.get("/maintenance-tickets/:ticketId/comments", requireAuth, async (req, res, next) => {
+    try {
+      const ticketId = resolveRouteParam(req.params.ticketId);
+      const query = standardListQuerySchema.parse(
+        normalizeListQueryRecord(req.query as Record<string, unknown>),
+      );
+
+      if (prototypeApi) {
+        res.json({
+          ...toEmptyListEnvelope(query),
+          comments: [],
+        });
+        return;
+      }
+
+      const scope = req.auth!.scope;
+      const actor = await toMaintenanceActorFromAuth(runtime, req);
+      const service = requireMaintenanceSystemService(runtime);
+      const result = await service.listComments({
+        scope: {
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+        },
+        actor,
+        ticketId,
+        query,
+      });
+      const rows = result.rows.map(mapMaintenanceCommentForResponse);
+
+      res.json({
+        ...toStandardListEnvelope({
+          ...result,
+          rows,
+        }),
+        comments: rows,
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post("/maintenance-tickets/:ticketId/comments", requireAuth, async (req, res, next) => {
+    try {
+      const ticketId = resolveRouteParam(req.params.ticketId);
+      const body = maintenanceCommentCreateSchema.parse(req.body || {});
+      if (prototypeApi) {
+        res.status(201).json({
+          comment: {
+            id: "prototype-maintenance-comment",
+            ticketId,
+            authorUserId: req.auth!.user.id,
+            authorName: req.auth!.user.fullName || req.auth!.user.email,
+            commentType: body.commentType || "comment",
+            body: body.body,
+            metadata: body.metadata || {},
+            createdAt: new Date().toISOString(),
+          },
+        });
+        return;
+      }
+
+      const scope = req.auth!.scope;
+      const actor = await toMaintenanceActorFromAuth(runtime, req);
+      const service = requireMaintenanceSystemService(runtime);
+      const comment = await service.createComment({
+        scope: {
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+        },
+        actor,
+        ticketId,
+        data: {
+          body: body.body,
+          commentType: body.commentType,
+          metadata: body.metadata,
+        },
+      });
+
+      res.status(201).json({
+        comment: mapMaintenanceCommentForResponse(comment),
       });
     } catch (error) {
       next(error);

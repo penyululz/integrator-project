@@ -9,6 +9,14 @@
 5. Adapters (`packages/adapters/*`)
 6. Data Stores (Postgres + Redis)
 
+## Portability Layers
+
+- Engine core: `packages/core/src/*`
+- Shared foundations: `packages/shared/src/*`
+- Integration layer: `apps/api/src/*`
+- Project adapters: `packages/adapters/*`
+- Optional modules: identity-auth, alerts, retention, facility-booking, maintenance-system, calendar-aggregation, communication, file-storage, collaboration
+
 ## Runtime Wiring
 
 `createCoreRuntime(options)` builds:
@@ -20,6 +28,13 @@
 - auth services
 - observability runtime
 - optional alert and retention services
+- module registration metadata (`runtime.modules`)
+
+Module registration options:
+
+- `modules.include`
+- `modules.exclude`
+- env aliases: `ENGINE_MODULES`, `ENGINE_DISABLE_MODULES`
 
 ## Process Roles
 

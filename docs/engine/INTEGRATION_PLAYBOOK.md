@@ -42,6 +42,34 @@ If target repo supports monorepo workspaces:
 - run `CoreBackgroundWorker`
 - wire SIGINT/SIGTERM for graceful stop
 
+### Register selected modules
+
+Use runtime module controls when the target does not need all features:
+
+```ts
+createCoreRuntime({
+  role: "api",
+  modules: {
+    include: ["runtime-foundation", "workflow-orchestration", "identity-auth"],
+    exclude: [
+      "alerts",
+      "retention",
+      "facility-booking",
+      "maintenance-system",
+      "calendar-aggregation",
+      "communication",
+      "file-storage",
+      "collaboration",
+    ],
+  },
+});
+```
+
+Or via environment:
+
+- `ENGINE_MODULES=runtime-foundation,workflow-orchestration,identity-auth`
+- `ENGINE_DISABLE_MODULES=alerts,retention,facility-booking,maintenance-system,calendar-aggregation,communication,file-storage,collaboration`
+
 ## Infrastructure Requirements
 
 - Postgres (durable state)
@@ -64,5 +92,6 @@ If target repo supports monorepo workspaces:
 3. Adapter enablement and secrets
 4. Observability sinks
 5. Additional routes and domain services
+6. Route/path adaptation (`API_BASE_PATH`) and host naming aliases (`ENGINE_*`)
 
 Avoid modifying retry/wait/dead-letter mechanics until baseline tests pass.

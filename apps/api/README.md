@@ -14,6 +14,11 @@ The role split ensures API nodes are queue producers while worker nodes consume 
 - auth/session and RBAC API surface
 - workflow ingress and orchestration endpoints
 - approvals, audit, alerts, retention endpoints
+- facility and booking lifecycle endpoints (module-gated)
+- maintenance ticket lifecycle endpoints (module-gated)
+- calendar aggregation endpoints (module-gated)
+- communication channels/messages/meeting logs/AI summary request endpoints (module-gated)
+- file storage spaces/items/shares/activity endpoints (module-gated)
 - metrics and runtime health endpoints
 - background orchestration loop via `CoreBackgroundWorker`
 
@@ -59,6 +64,12 @@ Required:
 - `REDIS_URL`
 - `JWT_SECRET`
 - `MASTER_ENCRYPTION_KEY`
+
+Portable aliases and host controls:
+
+- `ENGINE_MODE` (neutral alias of `INTEGRATOR_MODE`)
+- `API_BASE_PATH` (default `/api/v1`)
+- `ENGINE_MODULES` / `ENGINE_DISABLE_MODULES` (module selection)
 
 ## Health Endpoints
 

@@ -16,10 +16,12 @@ export type PlatformMode = (typeof PLATFORM_MODES)[keyof typeof PLATFORM_MODES];
 
 // SHARED BETWEEN PROTOTYPE AND LIVE
 // Source-of-truth env key for runtime mode selection.
+export const ENGINE_MODE_ENV_KEY = "ENGINE_MODE" as const;
 export const PLATFORM_MODE_ENV_KEY = "INTEGRATOR_MODE" as const;
 export const LEGACY_APP_ENV_KEY = "APP_ENV" as const;
 
 export type PlatformModeSource =
+  | "ENGINE_MODE"
   | "INTEGRATOR_MODE"
   | "APP_ENV"
   | "default";
@@ -57,6 +59,15 @@ export function parsePlatformMode(value: string | null | undefined): PlatformMod
 export function resolvePlatformModeFromEnv(
   env: Record<string, string | undefined>,
 ): PlatformModeResolution {
+  const engineMode = parsePlatformMode(env[ENGINE_MODE_ENV_KEY]);
+  if (engineMode) {
+    return {
+      mode: engineMode,
+      source: "ENGINE_MODE",
+      rawValue: env[ENGINE_MODE_ENV_KEY] || null,
+    };
+  }
+
   const explicitMode = parsePlatformMode(env[PLATFORM_MODE_ENV_KEY]);
   if (explicitMode) {
     return {

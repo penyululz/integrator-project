@@ -18,6 +18,7 @@ import { AlertRepository } from "./repositories/alert-repository";
 import { RetentionRepository } from "./repositories/retention-repository";
 import { CollaborationRepository } from "./repositories/collaboration-repository";
 import { IdentityRepository } from "./repositories/identity-repository";
+import { OrganizationRepository } from "./repositories/organization-repository";
 import { PluginLoader } from "./engine/plugin-loader";
 import { EventQueue } from "./engine/event-queue";
 import { resolveEventQueueBootstrapConfig } from "./engine/event-queue-config";
@@ -26,6 +27,7 @@ import { OAuthService } from "./auth/oauth-service";
 import { CredentialResolver } from "./auth/credential-resolver";
 import { AuthService } from "./auth/auth-service";
 import { IdentityEmailService } from "./auth/identity-email-service";
+import { OrganizationMembershipService } from "./auth/organization-membership-service";
 import { AuthRepository } from "./repositories/auth-repository";
 import { validateWorkflowDefinition } from "./workflow/schema";
 import { getCoreEnv, resolveCoreEnv, type CoreEnvInput } from "./db/env";
@@ -35,17 +37,46 @@ import { RetentionCleanupService } from "./retention/cleanup-service";
 import { AgentToolRegistry } from "./agents/tool-registry";
 import { InternalMcpFoundation } from "./agents/mcp-foundation";
 import {
+  FacilityBookingRepository,
+  FacilityBookingService,
+} from "./facility";
+import {
+  MaintenanceSystemRepository,
+  MaintenanceSystemService,
+} from "./maintenance";
+import {
+  CalendarAggregationRepository,
+  CalendarAggregationService,
+} from "./calendar";
+import {
+  CommunicationRepository,
+  CommunicationService,
+} from "./communication";
+import {
+  FileStorageRepository,
+  FileStorageService,
+} from "./file-storage";
+import {
   createObservabilityRuntime,
   type ObservabilityRuntime,
 } from "./observability/runtime";
-import path from "node:path";
-import fs from "node:fs";
+import {
+  buildAdapterInitConfigFromEnv,
+  resolveAdapterManifestBaseDir,
+} from "./runtime/adapter-config";
+import {
+  isCoreModuleEnabled,
+  resolveCoreModuleRegistration,
+  type CoreModuleRegistration,
+  type CoreModuleSelectionInput,
+} from "./runtime/module-registration";
 import type { Pool } from "pg";
 import type { RedisClientType } from "redis";
 import type { EventQueueOptions } from "./engine/event-queue";
 import type { PluginDiscoveryOptions } from "./engine/plugin-loader";
 
 export type CoreRuntime = {
+  modules?: CoreModuleRegistration;
   pluginLoader: PluginLoader;
   eventQueue: EventQueue;
   workflowEngine: WorkflowEngine;
@@ -56,8 +87,14 @@ export type CoreRuntime = {
   mcpFoundation: InternalMcpFoundation;
   oauthService: OAuthService;
   authService: AuthService;
+  organizationMembershipService?: OrganizationMembershipService;
   identityEmailService?: IdentityEmailService;
   credentialResolver: CredentialResolver;
+  facilityBookingService?: FacilityBookingService;
+  maintenanceSystemService?: MaintenanceSystemService;
+  calendarAggregationService?: CalendarAggregationService;
+  communicationService?: CommunicationService;
+  fileStorageService?: FileStorageService;
   repositories: {
     workspaceRepository: WorkspaceRepository;
     integrationRepository: IntegrationRepository;
@@ -65,9 +102,15 @@ export type CoreRuntime = {
     workflowRepository: WorkflowRepository;
     runRepository: RunRepository;
     authRepository: AuthRepository;
+    organizationRepository?: OrganizationRepository;
     identityRepository?: IdentityRepository;
     alertRepository?: AlertRepository;
     retentionRepository?: RetentionRepository;
+    facilityBookingRepository?: FacilityBookingRepository;
+    maintenanceSystemRepository?: MaintenanceSystemRepository;
+    calendarAggregationRepository?: CalendarAggregationRepository;
+    communicationRepository?: CommunicationRepository;
+    fileStorageRepository?: FileStorageRepository;
     collaborationRepository?: CollaborationRepository;
   };
   close: () => Promise<void>;
@@ -76,6 +119,7 @@ export type CoreRuntime = {
 export { validateWorkflowDefinition };
 export { AuthService } from "./auth/auth-service";
 export { IdentityEmailService } from "./auth/identity-email-service";
+export { OrganizationMembershipService } from "./auth/organization-membership-service";
 export { PlatformMetrics } from "./observability/metrics";
 export { StructuredLogger } from "./observability/logger";
 export {
@@ -92,12 +136,165 @@ export { RetentionCleanupService } from "./retention/cleanup-service";
 export { AgentToolRegistry } from "./agents/tool-registry";
 export { InternalMcpFoundation } from "./agents/mcp-foundation";
 export { IdentityRepository } from "./repositories/identity-repository";
+export { OrganizationRepository } from "./repositories/organization-repository";
+export {
+  FacilityBookingRepository,
+  FacilityBookingService,
+  FacilityBookingError,
+} from "./facility";
+export {
+  MaintenanceSystemRepository,
+  MaintenanceSystemService,
+  MaintenanceSystemError,
+} from "./maintenance";
+export {
+  CalendarAggregationRepository,
+  CalendarAggregationService,
+  CalendarAggregationError,
+} from "./calendar";
+export {
+  CommunicationRepository,
+  CommunicationService,
+  CommunicationError,
+} from "./communication";
+export {
+  FileStorageRepository,
+  FileStorageService,
+  FileStorageError,
+} from "./file-storage";
 export {
   saveMemory,
   getMemory,
   injectMemoryIntoAgentContext,
 } from "./agents/memory";
 export { getRetentionConfigFromEnv } from "./retention/config";
+export type {
+  CreateFacilityBookingResult,
+  FacilityActor,
+  FacilityAvailabilityResult,
+  FacilityAvailabilityWindow,
+  FacilityBookingConflictRecord,
+  FacilityBookingCreateInput,
+  FacilityBookingListInput,
+  FacilityBookingListResult,
+  FacilityBookingNotificationEvent,
+  FacilityBookingNotificationEventType,
+  FacilityBookingNotificationHook,
+  FacilityBookingPatchInput,
+  FacilityBookingRecord,
+  FacilityBookingStatus,
+  FacilityBookingTransitionAction,
+  FacilityBookingTransitionInput,
+  FacilityCreateInput,
+  FacilityListInput,
+  FacilityListResult,
+  FacilityPolicy,
+  FacilityRecord,
+  FacilityScope,
+  FacilityStatus,
+  FacilityUpdateInput,
+} from "./facility";
+export type {
+  MaintenanceAccessContext,
+  MaintenanceActor,
+  MaintenanceAssignmentInput,
+  MaintenanceAssignmentTargetType,
+  MaintenanceCommentCreateInput,
+  MaintenanceCommentListInput,
+  MaintenanceCommentListResult,
+  MaintenanceCommentRecord,
+  MaintenanceCommentType,
+  MaintenanceScope,
+  MaintenanceTicketAssignInput,
+  MaintenanceTicketCreateInput,
+  MaintenanceTicketListInput,
+  MaintenanceTicketListResult,
+  MaintenanceTicketNotificationEvent,
+  MaintenanceTicketNotificationEventType,
+  MaintenanceTicketNotificationHook,
+  MaintenanceTicketPriority,
+  MaintenanceTicketRecord,
+  MaintenanceTicketStatus,
+  MaintenanceTicketTransitionInput,
+  MaintenanceTicketUpdateInput,
+  MaintenanceVisibilityInput,
+  MaintenanceVisibilityScope,
+} from "./maintenance";
+export type {
+  CalendarAggregatedEventRecord,
+  CalendarAggregationActor,
+  CalendarAggregationListInput,
+  CalendarAggregationListResult,
+  CalendarAggregationScope,
+  CalendarEventAccessContext,
+  CalendarEventAudienceInput,
+  CalendarEventAudienceScope,
+  CalendarEventSource,
+  CalendarEventStatus,
+  CalendarManualEventCreateInput,
+  CalendarManualEventUpdateInput,
+} from "./calendar";
+export type {
+  CommunicationAccessContext,
+  CommunicationActor,
+  CommunicationAiSummaryRequestCreateInput,
+  CommunicationAiSummaryRequestListInput,
+  CommunicationAiSummaryRequestListResult,
+  CommunicationAiSummaryRequestRecord,
+  CommunicationAiSummaryRequestStatus,
+  CommunicationAiSummarySourceType,
+  CommunicationChannelCreateInput,
+  CommunicationChannelListInput,
+  CommunicationChannelListResult,
+  CommunicationChannelRecord,
+  CommunicationChannelType,
+  CommunicationEvent,
+  CommunicationEventHook,
+  CommunicationEventType,
+  CommunicationMeetingSessionCreateInput,
+  CommunicationMeetingSessionListInput,
+  CommunicationMeetingSessionListResult,
+  CommunicationMeetingSessionRecord,
+  CommunicationMentionRecord,
+  CommunicationMessageCreateInput,
+  CommunicationMessageListInput,
+  CommunicationMessageListResult,
+  CommunicationMessageRecord,
+  CommunicationParticipantRole,
+  CommunicationScope,
+  CreateCommunicationMessageResult,
+} from "./communication";
+export type {
+  FileStorageActivityAction,
+  FileStorageActivityListInput,
+  FileStorageActivityListResult,
+  FileStorageActivityRecord,
+  FileStorageActor,
+  FileStorageBlobInput,
+  FileStorageBlobRecord,
+  FileStorageEvent,
+  FileStorageEventHook,
+  FileStorageEventType,
+  FileStorageItemCreateInput,
+  FileStorageItemKind,
+  FileStorageItemListInput,
+  FileStorageItemListResult,
+  FileStorageItemRecord,
+  FileStorageItemUpdateInput,
+  FileStorageScope,
+  FileStorageShareCreateInput,
+  FileStorageShareListInput,
+  FileStorageShareListResult,
+  FileStorageSharePermission,
+  FileStorageShareRecord,
+  FileStorageShareSubjectType,
+  FileStorageSpaceCreateInput,
+  FileStorageSpaceListInput,
+  FileStorageSpaceListResult,
+  FileStorageSpaceRecord,
+  FileStorageSpaceType,
+  FileStorageVisibilityPolicy,
+} from "./file-storage";
 export type {
   AlertConfigInput,
   AlertConfigPublicView,
@@ -178,6 +375,29 @@ export type {
   CoreBackgroundWorkerOptions,
   CoreWorkerRuntime,
 } from "./engine/background-worker";
+export {
+  CORE_MODULE_CATALOG,
+  CORE_MODULE_KEYS,
+  CORE_MODULE_LAYERS,
+  isCoreModuleKey,
+} from "./runtime/module-catalog";
+export {
+  resolveCoreModuleRegistration,
+  isCoreModuleEnabled,
+} from "./runtime/module-registration";
+export {
+  buildAdapterInitConfigFromEnv,
+  resolveAdapterManifestBaseDir,
+} from "./runtime/adapter-config";
+export type {
+  CoreModuleDescriptor,
+  CoreModuleKey,
+  CoreModuleLayer,
+} from "./runtime/module-catalog";
+export type {
+  CoreModuleSelectionInput,
+  CoreModuleRegistration,
+} from "./runtime/module-registration";
 
 export type CoreRuntimeRole = "api" | "worker" | "all";
 
@@ -193,6 +413,7 @@ export type CoreRuntimeOptions = {
   role?: CoreRuntimeRole;
   dependencies?: CoreRuntimeDependencies;
   closeInjectedDependencies?: boolean;
+  modules?: CoreModuleSelectionInput;
   discoverAdapters?: boolean;
   adapterDiscovery?: Partial<PluginDiscoveryOptions>;
   adapterInitConfig?: Record<string, Record<string, unknown>>;
@@ -202,141 +423,13 @@ export type CoreRuntimeOptions = {
   features?: {
     alerts?: boolean;
     retention?: boolean;
+    facilityBooking?: boolean;
+    maintenanceSystem?: boolean;
+    calendarAggregation?: boolean;
+    communication?: boolean;
+    fileStorage?: boolean;
   };
 };
-
-function parseOptionalNumber(input: string | undefined): number | undefined {
-  if (!input || !input.trim()) {
-    return undefined;
-  }
-  const parsed = Number(input);
-  return Number.isFinite(parsed) ? parsed : undefined;
-}
-
-function parseOptionalBoolean(
-  input: string | undefined,
-): boolean | undefined {
-  if (!input || !input.trim()) {
-    return undefined;
-  }
-  const normalized = input.trim().toLowerCase();
-  if (["1", "true", "yes", "on"].includes(normalized)) {
-    return true;
-  }
-  if (["0", "false", "no", "off"].includes(normalized)) {
-    return false;
-  }
-  return undefined;
-}
-
-function parseCsv(input: string | undefined): string[] {
-  return (input || "")
-    .split(",")
-    .map((value) => value.trim())
-    .filter(Boolean);
-}
-
-export function buildAdapterInitConfigFromEnv(
-  env: CoreEnvInput = process.env as CoreEnvInput,
-): Record<string, Record<string, unknown>> {
-  return {
-    webhook: {
-      signingSecret: env.WEBHOOK_SIGNING_SECRET || "",
-    },
-    "http-api": {
-      baseUrl: env.HTTP_CONNECTOR_BASE_URL || "",
-      apiKey: env.HTTP_CONNECTOR_API_KEY || "",
-      timeoutMs: parseOptionalNumber(env.HTTP_CONNECTOR_TIMEOUT_MS),
-    },
-    scheduler: {
-      timezone: env.SCHEDULER_DEFAULT_TIMEZONE || "UTC",
-    },
-    graphql: {
-      endpoint: env.GRAPHQL_CONNECTOR_ENDPOINT || "",
-      authToken: env.GRAPHQL_CONNECTOR_AUTH_TOKEN || "",
-      timeoutMs: parseOptionalNumber(env.GRAPHQL_CONNECTOR_TIMEOUT_MS),
-    },
-    code: {
-      timeoutMs: parseOptionalNumber(env.CODE_CONNECTOR_TIMEOUT_MS),
-    },
-    database: {
-      supportedDialects:
-        parseCsv(env.DATABASE_CONNECTOR_DIALECTS).length > 0
-          ? parseCsv(env.DATABASE_CONNECTOR_DIALECTS)
-          : ["postgres", "mysql"],
-    },
-    sheets: {
-      clientId: env.GOOGLE_CLIENT_ID || "",
-      clientSecret: env.GOOGLE_CLIENT_SECRET || "",
-      redirectUri: env.GOOGLE_REDIRECT_URI || "",
-    },
-    email: {
-      host: env.EMAIL_SMTP_HOST || "",
-      port: parseOptionalNumber(env.EMAIL_SMTP_PORT) || 587,
-      secure: parseOptionalBoolean(env.EMAIL_SMTP_SECURE) || false,
-      user: env.EMAIL_SMTP_USER || "",
-      pass: env.EMAIL_SMTP_PASS || "",
-      from: env.PLATFORM_EMAIL_FROM || env.EMAIL_SMTP_FROM || "",
-    },
-    shopify: {
-      apiKey: env.SHOPIFY_CLIENT_ID || "",
-      apiSecret: env.SHOPIFY_CLIENT_SECRET || "",
-    },
-    slack: {
-      clientId: env.SLACK_CLIENT_ID || "",
-      clientSecret: env.SLACK_CLIENT_SECRET || "",
-      redirectUri: env.SLACK_REDIRECT_URI || "",
-      botToken: env.SLACK_BOT_TOKEN || "",
-    },
-    telegram: {
-      botToken: env.TELEGRAM_BOT_TOKEN || "",
-      defaultChatId: env.TELEGRAM_DEFAULT_CHAT_ID || "",
-      apiBaseUrl: env.TELEGRAM_API_BASE_URL || "",
-    },
-    whatsapp: {
-      accessToken: env.WHATSAPP_ACCESS_TOKEN || "",
-      phoneNumberId: env.WHATSAPP_PHONE_NUMBER_ID || "",
-      apiVersion: env.WHATSAPP_API_VERSION || "v20.0",
-      baseUrl: env.WHATSAPP_API_BASE_URL || "",
-    },
-    ai: {
-      apiKey: env.AI_API_KEY || env.OPENAI_API_KEY || "",
-      baseUrl: env.AI_BASE_URL || env.OPENAI_BASE_URL || "",
-      model: env.AI_MODEL || env.OPENAI_MODEL || "gpt-4o-mini",
-      timeoutMs: parseOptionalNumber(env.AI_TIMEOUT_MS),
-    },
-    youtube: {
-      apiKey: env.YOUTUBE_API_KEY || "",
-      defaultChannelId: env.YOUTUBE_DEFAULT_CHANNEL_ID || "",
-      baseUrl: env.YOUTUBE_API_BASE_URL || "",
-    },
-    reddit: {
-      baseUrl: env.REDDIT_API_BASE_URL || "",
-      userAgent: env.REDDIT_USER_AGENT || "",
-      defaultSubreddit: env.REDDIT_DEFAULT_SUBREDDIT || "",
-    },
-  };
-}
-
-export function resolveAdapterManifestBaseDir(
-  env: CoreEnvInput,
-  explicitPath?: string,
-): string {
-  const candidates = [
-    explicitPath,
-    env.ADAPTER_MANIFESTS_DIR,
-    path.resolve(process.cwd(), "packages/adapters"),
-    path.resolve(__dirname, "../../../packages/adapters"),
-  ].filter((item): item is string => Boolean(item && item.trim()));
-
-  for (const candidate of candidates) {
-    if (fs.existsSync(candidate)) {
-      return candidate;
-    }
-  }
-
-  return path.resolve(process.cwd(), "packages/adapters");
-}
 
 async function maybeDiscoverAdapters(
   pluginLoader: PluginLoader,
@@ -386,6 +479,19 @@ export async function createCoreRuntime(
   const env = options.env ? resolveCoreEnv(options.env) : getCoreEnv();
   const role = options.role || "all";
   const shouldCloseInjected = options.closeInjectedDependencies || false;
+  const modules = resolveCoreModuleRegistration({
+    selection: options.modules,
+    env: envInput,
+    legacyFeatureFlags: {
+      alerts: options.features?.alerts,
+      retention: options.features?.retention,
+      facilityBooking: options.features?.facilityBooking,
+      maintenanceSystem: options.features?.maintenanceSystem,
+      calendarAggregation: options.features?.calendarAggregation,
+      communication: options.features?.communication,
+      fileStorage: options.features?.fileStorage,
+    },
+  });
 
   const dependencies = options.dependencies || {};
   const pool = dependencies.pool || getPostgresPool();
@@ -400,10 +506,34 @@ export async function createCoreRuntime(
   const workflowRepository = new WorkflowRepository(pool);
   const runRepository = new RunRepository(pool);
   const authRepository = new AuthRepository(pool);
-  const identityRepository = new IdentityRepository(pool);
-  const alertRepository = new AlertRepository(pool);
-  const retentionRepository = new RetentionRepository(pool);
-  const collaborationRepository = new CollaborationRepository(pool);
+  const organizationRepository = new OrganizationRepository(pool);
+  const identityRepository = isCoreModuleEnabled(modules, "identity-auth")
+    ? new IdentityRepository(pool)
+    : undefined;
+  const alertRepository = isCoreModuleEnabled(modules, "alerts")
+    ? new AlertRepository(pool)
+    : undefined;
+  const retentionRepository = isCoreModuleEnabled(modules, "retention")
+    ? new RetentionRepository(pool)
+    : undefined;
+  const facilityBookingRepository = isCoreModuleEnabled(modules, "facility-booking")
+    ? new FacilityBookingRepository(pool)
+    : undefined;
+  const maintenanceSystemRepository = isCoreModuleEnabled(modules, "maintenance-system")
+    ? new MaintenanceSystemRepository(pool)
+    : undefined;
+  const calendarAggregationRepository = isCoreModuleEnabled(modules, "calendar-aggregation")
+    ? new CalendarAggregationRepository(pool)
+    : undefined;
+  const communicationRepository = isCoreModuleEnabled(modules, "communication")
+    ? new CommunicationRepository(pool)
+    : undefined;
+  const fileStorageRepository = isCoreModuleEnabled(modules, "file-storage")
+    ? new FileStorageRepository(pool)
+    : undefined;
+  const collaborationRepository = isCoreModuleEnabled(modules, "collaboration")
+    ? new CollaborationRepository(pool)
+    : undefined;
 
   const pluginLoader = dependencies.pluginLoader || new PluginLoader();
   await maybeDiscoverAdapters(pluginLoader, envInput, options);
@@ -427,9 +557,7 @@ export async function createCoreRuntime(
   const queueKey = options.queue?.queueKey || queueConfig.queueKey;
   const eventQueue = new EventQueue(redis, queueKey, observability, queueOptions);
   const credentialResolver = new CredentialResolver(credentialRepository);
-  const enableAlerts = options.features?.alerts !== false;
-  const enableRetention = options.features?.retention !== false;
-  const alertDeliveryService = enableAlerts
+  const alertDeliveryService = alertRepository
     ? new AlertDeliveryService(
         alertRepository,
         runRepository,
@@ -437,7 +565,7 @@ export async function createCoreRuntime(
         observability,
       )
     : undefined;
-  const retentionCleanupService = enableRetention
+  const retentionCleanupService = retentionRepository
     ? new RetentionCleanupService(retentionRepository, observability)
     : undefined;
   const agentToolRegistry = new AgentToolRegistry(pluginLoader);
@@ -454,29 +582,94 @@ export async function createCoreRuntime(
     },
   );
   const oauthService = new OAuthService(credentialRepository);
-  const identityEmailService = new IdentityEmailService(
-    pluginLoader,
-    identityRepository,
-    {
-      platformSenderEmail:
-        envInput.PLATFORM_EMAIL_FROM ||
-        envInput.EMAIL_SMTP_FROM ||
-        "no-reply@platform.local",
-      platformReplyToEmail:
-        envInput.PLATFORM_EMAIL_REPLY_TO || envInput.PLATFORM_EMAIL_FROM || undefined,
-      providerName: envInput.PLATFORM_EMAIL_PROVIDER || "email-adapter",
-    },
-  );
+  const identityEmailService = identityRepository
+    ? new IdentityEmailService(
+        pluginLoader,
+        identityRepository,
+        {
+          platformSenderEmail:
+            envInput.ENGINE_EMAIL_FROM ||
+            envInput.PLATFORM_EMAIL_FROM ||
+            envInput.EMAIL_SMTP_FROM ||
+            "no-reply@platform.local",
+          platformReplyToEmail:
+            envInput.ENGINE_EMAIL_REPLY_TO ||
+            envInput.PLATFORM_EMAIL_REPLY_TO ||
+            envInput.ENGINE_EMAIL_FROM ||
+            envInput.PLATFORM_EMAIL_FROM ||
+            undefined,
+          providerName:
+            envInput.ENGINE_EMAIL_PROVIDER ||
+            envInput.PLATFORM_EMAIL_PROVIDER ||
+            "email-adapter",
+        },
+      )
+    : undefined;
   const authService = new AuthService(authRepository, env, {
     identityRepository,
     identityEmailService,
     platformPublicUrl:
+      envInput.ENGINE_PUBLIC_URL ||
       envInput.PLATFORM_PUBLIC_URL ||
       envInput.APP_PUBLIC_URL ||
       "http://localhost:4000",
   });
+  const organizationMembershipService = new OrganizationMembershipService(
+    authService,
+    authRepository,
+    organizationRepository,
+    identityRepository,
+    {
+      identityEmailService,
+      platformPublicUrl:
+        envInput.ENGINE_PUBLIC_URL ||
+        envInput.PLATFORM_PUBLIC_URL ||
+        envInput.APP_PUBLIC_URL ||
+      "http://localhost:4000",
+    },
+  );
+  const facilityBookingService = facilityBookingRepository
+    ? new FacilityBookingService(facilityBookingRepository, {
+        logger: {
+          warn: (message, details) => {
+            console.warn(`[facility-booking] ${message}`, details || {});
+          },
+        },
+      })
+    : undefined;
+  const maintenanceSystemService = maintenanceSystemRepository
+    ? new MaintenanceSystemService(maintenanceSystemRepository, {
+        logger: {
+          warn: (message, details) => {
+            console.warn(`[maintenance-system] ${message}`, details || {});
+          },
+        },
+      })
+    : undefined;
+  const calendarAggregationService = calendarAggregationRepository
+    ? new CalendarAggregationService(calendarAggregationRepository)
+    : undefined;
+  const communicationService = communicationRepository
+    ? new CommunicationService(communicationRepository, {
+        logger: {
+          warn: (message, details) => {
+            console.warn(`[communication] ${message}`, details || {});
+          },
+        },
+      })
+    : undefined;
+  const fileStorageService = fileStorageRepository
+    ? new FileStorageService(fileStorageRepository, {
+        logger: {
+          warn: (message, details) => {
+            console.warn(`[file-storage] ${message}`, details || {});
+          },
+        },
+      })
+    : undefined;
 
   return {
+    modules,
     pluginLoader,
     eventQueue,
     workflowEngine,
@@ -487,8 +680,14 @@ export async function createCoreRuntime(
     mcpFoundation,
     oauthService,
     authService,
+    organizationMembershipService,
     identityEmailService,
     credentialResolver,
+    facilityBookingService,
+    maintenanceSystemService,
+    calendarAggregationService,
+    communicationService,
+    fileStorageService,
     repositories: {
       workspaceRepository,
       integrationRepository,
@@ -496,9 +695,15 @@ export async function createCoreRuntime(
       workflowRepository,
       runRepository,
       authRepository,
+      organizationRepository,
       identityRepository,
       alertRepository,
       retentionRepository,
+      facilityBookingRepository,
+      maintenanceSystemRepository,
+      calendarAggregationRepository,
+      communicationRepository,
+      fileStorageRepository,
       collaborationRepository,
     },
     close: async () => {

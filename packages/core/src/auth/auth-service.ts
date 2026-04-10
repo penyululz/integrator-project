@@ -4,6 +4,7 @@ import { PLATFORM_MODES } from "@integration/shared";
 import {
   AuthRepository,
   type LoginAccountRecord,
+  type OrganizationAccountRecord,
   type WorkspaceAccessRecord,
 } from "../repositories/auth-repository";
 import {
@@ -36,6 +37,11 @@ type DevLoginInput = {
   organizationSlug?: string;
   workspaceSlug?: string;
 };
+
+type SessionIssuableAccount = Pick<
+  LoginAccountRecord,
+  "user_id" | "tenant_id" | "organization_id" | "organization_slug" | "email" | "full_name" | "org_role"
+>;
 
 export type RequestContext = {
   ipAddress?: string;
@@ -817,6 +823,42 @@ export class AuthService {
     return this.authRepository.listAccessibleWorkspaces(input);
   }
 
+  async switchOrganizationContext(
+    input: {
+      userId: string;
+      organizationId?: string;
+      organizationSlug?: string;
+      workspaceSlug?: string;
+    },
+    context: RequestContext = {},
+  ): Promise<LoginResponse> {
+    const account: OrganizationAccountRecord | null =
+      await this.authRepository.resolveOrganizationAccountForUser({
+        userId: input.userId,
+        organizationId: trimOptional(input.organizationId),
+        organizationSlug: trimOptional(input.organizationSlug),
+      });
+    if (!account) {
+      throw new UnauthenticatedError("Requested organization access is not available.");
+    }
+    await this.ensureAccountCanAuthenticate(account.user_id);
+
+    const workspace = await this.authRepository.resolveWorkspaceAccess({
+      userId: account.user_id,
+      organizationId: account.organization_id,
+      workspaceSlug: trimOptional(input.workspaceSlug),
+    });
+    if (!workspace) {
+      throw new AuthError(
+        "No workspace access found for this organization.",
+        404,
+        "workspace_not_found",
+      );
+    }
+
+    return this.issueSession(account, workspace, context);
+  }
+
   async issueDevLogin(
     input: DevLoginInput = {},
     context: RequestContext = {},
@@ -933,7 +975,7 @@ export class AuthService {
   }
 
   private async issueSession(
-    account: LoginAccountRecord,
+    account: SessionIssuableAccount,
     workspace: WorkspaceAccessRecord,
     context: RequestContext = {},
   ): Promise<LoginResponse> {
@@ -999,4 +1041,3 @@ export class AuthService {
     };
   }
 }
-
