@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from "uuid";
 import {
   AdapterError,
   SlidingWindowRateLimiter,
+  TtlCache,
   buildStepIdempotencyKey,
   calculateExponentialBackoffMs,
   sanitizeSensitiveMessage,
@@ -178,6 +179,9 @@ const DEFAULT_SCHEDULED_WAIT_LEASE_MS = 60_000;
 const DEFAULT_SCHEDULED_WAIT_RETRY_BASE_DELAY_MS = 1_000;
 const MAX_SCHEDULED_WAIT_RETRY_DELAY_MS = 300_000;
 const DEFAULT_ADMISSION_DEFER_DELAY_MS = 500;
+const DEFAULT_WORKFLOW_BY_ID_CACHE_TTL_MS = 1_000;
+const DEFAULT_TRIGGER_WORKFLOW_CACHE_TTL_MS = 500;
+const DEFAULT_WORKFLOW_CACHE_MAX_ENTRIES = 10_000;
 // TODO(vNext): strengthen queue claim semantics with explicit at-least-once leases
 // and consumer heartbeats once the worker pool scales beyond a single Redis queue.
 // TODO(vNext): add deterministic fault-injection hooks for retry/dead-letter/delay
@@ -875,6 +879,9 @@ export type WorkflowEngineOptions = {
   scaleLimits?: ScaleLimits;
   adapterScaleOverrides?: Record<string, AdapterScaleOverride>;
   alertDeliveryService?: AlertDeliveryService;
+  workflowByIdCacheTtlMs?: number;
+  triggerWorkflowCacheTtlMs?: number;
+  workflowCacheMaxEntries?: number;
 };
 
 export class WorkflowEngine {
@@ -883,6 +890,8 @@ export class WorkflowEngine {
   private readonly scaleLimits: ScaleLimits;
   private readonly adapterScaleOverrides: Record<string, AdapterScaleOverride>;
   private readonly alertDeliveryService?: AlertDeliveryService;
+  private readonly workflowByIdCache: TtlCache<string, WorkflowRecord | null>;
+  private readonly triggerWorkflowCache: TtlCache<string, WorkflowRecord[]>;
   private readonly adapterRateLimiters = new Map<string, SlidingWindowRateLimiter>();
   private readonly activeAdapterExecutions = new Map<string, number>();
   private readonly queueFairnessState = new Map<
@@ -927,6 +936,128 @@ export class WorkflowEngine {
       options.adapterScaleOverrides ||
       getAdapterScaleOverridesFromEnv(this.scaleLimits);
     this.alertDeliveryService = options.alertDeliveryService;
+    const workflowCacheMaxEntries = clampNumber(
+      options.workflowCacheMaxEntries ??
+        readPositiveIntegerEnv(
+          "ENGINE_WORKFLOW_CACHE_MAX_ENTRIES",
+          DEFAULT_WORKFLOW_CACHE_MAX_ENTRIES,
+          500_000,
+        ),
+      100,
+      500_000,
+    );
+    const workflowByIdCacheTtlMs = clampNumber(
+      options.workflowByIdCacheTtlMs ??
+        readPositiveIntegerEnv(
+          "ENGINE_WORKFLOW_BY_ID_CACHE_TTL_MS",
+          DEFAULT_WORKFLOW_BY_ID_CACHE_TTL_MS,
+          60_000,
+        ),
+      100,
+      60_000,
+    );
+    const triggerWorkflowCacheTtlMs = clampNumber(
+      options.triggerWorkflowCacheTtlMs ??
+        readPositiveIntegerEnv(
+          "ENGINE_TRIGGER_WORKFLOW_CACHE_TTL_MS",
+          DEFAULT_TRIGGER_WORKFLOW_CACHE_TTL_MS,
+          60_000,
+        ),
+      100,
+      60_000,
+    );
+    this.workflowByIdCache = new TtlCache<string, WorkflowRecord | null>({
+      defaultTtlMs: workflowByIdCacheTtlMs,
+      maxEntries: workflowCacheMaxEntries,
+    });
+    this.triggerWorkflowCache = new TtlCache<string, WorkflowRecord[]>({
+      defaultTtlMs: triggerWorkflowCacheTtlMs,
+      maxEntries: Math.max(100, Math.floor(workflowCacheMaxEntries / 2)),
+    });
+  }
+
+  private workflowScopeCacheKey(input: {
+    tenantId: string;
+    organizationId: string;
+    workspaceId: string;
+  }): string {
+    return `${input.tenantId}:${input.organizationId}:${input.workspaceId}`;
+  }
+
+  private async findWorkflowByIdScopedCached(input: {
+    workflowId: string;
+    tenantId: string;
+    organizationId: string;
+    workspaceId: string;
+  }): Promise<WorkflowRecord | null> {
+    const cacheKey = `${this.workflowScopeCacheKey(input)}:${input.workflowId}`;
+    const cached = this.workflowByIdCache.get(cacheKey);
+    if (cached !== undefined) {
+      this.observability.metrics.cacheOperationsTotal.inc({
+        cache: "workflow_by_id",
+        operation: "get",
+        result: "hit",
+      });
+      return cached;
+    }
+
+    this.observability.metrics.cacheOperationsTotal.inc({
+      cache: "workflow_by_id",
+      operation: "get",
+      result: "miss",
+    });
+    const record = await this.workflowRepository.findByIdScoped({
+      workflowId: input.workflowId,
+      tenantId: input.tenantId,
+      organizationId: input.organizationId,
+      workspaceId: input.workspaceId,
+    });
+    this.workflowByIdCache.set(cacheKey, record);
+    this.observability.metrics.cacheOperationsTotal.inc({
+      cache: "workflow_by_id",
+      operation: "set",
+      result: "ok",
+    });
+    return record;
+  }
+
+  private async findActiveByTriggerCached(input: {
+    tenantId: string;
+    organizationId: string;
+    workspaceId: string;
+    adapterKey: string;
+    triggerKey: string;
+  }): Promise<WorkflowRecord[]> {
+    const cacheKey = `${this.workflowScopeCacheKey(input)}:${input.adapterKey}:${input.triggerKey}`;
+    const cached = this.triggerWorkflowCache.get(cacheKey);
+    if (cached !== undefined) {
+      this.observability.metrics.cacheOperationsTotal.inc({
+        cache: "workflow_by_trigger",
+        operation: "get",
+        result: "hit",
+      });
+      return cached;
+    }
+
+    this.observability.metrics.cacheOperationsTotal.inc({
+      cache: "workflow_by_trigger",
+      operation: "get",
+      result: "miss",
+    });
+    const workflows = await this.workflowRepository.findActiveByTrigger({
+      tenantId: input.tenantId,
+      organizationId: input.organizationId,
+      workspaceId: input.workspaceId,
+      adapterKey: input.adapterKey,
+      triggerKey: input.triggerKey,
+    });
+    this.triggerWorkflowCache.set(cacheKey, workflows);
+    this.observability.metrics.cacheOperationsTotal.inc({
+      cache: "workflow_by_trigger",
+      operation: "set",
+      result: "ok",
+    });
+    return workflows;
   }
 
   private getFairnessState(queue: string): {
@@ -1292,29 +1423,50 @@ export class WorkflowEngine {
     }
   }
 
+  private enrichEventIdempotencyKey(event: IncomingEvent): IncomingEvent {
+    if (event.idempotencyKey) {
+      return event;
+    }
+    if (!event.correlationId) {
+      return event;
+    }
+
+    return {
+      ...event,
+      idempotencyKey: [
+        event.workspaceId,
+        event.adapterKey,
+        event.triggerKey,
+        event.targetWorkflowId || "all",
+        event.correlationId,
+      ].join(":"),
+    };
+  }
+
   async queueIncomingEvent(event: IncomingEvent): Promise<void> {
-    await this.enforceIncomingQueueQuota(event);
+    const queuedEvent = this.enrichEventIdempotencyKey(event);
+    await this.enforceIncomingQueueQuota(queuedEvent);
     await this.runRepository.appendEventLog({
-      tenantId: event.tenantId,
-      organizationId: event.organizationId,
-      workspaceId: event.workspaceId,
+      tenantId: queuedEvent.tenantId,
+      organizationId: queuedEvent.organizationId,
+      workspaceId: queuedEvent.workspaceId,
       eventType: "event.received",
-      payload: event,
+      payload: queuedEvent,
     });
     this.observability.logger.info(
       "workflow.event.queued",
       {
-        correlationId: event.correlationId,
-        tenantId: event.tenantId,
-        organizationId: event.organizationId,
-        workspaceId: event.workspaceId,
+        correlationId: queuedEvent.correlationId,
+        tenantId: queuedEvent.tenantId,
+        organizationId: queuedEvent.organizationId,
+        workspaceId: queuedEvent.workspaceId,
       },
       {
-        adapterKey: event.adapterKey,
-        triggerKey: event.triggerKey,
+        adapterKey: queuedEvent.adapterKey,
+        triggerKey: queuedEvent.triggerKey,
       },
     );
-    await this.eventQueue.enqueue(event);
+    await this.eventQueue.enqueue(queuedEvent);
   }
 
   async processNextEvent(timeoutSeconds = 5): Promise<boolean> {
@@ -1335,7 +1487,7 @@ export class WorkflowEngine {
 
     const workflows: WorkflowRecord[] = [];
     if (event.targetWorkflowId) {
-      const workflowRecord = await this.workflowRepository.findByIdScoped({
+      const workflowRecord = await this.findWorkflowByIdScopedCached({
         workflowId: event.targetWorkflowId,
         tenantId: event.tenantId,
         organizationId: event.organizationId,
@@ -1350,7 +1502,7 @@ export class WorkflowEngine {
         workflows.push(workflowRecord);
       }
     } else {
-      const triggerWorkflows = await this.workflowRepository.findActiveByTrigger({
+      const triggerWorkflows = await this.findActiveByTriggerCached({
         tenantId: event.tenantId,
         organizationId: event.organizationId,
         workspaceId: event.workspaceId,
@@ -1599,7 +1751,7 @@ export class WorkflowEngine {
       return true;
     }
 
-    const workflowRecord = await this.workflowRepository.findByIdScoped({
+    const workflowRecord = await this.findWorkflowByIdScopedCached({
       workflowId: payload.workflowId,
       tenantId: scheduledWait.tenant_id,
       organizationId: scheduledWait.organization_id,
@@ -1823,7 +1975,7 @@ export class WorkflowEngine {
       return true;
     }
 
-    const workflowRecord = await this.workflowRepository.findByIdScoped({
+    const workflowRecord = await this.findWorkflowByIdScopedCached({
       workflowId: payload.workflowId,
       tenantId: retryJob.tenant_id,
       organizationId: retryJob.organization_id || "",

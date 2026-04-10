@@ -47,7 +47,7 @@ function toMode(value: string | undefined): PlatformMode | null {
     normalized === "prototype mode" ||
     normalized === "prototype-mode"
   ) {
-    return PLATFORM_MODES.PROTOTYPE;
+    return PLATFORM_MODES.LIVE;
   }
   if (normalized === "live" || normalized === "live mode" || normalized === "live-mode") {
     return PLATFORM_MODES.LIVE;
@@ -87,7 +87,7 @@ function resolveOptions(): SmokeOptions {
     apiBaseUrl: apiBaseUrl.replace(/\/$/, ""),
     expectedMode,
     organizationSlug:
-      readArgValue("organization") || process.env.LOCAL_ORG_SLUG || "prototype-org",
+      readArgValue("organization") || process.env.LOCAL_ORG_SLUG || "workspace-org",
     workspaceSlug:
       readArgValue("workspace") || process.env.LOCAL_WORKSPACE_SLUG || "default",
     email: readArgValue("email") || process.env.LOCAL_LOGIN_EMAIL || "admin@example.com",
@@ -160,28 +160,16 @@ async function runSmoke(): Promise<void> {
     );
   }
 
-  const loginEndpoint =
-    options.expectedMode === PLATFORM_MODES.PROTOTYPE ? "/auth/dev-login" : "/auth/login";
-  const session =
-    options.expectedMode === PLATFORM_MODES.PROTOTYPE
-      ? await requestJson<SessionResponse>({
-          method: "POST",
-          url: `${options.apiBaseUrl}${loginEndpoint}`,
-          body: {
-            organizationSlug: options.organizationSlug,
-            workspaceSlug: options.workspaceSlug,
-          },
-        })
-      : await requestJson<SessionResponse>({
-          method: "POST",
-          url: `${options.apiBaseUrl}${loginEndpoint}`,
-          body: {
-            email: options.email,
-            password: options.password,
-            organizationSlug: options.organizationSlug,
-            workspaceSlug: options.workspaceSlug,
-          },
-        });
+  const session = await requestJson<SessionResponse>({
+    method: "POST",
+    url: `${options.apiBaseUrl}/auth/login`,
+    body: {
+      email: options.email,
+      password: options.password,
+      organizationSlug: options.organizationSlug,
+      workspaceSlug: options.workspaceSlug,
+    },
+  });
 
   const token = session.accessToken;
   console.log(

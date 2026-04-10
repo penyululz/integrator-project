@@ -4,7 +4,7 @@
 
 ## Responsibilities
 
-- workflow execution engine
+- workflow engine with separated definition and execution layers
 - durable retry/dead-letter/wait orchestration
 - auth/session + tenant RBAC services
 - multi-organization onboarding, invite-token, and join-request workflows
@@ -30,16 +30,24 @@ Key capabilities in `options`:
 
 The returned runtime exposes active module metadata in `runtime.modules` so host processes can verify composition.
 
+Workflow-specific runtime services:
+
+- `runtime.workflowDefinitionService`
+- `runtime.workflowExecutionService`
+- `runtime.workflowEngine` (orchestrator internals)
+
 ## Module Keys
 
 - `runtime-foundation` (required)
 - `workflow-orchestration` (required)
 - `identity-auth` (optional)
+- `system-shared` (optional)
 - `alerts` (optional)
 - `retention` (optional)
 - `facility-booking` (optional)
 - `maintenance-system` (optional)
 - `calendar-aggregation` (optional)
+- `ai-engine` (optional)
 - `communication` (optional)
 - `file-storage` (optional)
 - `collaboration` (optional)

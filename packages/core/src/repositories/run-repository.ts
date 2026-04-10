@@ -3,6 +3,7 @@ import {
   redactSensitiveRecord,
   redactSensitiveValue,
   sanitizeSensitiveMessage,
+  TtlCache,
   type StandardListResult,
 } from "@integration/shared";
 import {
@@ -349,8 +350,54 @@ function toIsoIfPossible(value: unknown): string | null {
   return null;
 }
 
+const DEFAULT_ANALYTICS_CACHE_TTL_MS = 2_000;
+const DEFAULT_ANALYTICS_CACHE_MAX_ENTRIES = 2_000;
+
+function readPositiveIntegerFromEnv(
+  name: string,
+  fallback: number,
+  min: number,
+  max: number,
+): number {
+  const parsed = Number.parseInt(process.env[name] || "", 10);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return Math.max(min, Math.min(max, parsed));
+}
+
 export class RunRepository {
-  constructor(private readonly pool: Pool) {}
+  private readonly analyticsCacheTtlMs: number;
+  private readonly analyticsOverviewCache: TtlCache<string, AnalyticsOverview>;
+  private readonly workflowAnalyticsCache: TtlCache<string, WorkflowAnalyticsRow[]>;
+  private readonly adapterAnalyticsCache: TtlCache<string, AdapterAnalyticsRow[]>;
+
+  constructor(private readonly pool: Pool) {
+    this.analyticsCacheTtlMs = readPositiveIntegerFromEnv(
+      "ENGINE_ANALYTICS_CACHE_TTL_MS",
+      DEFAULT_ANALYTICS_CACHE_TTL_MS,
+      100,
+      60_000,
+    );
+    const analyticsCacheMaxEntries = readPositiveIntegerFromEnv(
+      "ENGINE_ANALYTICS_CACHE_MAX_ENTRIES",
+      DEFAULT_ANALYTICS_CACHE_MAX_ENTRIES,
+      100,
+      100_000,
+    );
+    this.analyticsOverviewCache = new TtlCache<string, AnalyticsOverview>({
+      defaultTtlMs: this.analyticsCacheTtlMs,
+      maxEntries: analyticsCacheMaxEntries,
+    });
+    this.workflowAnalyticsCache = new TtlCache<string, WorkflowAnalyticsRow[]>({
+      defaultTtlMs: this.analyticsCacheTtlMs,
+      maxEntries: analyticsCacheMaxEntries,
+    });
+    this.adapterAnalyticsCache = new TtlCache<string, AdapterAnalyticsRow[]>({
+      defaultTtlMs: this.analyticsCacheTtlMs,
+      maxEntries: analyticsCacheMaxEntries,
+    });
+  }
   // TODO(vNext): introduce time-based partitioning for workflow_runs/event_logs/audit_logs
   // once retention windows exceed current single-table scan assumptions.
 
@@ -432,6 +479,24 @@ export class RunRepository {
       predicates,
       values,
     };
+  }
+
+  private analyticsCacheKey(
+    prefix: "overview" | "workflow" | "adapter",
+    input: AnalyticsFilter,
+  ): string {
+    return JSON.stringify([
+      prefix,
+      input.tenantId,
+      input.organizationId,
+      input.workspaceId,
+      input.from || null,
+      input.to || null,
+      input.workflowId || null,
+      input.status || null,
+      input.adapterKey || null,
+      input.limit || null,
+    ]);
   }
 
   private buildAuditFilter(input: AuditLogFilter): {
@@ -2028,6 +2093,12 @@ export class RunRepository {
   }
 
   async getAnalyticsOverview(input: AnalyticsFilter): Promise<AnalyticsOverview> {
+    const cacheKey = this.analyticsCacheKey("overview", input);
+    const cached = this.analyticsOverviewCache.get(cacheKey);
+    if (cached !== undefined) {
+      return cached;
+    }
+
     const runFilter = this.buildRunFilter(input);
     const runs = await this.pool.query<{
       total_runs: string;
@@ -2120,7 +2191,7 @@ export class RunRepository {
     const retryRow = retryEvents.rows[0];
     const credentialRow = credentialValidationFailures.rows[0];
 
-    return {
+    const overview: AnalyticsOverview = {
       totalRuns: Number(runRow?.total_runs || 0),
       successRuns: Number(runRow?.success_runs || 0),
       failedRuns: Number(runRow?.failed_runs || 0),
@@ -2133,9 +2204,17 @@ export class RunRepository {
       credentialValidationFailures: Number(credentialRow?.failures || 0),
       avgRunDurationSeconds: Number(runRow?.avg_run_duration_seconds || 0),
     };
+    this.analyticsOverviewCache.set(cacheKey, overview, this.analyticsCacheTtlMs);
+    return overview;
   }
 
   async getWorkflowAnalytics(input: AnalyticsFilter): Promise<WorkflowAnalyticsRow[]> {
+    const cacheKey = this.analyticsCacheKey("workflow", input);
+    const cached = this.workflowAnalyticsCache.get(cacheKey);
+    if (cached !== undefined) {
+      return cached;
+    }
+
     const runFilter = this.buildRunFilter(input);
     const values = [...runFilter.values];
     const limit = Math.max(1, Math.min(input.limit || 20, 100));
@@ -2170,6 +2249,7 @@ export class RunRepository {
 
     const workflowIds = result.rows.map((row) => row.workflow_id);
     if (workflowIds.length === 0) {
+      this.workflowAnalyticsCache.set(cacheKey, [], this.analyticsCacheTtlMs);
       return [];
     }
 
@@ -2243,7 +2323,7 @@ export class RunRepository {
       retryCounts.rows.map((row) => [row.workflow_id, Number(row.retry_events || 0)]),
     );
 
-    return result.rows.map((row) => ({
+    const analyticsRows = result.rows.map((row) => ({
       workflowId: row.workflow_id,
       workflowKey: workflowMetaById.get(row.workflow_id)?.workflowKey || row.workflow_id,
       workflowName: workflowMetaById.get(row.workflow_id)?.workflowName || row.workflow_id,
@@ -2254,9 +2334,21 @@ export class RunRepository {
       retryEvents: retryCountByWorkflow.get(row.workflow_id) || 0,
       avgDurationSeconds: Number(row.avg_duration_seconds || 0),
     }));
+    this.workflowAnalyticsCache.set(
+      cacheKey,
+      analyticsRows,
+      this.analyticsCacheTtlMs,
+    );
+    return analyticsRows;
   }
 
   async getAdapterAnalytics(input: AnalyticsFilter): Promise<AdapterAnalyticsRow[]> {
+    const cacheKey = this.analyticsCacheKey("adapter", input);
+    const cached = this.adapterAnalyticsCache.get(cacheKey);
+    if (cached !== undefined) {
+      return cached;
+    }
+
     const eventFilter = this.buildEventFilter(input);
     const values = [...eventFilter.values];
     const limit = Math.max(1, Math.min(input.limit || 20, 100));
@@ -2283,12 +2375,18 @@ export class RunRepository {
       values,
     );
 
-    return result.rows.map((row) => ({
+    const analyticsRows = result.rows.map((row) => ({
       adapterKey: row.adapter_key,
       actionAttempts: Number(row.action_attempts || 0),
       actionFailures: Number(row.action_failures || 0),
       avgActionDurationMs: Number(row.avg_action_duration_ms || 0),
     }));
+    this.adapterAnalyticsCache.set(
+      cacheKey,
+      analyticsRows,
+      this.analyticsCacheTtlMs,
+    );
+    return analyticsRows;
   }
 
   async upsertAgentToolApprovals(input: {

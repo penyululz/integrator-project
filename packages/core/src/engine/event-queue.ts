@@ -1,4 +1,4 @@
-import { Queue, Worker } from "bullmq";
+import { Queue, Worker, type JobsOptions } from "bullmq";
 import { RedisClientType } from "redis";
 import type { IncomingEvent } from "./types";
 import {
@@ -14,6 +14,13 @@ type RedisBacklogOps = {
   hGetAll?: (key: string) => Promise<Record<string, string>>;
   hDel?: (key: string, field: string) => Promise<number>;
   lLen?: (key: string) => Promise<number>;
+  set?: (
+    key: string,
+    value: string,
+    mode: "PX",
+    ttlMs: number,
+    condition: "NX",
+  ) => Promise<"OK" | null>;
 };
 
 export type QueueDriver = "bullmq" | "redis_legacy";
@@ -22,6 +29,7 @@ export type EventQueueOptions = {
   queueDriver?: "bullmq" | "legacy" | "redis_legacy";
   redisUrl?: string;
   consumeEnabled?: boolean;
+  dedupeTtlMs?: number;
   bullmqPrefix?: string;
   bullmqWorkerConcurrency?: number;
   bullmqRemoveOnCompleteCount?: number;
@@ -37,6 +45,10 @@ export type EventQueueRuntimeState = {
   consumeEnabled: boolean;
   usingFallback: boolean;
   fallbackReason: string | null;
+  dedupe: {
+    enabled: boolean;
+    ttlMs: number;
+  };
   bullmq: {
     enabled: boolean;
     queueReady: boolean;
@@ -109,6 +121,17 @@ function normalizeBullMqQueueName(queueKey: string): string {
   return trimmed.replace(/[:\s]+/g, "-");
 }
 
+function normalizeDedupeKey(value: string): string {
+  const normalized = value.trim().replace(/[^A-Za-z0-9:_-]/g, "_");
+  return normalized.slice(0, 200);
+}
+
+function isBullMqDuplicateJobError(error: unknown): boolean {
+  const message =
+    error instanceof Error ? error.message : String(error || "");
+  return /jobid|job id|already exists/i.test(message);
+}
+
 function toBullMqConnection(redisUrl: string): Record<string, unknown> {
   const parsed = new URL(redisUrl);
   const database = parsed.pathname && parsed.pathname !== "/" ? Number(parsed.pathname.slice(1)) : 0;
@@ -134,6 +157,7 @@ export class EventQueue {
   private driver: QueueDriver;
   private readonly redisUrl: string;
   private readonly consumeEnabled: boolean;
+  private readonly dedupeTtlMs: number;
   private readonly bullmqPrefix: string;
   private readonly bullmqWorkerConcurrency: number;
   private readonly bullmqRemoveOnCompleteCount: number;
@@ -159,6 +183,12 @@ export class EventQueue {
     this.driver = this.configuredDriver;
     this.redisUrl = options.redisUrl || process.env.REDIS_URL || "";
     this.consumeEnabled = options.consumeEnabled !== false;
+    this.dedupeTtlMs = normalizeIntOption(
+      options.dedupeTtlMs || process.env.INTEGRATOR_QUEUE_DEDUPE_TTL_MS,
+      300_000,
+      1_000,
+      3_600_000,
+    );
     this.bullmqPrefix =
       (options.bullmqPrefix || process.env.INTEGRATOR_BULLMQ_PREFIX || "integrator").trim() ||
       "integrator";
@@ -361,18 +391,76 @@ export class EventQueue {
     );
   }
 
+  private resolveDedupeKey(event: IncomingEvent): string | null {
+    if (!event.idempotencyKey) {
+      return null;
+    }
+    const normalized = normalizeDedupeKey(event.idempotencyKey);
+    if (!normalized) {
+      return null;
+    }
+    return normalized;
+  }
+
+  private markDeduped(event: IncomingEvent, dedupeKey: string): void {
+    this.observability.metrics.queueJobsDedupedTotal.inc({
+      queue: this.queueKey,
+    });
+    this.observability.logger.info(
+      "queue.enqueue.deduped",
+      {
+        correlationId: event.correlationId,
+        tenantId: event.tenantId,
+        organizationId: event.organizationId,
+        workspaceId: event.workspaceId,
+      },
+      {
+        queue: this.queueKey,
+        dedupeKey,
+      },
+    );
+  }
+
+  private async reserveLegacyDedupeKey(dedupeKey: string): Promise<boolean> {
+    const redisOps = this.backlogOps;
+    if (typeof redisOps.set !== "function") {
+      return true;
+    }
+    const key = `${this.queueKey}:dedupe:${dedupeKey}`;
+    const result = await redisOps.set(key, "1", "PX", this.dedupeTtlMs, "NX");
+    return result === "OK";
+  }
+
   async enqueue(event: IncomingEvent): Promise<void> {
     this.observability.metrics.queueJobsEnqueuedTotal.inc({
       queue: this.queueKey,
     });
+    const dedupeKey = this.resolveDedupeKey(event);
 
     if (this.driver === "bullmq" && this.bullQueue) {
       try {
-        await this.bullQueue.add(this.bullmqJobName, event);
+        const jobOptions: JobsOptions | undefined = dedupeKey
+          ? {
+              jobId: dedupeKey,
+            }
+          : undefined;
+        await this.bullQueue.add(this.bullmqJobName, event, jobOptions);
         await this.markEnqueued(event);
         return;
       } catch (error) {
+        if (dedupeKey && isBullMqDuplicateJobError(error)) {
+          this.markDeduped(event, dedupeKey);
+          return;
+        }
         this.switchToLegacyQueue(error);
+      }
+    }
+
+    if (dedupeKey) {
+      const reserved = await this.reserveLegacyDedupeKey(dedupeKey);
+      if (!reserved) {
+        this.markDeduped(event, dedupeKey);
+        return;
       }
     }
 
@@ -535,6 +623,10 @@ export class EventQueue {
         this.configuredDriver === "bullmq" &&
         this.driver === "redis_legacy",
       fallbackReason: this.fallbackReason,
+      dedupe: {
+        enabled: true,
+        ttlMs: this.dedupeTtlMs,
+      },
       bullmq: {
         enabled: this.configuredDriver === "bullmq",
         queueReady: Boolean(this.bullQueue),

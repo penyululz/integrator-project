@@ -6,7 +6,7 @@ import { closePostgresPool, getPostgresPool } from "../db/postgres";
 import { closeRedisClient, getRedisClient } from "../db/redis";
 import { findRepoRoot } from "./init-env";
 
-type EnvImportance = "required" | "optional" | "prototype_optional";
+type EnvImportance = "required" | "optional";
 
 type EnvSpec = {
   name: string;
@@ -21,7 +21,6 @@ export type SetupVerificationSummary = {
   modeSource: string;
   missingRequired: string[];
   missingOptional: string[];
-  missingPrototypeOptional: string[];
   warnings: string[];
 };
 
@@ -29,7 +28,7 @@ const ENV_SPECS: EnvSpec[] = [
   {
     name: "INTEGRATOR_MODE",
     importance: "required",
-    description: "MODE: Prototype Mode | Live Mode (runtime source of truth).",
+    description: "MODE: Live Mode (runtime source of truth).",
   },
   {
     name: "DATABASE_URL",
@@ -110,13 +109,13 @@ const ENV_SPECS: EnvSpec[] = [
   },
   {
     name: "ENABLED_ADAPTER_KEYS",
-    importance: "prototype_optional",
-    description: "Optional adapter allow-list for Prototype Mode runs.",
+    importance: "optional",
+    description: "Optional adapter allow-list override.",
   },
   {
     name: "DISABLED_ADAPTER_KEYS",
-    importance: "prototype_optional",
-    description: "Optional adapter deny-list for Prototype Mode runs.",
+    importance: "optional",
+    description: "Optional adapter deny-list override.",
   },
 ];
 
@@ -163,10 +162,8 @@ export function evaluateSetupEnvironment(
     env as Record<string, string | undefined>,
   );
   const appEnv = env.APP_ENV || "development";
-  const isLiveMode = modeResolution.mode === "Live Mode";
   const missingRequired: string[] = [];
   const missingOptional: string[] = [];
-  const missingPrototypeOptional: string[] = [];
   const warnings: string[] = [];
 
   for (const spec of ENV_SPECS) {
@@ -180,15 +177,8 @@ export function evaluateSetupEnvironment(
       continue;
     }
 
-    if (spec.importance === "prototype_optional") {
-      missingPrototypeOptional.push(spec.name);
-      continue;
-    }
-
-    if (spec.requiredInProduction && !isLiveMode) {
-      warnings.push(
-        `${spec.name} is not set. Prototype Mode fallback behavior may be used.`,
-      );
+    if (spec.requiredInProduction && appEnv !== "production") {
+      warnings.push(`${spec.name} is not set. Configure this before non-local deployments.`);
       continue;
     }
 
@@ -201,7 +191,6 @@ export function evaluateSetupEnvironment(
     modeSource: modeResolution.source,
     missingRequired,
     missingOptional,
-    missingPrototypeOptional,
     warnings,
   };
 }
@@ -224,12 +213,9 @@ export async function verifySetup(options?: {
   logger.info(`[setup] MODE=${summary.integratorMode} (source=${summary.modeSource})`);
   logger.info(`[setup] APP_ENV=${summary.appEnv}`);
   logger.info(
-    `[setup] missing REQUIRED FOR PROTOTYPE MODE + LIVE MODE vars: ${formatList(summary.missingRequired)}`,
+    `[setup] missing required vars: ${formatList(summary.missingRequired)}`,
   );
   logger.info(`[setup] missing optional vars: ${formatList(summary.missingOptional)}`);
-  logger.info(
-    `[setup] missing OPTIONAL IN PROTOTYPE MODE vars: ${formatList(summary.missingPrototypeOptional)}`,
-  );
   for (const warning of summary.warnings) {
     logger.warn(`[setup] warning: ${warning}`);
   }

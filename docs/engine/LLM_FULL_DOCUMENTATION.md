@@ -1,176 +1,458 @@
-# LLM Full Documentation: Integrator Backend Engine
+# LLM Full Documentation: Integrator Engine (Engine + Backend + Server)
 
-## 1) Purpose
+## 1. Scope and Intent
 
-This repository is a backend-only engine that can be embedded into future SaaS products or internal platforms.
+This repository is a backend platform intended for reuse across products.
 
-Primary goals:
+The architecture is intentionally organized into three runtime layers only:
 
-- multi-tenant runtime
-- reusable workflow engine
-- reusable adapter/plugin model
-- stateless API + horizontally scalable workers
-- framework-agnostic integration seams
+- `engine`: orchestration kernels (workflow + AI execution primitives)
+- `backend`: domain modules and data/services
+- `server`: API and worker process hosts
 
-This repository intentionally avoids frontend coupling. Any UI should integrate through API contracts only.
+Primary outcomes:
 
-## 2) What Is In Scope
+- multi-tenant isolation
+- portable workflow orchestration
+- adapter/plugin extensibility
+- stateless API + scalable worker model
+- high-concurrency readiness via queueing, retries, idempotency, observability, caching, and rate limiting
 
-- `apps/api`: HTTP API process and worker process entrypoints
-- `packages/core`: engine logic, runtime composition, repositories, auth, queue/retry/wait flows, approvals, audit, observability
-- `packages/shared`: shared contracts and schemas
-- `packages/adapters/*`: connector implementations loaded via manifests
-- `packages/core/src/facility`: reusable multi-tenant facility + booking engine module
-- `packages/core/src/maintenance`: reusable multi-tenant maintenance ticket engine module
-- `packages/core/src/calendar`: reusable calendar aggregation engine (bookings + maintenance + org/team + workflow events)
-- `packages/core/src/communication`: reusable communication engine (channels/messages/mentions/meeting logs/AI summary requests)
-- `packages/core/src/file-storage`: reusable Nextcloud-style storage engine (spaces/folders/files/shares/activity + object metadata separation)
+---
 
-## 3) Runtime Construction (Most Important Integration API)
+## 2. Repository Map (What To Read First)
 
-`packages/core/src/index.ts` exports `createCoreRuntime(options)` with dependency-injection support.
+### 2.1 Core directories
 
-### Key runtime options
+- `apps/api/src/*`: HTTP server, middleware, routes, worker bootstrap
+- `packages/core/src/*`: engine and backend modules, repositories, runtime composition
+- `packages/shared/src/*`: shared contracts, list-query schemas, API shape standards
+- `packages/adapters/*`: integration adapters discovered by manifests
+- `docs/engine/*`: system documentation for portability and operations
 
-- `role`: `"api" | "worker" | "all"`
-- `dependencies.pool`: inject existing Postgres pool
-- `dependencies.redis`: inject existing Redis client
-- `dependencies.observability`: inject custom metrics/log runtime
-- `dependencies.pluginLoader`: inject prebuilt plugin loader
-- `adapterDiscovery`: configure adapter manifest discovery
-- `adapterInitConfig`: pass adapter-specific init config
-- `queue`: override queue settings (`queueKey`, driver options, consume behavior)
-- `modules.include` / `modules.exclude`: explicitly compose enabled engine modules
-- `features.alerts`: disable alert dispatch subsystem if needed
-- `features.retention`: disable retention cleanup subsystem if needed
-- `features.maintenanceSystem`: disable maintenance ticket subsystem if needed
-- `features.calendarAggregation`: disable calendar aggregation subsystem if needed
-- `features.communication`: disable communication subsystem if needed
-- `features.fileStorage`: disable file storage subsystem if needed
-- `closeInjectedDependencies`: close externally injected DB/Redis clients on runtime close
+### 2.2 LLM reading order
 
-`runtime.modules` returns the active module registration (`enabled`, `disabled`, `byLayer`) so host processes and AI agents can verify composition.
+1. `docs/engine/LLM_FULL_DOCUMENTATION.md` (this file)
+2. `docs/engine/ARCHITECTURE_MAP.md`
+3. `packages/core/src/index.ts` (`createCoreRuntime` composition)
+4. `apps/api/src/app.ts` and `apps/api/src/routes/index.ts` (HTTP boundary)
+5. `packages/core/src/runtime/module-catalog.ts` and `module-registration.ts`
+6. `packages/core/src/engine/*` and `packages/core/src/workflow-engine/*`
+7. `packages/core/src/repositories/*`
+8. `apps/api/src/schemas/index.ts` + `packages/shared/src/schemas/index.ts`
 
-### Role behavior
+---
 
-- API role defaults to queue producer behavior (`consumeEnabled=false`)
-- Worker role defaults to queue consumer behavior (`consumeEnabled=true`)
+## 3. System Architecture
 
-This separation prevents API instances from accidentally competing with worker consumers.
+## 3.1 Runtime topology
 
-## 4) Worker Execution Model
+- API process:
+  - validates requests
+  - authenticates/authorizes users
+  - enqueues workflow work
+  - serves observability and health endpoints
+- Worker process:
+  - drains queue
+  - executes workflow runs
+  - processes retries, scheduled waits, maintenance bursts, alerts, AI ingestion
 
-Use `CoreBackgroundWorker` from `@integration/core` for loop orchestration:
+### 3.2 Layer ownership
 
-- retry, scheduled waits, alert dispatch, retention pass, event consumption
-- configurable poll timeout and backoff
-- stop/start lifecycle for graceful shutdown
+- Engine layer:
+  - workflow orchestration
+  - AI execution/control plane
+- Backend layer:
+  - auth/identity
+  - alerts, retention, maintenance, facility booking, calendar, communication, file storage, collaboration, shared system modules
+- Server layer:
+  - runtime bootstrap
+  - API middleware + route wiring
+  - worker loop lifecycle
 
-`apps/api/src/worker.ts` is the reference implementation.
+### 3.3 Core runtime entrypoint
 
-Host integration routing is configurable via `API_BASE_PATH` (default `/api/v1`) and runtime naming aliases use `ENGINE_*` variables.
+- `packages/core/src/index.ts`
+- Main constructor: `createCoreRuntime(options)`
+- Important options:
+  - `role`: `api | worker | all`
+  - dependency injection for DB/Redis/observability/plugin-loader
+  - queue options
+  - module include/exclude selection
+  - feature flags for optional subsystems
 
-## 5) Multi-Tenancy Model
+### 3.4 Runtime mode policy (updated)
 
-The engine enforces tenant boundaries through scoped repositories:
+- Runtime is now **Live Mode only**.
+- `Prototype Mode` fallback paths are disabled in server execution.
+- Legacy mode tokens (for example `prototype`) are normalized to `Live Mode` at mode resolution boundaries.
+- `auth/dev-login` is no longer mode-driven; development login requires explicit `AUTH_DEV_LOGIN_ENABLED=true`.
 
-- `tenant_id`
-- `organization_id`
-- `workspace_id`
+---
 
-All run orchestration, workflow state transitions, audit logs, approvals, and analytics use this scope.
+## 4. Module Inventory
 
-### Non-negotiable tenancy rule
+Canonical source of truth: `packages/core/src/runtime/module-catalog.ts`
 
-Any new route/service must carry tenant scope from authenticated session to repository calls. Never query cross-scope without explicit privileged admin intent.
+### 4.1 Required modules
 
-## 6) Adapter / Plugin Model
+- `runtime-foundation` (`server`)
+- `workflow-orchestration` (`engine`)
 
-Adapters are manifest-discovered and runtime-initialized.
+### 4.2 Optional modules
 
-- manifests: `packages/adapters/*/manifest.json`
-- loader: `PluginLoader`
-- compatibility check: platform version + trigger/action declarations
+- `identity-auth` (`backend`)
+- `system-shared` (`backend`)
+- `alerts` (`backend`)
+- `retention` (`backend`)
+- `facility-booking` (`backend`)
+- `maintenance-system` (`backend`)
+- `calendar-aggregation` (`backend`)
+- `ai-engine` (`engine`)
+- `communication` (`backend`)
+- `file-storage` (`backend`)
+- `collaboration` (`backend`)
 
-To add a new adapter:
+### 4.3 Module resolution
 
-1. Create adapter package + manifest.
-2. Ensure manifest trigger/action declarations match implementation.
-3. Provide init config via env or `adapterInitConfig`.
-4. Validate via existing integration tests.
+- Source: `packages/core/src/runtime/module-registration.ts`
+- Inputs:
+  - `ENGINE_MODULES`
+  - `ENGINE_DISABLE_MODULES`
+  - legacy feature toggles
+- Output:
+  - `enabled`
+  - `disabled`
+  - `byLayer`
+  - `flags`
 
-## 7) Queue and Throughput Model
+---
 
-- transport: BullMQ on Redis (legacy list fallback available)
-- event queue state: backlog metrics + driver/fallback state exposed in health/runtime logs
-- retry and scheduled waits are DB-backed for durability
+## 5. Data and Queue Architecture
 
-Horizontal scale is achieved by adding worker replicas. API replicas should stay stateless.
+### 5.1 Persistence and messaging
 
-## 8) Database and Redis Tuning Knobs
+- PostgreSQL: authoritative state
+- Redis + BullMQ: event queue transport (legacy fallback exists)
+- Durable DB-backed workflows for retries and scheduled waits
 
-Added env controls for portable high-load tuning:
+### 5.2 Reliability controls
 
-- `DATABASE_POOL_MAX`
-- `DATABASE_POOL_IDLE_TIMEOUT_MS`
-- `DATABASE_POOL_CONNECTION_TIMEOUT_MS`
-- `DATABASE_POOL_STATEMENT_TIMEOUT_MS`
-- `DATABASE_POOL_QUERY_TIMEOUT_MS`
-- `DATABASE_POOL_APP_NAME`
-- `DATABASE_POOL_SSL_MODE`
-- `REDIS_SOCKET_CONNECT_TIMEOUT_MS`
-- `REDIS_SOCKET_KEEPALIVE_MS`
-- `REDIS_PING_INTERVAL_MS`
-- `REDIS_DISABLE_OFFLINE_QUEUE`
-- `REDIS_CLIENT_NAME`
+- idempotency keys propagated from API ingress to queue job identity
+- dedupe TTL in event queue
+- retry scheduling with backoff semantics
+- delayed-run leasing and restart-safe recovery
+- runtime readiness checks include DB, Redis, queue state/backlog
 
-## 9) Framework-Agnostic Integration Pattern
+### 5.3 Caching
 
-You can embed the engine in any Node server framework by doing:
+- TTL cache utility: `packages/shared/src/utils/ttl-cache.ts`
+- used for:
+  - workflow lookups
+  - analytics aggregation responses
+  - health/readiness response caching
 
-1. create a `CoreRuntime` in your host process
-2. call engine services/repositories from your framework handlers
-3. run `CoreBackgroundWorker` in dedicated worker process(es)
-4. wire lifecycle shutdown to `runtime.close()`
+---
 
-The engine is not tied to Fastify/Express for core business logic.
+## 6. Security, Permissions, and Data Protection
 
-## 10) LLM Integration Protocol
+## 6.1 Auth and RBAC
 
-When using an AI coding agent in a target project:
+Key files:
 
-1. Read this file + Architecture Map + Integration Playbook.
-2. Decide runtime role split (`api` vs `worker` processes).
-3. Inject host infra dependencies if they already exist.
-4. Keep API contracts and tenant scoping rules.
-5. Extend adapters/services using exported extension seams, not route-local hacks.
+- `apps/api/src/middleware/auth.ts`
+- `apps/api/src/middleware/api-contract.ts`
+- `packages/core/src/auth/*`
 
-### Agent guardrails
+Model:
 
-- Do not move business rules into UI clients.
-- Do not bypass repository scope filters.
-- Do not replace durable retry/wait flows with in-memory state.
-- Prefer adding module-level adapters/services over editing large monolith route files.
-- Preserve booking write safety patterns (`FOR UPDATE` lock + overlap check + idempotency) when extending facility modules.
-- Preserve maintenance lifecycle transitions and visibility/assignment scope checks when extending maintenance modules.
-- Preserve calendar aggregation as the central read layer; add new event sources through the calendar module rather than route-local unions.
-- Preserve communication channel access and message idempotency semantics; do not move mention/session/summary logic into route-local ad-hoc code.
-- Preserve file storage metadata/object separation; do not couple binary object semantics directly into route-local request handlers.
+- authenticated `req.auth.user` and scoped `req.auth.scope`
+- role enforcement via `requireRole(["owner" | "admin" | "member"])`
+- scope mismatch prevention with `withOrgScopeContext`
+- all sensitive repository calls are tenant/org/workspace scoped
 
-## 11) What To Customize Per Target Project
+### 6.2 Error envelope and request context
 
-- auth provider integration around `AuthService`
-- tenant/workspace provisioning model
-- adapter set and adapter secrets strategy
-- observability sink (Prometheus/OTel/log sink)
-- deployment topology and autoscaling policy
+- request id injection: `withApiRequestContext`
+- normalized error shape: `withApiErrorEnvelope`
+- API errors include request id + path context
 
-## 12) Quick Export
+### 6.3 Encryption and compression policy
 
-Use:
+#### Secret payloads (credentials/integration sensitive config/alert destination secrets)
+
+- Encryption: AES-256-GCM
+- Pipeline: `compress -> encrypt` (for large payloads)
+- Backward compatibility: legacy non-prefixed encrypted payloads still decrypt
+
+Code path:
+
+- `packages/core/src/security/credential-crypto.ts`
+
+New env controls:
+
+- `MASTER_ENCRYPTION_COMPRESS_ENABLED`
+- `MASTER_ENCRYPTION_COMPRESS_MIN_BYTES`
+- `MASTER_ENCRYPTION_COMPRESS_MIN_SAVINGS_RATIO`
+- `MASTER_ENCRYPTION_COMPRESS_GZIP_LEVEL`
+
+#### Cloud file/blob policy (metadata-driven)
+
+- Compression enabled only for large text-like content
+- Binary/already-compressed media remains uncompressed
+- Encryption metadata always attached
+- Pipeline metadata recorded as `compress-then-encrypt`
+
+Code path:
+
+- `packages/core/src/file-storage/blob-protection-policy.ts`
+- applied in `packages/core/src/file-storage/file-storage-repository.ts` (`normalizeBlobInput`)
+
+New env controls:
+
+- `FILE_STORAGE_COMPRESS_ENABLED`
+- `FILE_STORAGE_COMPRESS_MIN_BYTES`
+- `FILE_STORAGE_COMPRESSION_ALGORITHM`
+- `FILE_STORAGE_DEFAULT_ENCRYPTION`
+
+---
+
+## 7. API Surface (Server Layer)
+
+Primary router: `apps/api/src/routes/index.ts`
+Primary schema definitions: `apps/api/src/schemas/index.ts`
+
+### 7.1 Infrastructure and platform endpoints
+
+- `GET /health`
+- `GET /metrics`
+- `GET /health/live`
+- `GET /health/ready`
+
+### 7.2 Auth and onboarding endpoints
+
+- `/auth/login`, `/auth/entry`
+- `/auth/onboarding/create-organization`
+- `/auth/onboarding/join-organization`
+- OTP, verification, password reset, invite acceptance
+- organization switching and profile/settings endpoints
+
+### 7.3 Workflow and engine endpoints
+
+- `/workflow-engine/*` for definition/run/webhook execution flows
+- `/workflows`, `/runs`, `/retries`, `/delays`, `/logs`
+- `/analytics/overview`, `/analytics/workflows`, `/analytics/adapters`
+- `/webhook/:adapterKey/:triggerKey` generic adapter trigger ingress
+
+### 7.4 Domain module endpoints
+
+- communication: `/communication/*`
+- file storage: `/file-storage/*`
+- facilities/bookings: `/facilities*`, `/facility-bookings*`
+- maintenance: `/maintenance-tickets*`
+- calendar: `/calendar-events*`
+- knowledge/files: `/knowledge/*`
+- system modules: `/system/notifications`, `/system/activity`, `/system/approvals`
+- AI: `/ai-engine/*`
+
+### 7.5 API contract standards
+
+- list endpoints use standardized query envelope patterns
+- standardized pagination/search/sort/filter schema from shared contracts
+- request/response validation via Zod schemas
+- normalized error format across route groups
+
+---
+
+## 8. Observability and Operations
+
+### 8.1 Metrics and structured logging
+
+Metrics registry source: `packages/core/src/observability/metrics.ts`
+
+Notable metrics families:
+
+- queue operations, dedupe, backlog
+- API request counts and latency histograms
+- rate-limit exceed counters
+- health check counters
+- cache hit/miss/set counters
+
+Structured logs include request correlation + scope context in API hooks and failure handlers.
+
+### 8.2 Health model
+
+Runtime health in `packages/core/src/index.ts`:
+
+- liveness
+- readiness
+  - DB probe
+  - Redis probe
+  - queue runtime/backlog snapshot
+  - enabled/disabled module report
+
+### 8.3 Rate limiting
+
+- Middleware: `apps/api/src/middleware/rate-limit.ts`
+- Redis-backed where available, safe fallback in-memory
+- configurable public/auth limits
+- bypass role support
+- skip list for metrics/health endpoints
+
+---
+
+## 9. AI System Architecture
+
+Primary module: `packages/core/src/ai-engine/*`
+
+Capabilities:
+
+- provider-agnostic model execution
+- summarization/classification/document QA
+- workflow assistant
+- agent tool orchestration with approvals
+- learning ingestion/retrieval flows with guardrails
+
+Safety and governance:
+
+- scope-aware retrieval and access logging
+- approval workflow integration
+- tool-level auditability
+- background ingestion scheduling in worker loops
+
+API touchpoints:
+
+- `/ai-engine/summarize`
+- `/ai-engine/classify`
+- `/ai-engine/document-qa`
+- `/ai-engine/agents`
+
+---
+
+## 10. Onboarding and Identity Flows
+
+Core service:
+
+- `packages/core/src/auth/organization-membership-service.ts`
+
+Supported flows:
+
+- entry login
+- create organization + seed workspace + default invite token
+- join organization via slug/code/invite token
+- join request approval/rejection lifecycle
+- organization context switch
+- invite token create/revoke/list
+- OTP/email verification/password reset
+
+Data rules:
+
+- user membership scoped to tenant/org/workspace
+- audit logs for role/invite/join actions
+- rate limiting on auth-sensitive flows
+
+---
+
+## 11. Integration Guide (For Host Repositories)
+
+### 11.1 Backend embedding pattern
+
+1. Create `CoreRuntime` via `createCoreRuntime`.
+2. Split processes by role:
+   - API process: `role: "api"`
+   - worker process: `role: "worker"`
+3. Inject existing infra clients if host already owns DB/Redis.
+4. Mount routes and middleware preserving scope/auth/error conventions.
+5. Run migrations before serving traffic.
+
+### 11.2 Adapter extension pattern
+
+1. Add adapter package under `packages/adapters/*`.
+2. Define manifest and action/trigger contract.
+3. Register config + credential resolution.
+4. Verify with queue + workflow integration tests.
+
+### 11.3 Deployment baseline
+
+- horizontally scale API instances (stateless)
+- scale worker replicas based on queue lag/backlog
+- keep Redis and Postgres sizing aligned with target concurrency
+- monitor p95/p99 API latency and queue age
+
+---
+
+## 12. Autonomous AI Implementation Protocol
+
+This section is the direct recipe for another AI agent.
+
+### 12.1 Read and build context
+
+1. Parse `package.json` workspaces.
+2. Read `packages/shared/src/types/*` and `packages/shared/src/schemas/index.ts`.
+3. Read `apps/api/src/schemas/index.ts` for request models.
+4. Read `apps/api/src/routes/index.ts` for route wiring.
+5. Read `packages/core/src/index.ts` for runtime composition and module availability.
+
+### 12.2 Backend automation tasks
+
+1. Add/modify routes only after extending matching schema.
+2. Keep tenant/org/workspace scoping on every repository call.
+3. Reuse standardized list query/pagination/filter contracts.
+4. Emit structured logs and metrics for new endpoints.
+5. Add integration tests for auth + scope + failure envelope.
+
+### 12.3 Frontend automation tasks
+
+1. Generate API client from schemas + route groups.
+2. Render UI strictly from API contracts (no backend rule duplication).
+3. Use server-provided pagination/search/filter fields as canonical state.
+4. Respect role/scope errors and request-id error envelope.
+5. For file uploads, follow blob protection metadata pipeline (`compress-then-encrypt` policy).
+
+### 12.4 Required validation gates
+
+- `npm run lint -w @integration/shared`
+- `npm run lint -w @integration/core`
+- `npm run lint -w @integration/api`
+- `npm run test -w @integration/core`
+- `npm run test -w @integration/api`
+
+---
+
+## 13. High-Concurrency Notes (50k+ User Readiness)
+
+Code-level readiness currently includes:
+
+- queue dedupe + idempotency keys
+- retry-safe workflow ingress paths
+- API rate limiting
+- multi-layer caching
+- structured logging + metrics + health probes
+- module-level worker poll/backoff controls
+
+Operational readiness still requires:
+
+- load testing against production-like infra
+- Postgres indexing/pool tuning
+- Redis topology sizing
+- worker autoscaling policies
+- SLO alarm thresholds and incident runbooks
+
+---
+
+## 14. Quick Commands
 
 ```bash
+npm run build
+npm run lint
+npm run test
+npm run dev:local
+npm run migrate
 npm run engine:export
 ```
 
-This creates `dist/engine-portable` with engine-focused files and an export manifest.
+For a fast route inventory:
+
+```bash
+powershell -Command "$r='router\\.(get|post|put|patch|delete)\\(\\s*\"([^\"]+)\"'; Get-Content apps/api/src/routes/index.ts | % { if($_ -match $r){ '{0} {1}' -f $matches[1].ToUpper(), $matches[2] } }"
+```

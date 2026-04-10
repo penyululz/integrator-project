@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { evaluateSetupEnvironment } from "./verify-setup";
 
 describe("evaluateSetupEnvironment", () => {
-  it("accepts minimal development setup with warnings", () => {
+  it("normalizes legacy prototype mode value to live mode", () => {
     const result = evaluateSetupEnvironment({
       INTEGRATOR_MODE: "Prototype Mode",
       APP_ENV: "development",
@@ -10,13 +10,13 @@ describe("evaluateSetupEnvironment", () => {
       REDIS_URL: "redis://localhost:6379",
     });
 
-    expect(result.integratorMode).toBe("Prototype Mode");
+    expect(result.integratorMode).toBe("Live Mode");
     expect(result.missingRequired).toEqual([]);
     expect(result.warnings).toContain(
-      "JWT_SECRET is not set. Prototype Mode fallback behavior may be used.",
+      "JWT_SECRET is not set. Configure this before non-local deployments.",
     );
     expect(result.warnings).toContain(
-      "MASTER_ENCRYPTION_KEY is not set. Prototype Mode fallback behavior may be used.",
+      "MASTER_ENCRYPTION_KEY is not set. Configure this before non-local deployments.",
     );
   });
 

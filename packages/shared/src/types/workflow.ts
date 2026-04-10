@@ -106,11 +106,49 @@ export type WorkflowBuilderNodeMetadata = {
   notes?: string;
 };
 
+export type WorkflowGraphNodeKind =
+  | "trigger"
+  | "action"
+  | "delay"
+  | "branch"
+  | "result";
+
+export type WorkflowGraphNode = {
+  id: string;
+  kind: WorkflowGraphNodeKind;
+  label?: string;
+  adapter?: string;
+  action?: string;
+  config?: Record<string, unknown>;
+  input?: Record<string, WorkflowMappedValue>;
+  condition?: WorkflowConditionBlock;
+  retryPolicy?: WorkflowStepRetryPolicy;
+  onError?: "stop" | "continue" | "retry";
+  delayMs?: number;
+  delaySeconds?: number;
+  metadata?: Record<string, unknown>;
+};
+
+export type WorkflowGraphEdge = {
+  id: string;
+  source: string;
+  target: string;
+  branch?: "then" | "else";
+  order?: number;
+  metadata?: Record<string, unknown>;
+};
+
+export type WorkflowGraph = {
+  nodes: WorkflowGraphNode[];
+  edges: WorkflowGraphEdge[];
+};
+
 export type WorkflowBuilderMetadata = {
   source?: "builder" | "template" | "api" | "import";
   paletteVersion?: string;
   inspectorVersion?: string;
   createdFromTemplateId?: string;
   nodeLayout?: WorkflowBuilderNodeMetadata[];
+  graph?: WorkflowGraph;
   [key: string]: unknown;
 };

@@ -43,6 +43,7 @@ export type StandardListResult<Row> = {
   rows: Row[];
   nextCursor: string | null;
   totalApprox: number;
+  appliedSearch?: string | null;
   appliedFilters: ListFilterGroup | null;
   appliedSorts: ListSortDirective[];
   page: number;

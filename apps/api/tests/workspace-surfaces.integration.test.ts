@@ -4,7 +4,6 @@ import path from "node:path";
 import request from "supertest";
 import { DataType, newDb } from "pg-mem";
 import type { CoreRuntime } from "@integration/core";
-import { PLATFORM_MODES } from "@integration/shared";
 import { describe, expect, it } from "vitest";
 import { createApp } from "../src/app";
 import { PluginLoader } from "../../../packages/core/src/engine/plugin-loader";
@@ -311,41 +310,4 @@ describe("Workspace surface API contracts", () => {
     }
   });
 
-  it("preserves route shape with contract-compatible data in Prototype Mode", async () => {
-    const { runtime } = await createWorkspaceSurfaceRuntime();
-    const app = await createApp(runtime, {
-      platformMode: PLATFORM_MODES.PROTOTYPE,
-      platformModeSource: "INTEGRATOR_MODE",
-    });
-    try {
-      const profile = await request(app.server).get("/api/v1/profile");
-      expect(profile.status).toBe(200);
-      expect(profile.body.profile).toEqual(
-        expect.objectContaining({
-          email: "prototype.admin@integrator.local",
-        }),
-      );
-
-      const overview = await request(app.server).get("/api/v1/settings/overview");
-      expect(overview.status).toBe(200);
-      expect(overview.body.overview.mode.name).toBe("Prototype Mode");
-
-      const members = await request(app.server)
-        .get("/api/v1/organization/members")
-        .query({ status: "active" });
-      expect(members.status).toBe(200);
-      expect(Array.isArray(members.body.members)).toBe(true);
-      expect(members.body.members.length).toBeGreaterThan(0);
-
-      const docs = await request(app.server).get("/api/v1/knowledge/docs");
-      expect(docs.status).toBe(200);
-      expect(Array.isArray(docs.body.docs)).toBe(true);
-
-      const files = await request(app.server).get("/api/v1/knowledge/files");
-      expect(files.status).toBe(200);
-      expect(Array.isArray(files.body.files)).toBe(true);
-    } finally {
-      await runtime.close();
-    }
-  });
 });

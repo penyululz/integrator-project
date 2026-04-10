@@ -23,9 +23,13 @@ import {
   type MaintenanceTicketRecord as EngineMaintenanceTicketRecord,
   type CoreRuntime,
   type PlatformRole,
+  type WorkflowDefinitionUpsertInput as EngineWorkflowDefinitionUpsertInput,
+  type WorkflowDefinitionValidationInput as EngineWorkflowDefinitionValidationInput,
 } from "@integration/core";
 import {
   PLATFORM_MODES,
+  buildEmptyStandardListEnvelope,
+  buildStandardListEnvelope,
   type CalendarEventRecord,
   type CommunicationAiSummaryRequestRecord,
   type CommunicationMessageRecord,
@@ -63,13 +67,42 @@ import {
   canQueueApprovalContinuation,
   mergeApprovedToolIdsIntoRetryPayload,
 } from "./approval-workflow";
-import { createPrototypeModeApi } from "./prototype-mode";
 import {
+  aiAgentCreateSchema,
+  aiLearningAccessLogsQuerySchema,
+  aiLearningAnswerSchema,
+  aiLearningIngestSchema,
+  aiLearningRetrieveSchema,
+  aiLearningSourceCreateSchema,
+  aiLearningSourcesQuerySchema,
+  aiLearningSourceUpdateSchema,
+  aiAgentRunSchema,
+  aiAgentsQuerySchema,
+  aiAgentUpdateSchema,
+  aiClassifySchema,
+  aiDocumentQaSchema,
+  aiProviderConfigSchema,
+  aiSummarizeSchema,
+  aiToolSearchFilesSchema,
+  aiToolSearchTicketsSchema,
+  aiToolSummarizeLogsSchema,
+  aiWorkflowAssistantSchema,
   alertDeliveryLogsQuerySchema,
   agentApprovalsQuerySchema,
   agentMemoryQuerySchema,
   approvalDecisionSchema,
   alertConfigSchema,
+  systemNotificationsQuerySchema,
+  systemNotificationCreateSchema,
+  systemActivityQuerySchema,
+  systemActivityCreateSchema,
+  systemApprovalsQuerySchema,
+  systemApprovalCreateSchema,
+  systemApprovalDecisionSchema,
+  systemRoleChangeAuditSchema,
+  systemMembershipChangeAuditSchema,
+  systemTokenUsageAuditSchema,
+  systemAiDataAccessAuditSchema,
   calendarEventCreateSchema,
   calendarEventUpdateSchema,
   calendarEventsQuerySchema,
@@ -139,6 +172,12 @@ import {
   normalizeListQueryParams,
   runReplaySchema,
   runsListQuerySchema,
+  workflowEngineDefinitionCreateSchema,
+  workflowEngineDefinitionStatusSchema,
+  workflowEngineDefinitionUpdateSchema,
+  workflowEngineDefinitionValidateSchema,
+  workflowEngineQueueRunSchema,
+  workflowEngineWebhookTriggerSchema,
   upsertCredentialSchema,
   upsertAgentMemorySchema,
   validateWorkflowSchema,
@@ -154,10 +193,8 @@ import {
   webhookSchema,
 } from "../schemas";
 
-// MODE: Prototype Mode | Live Mode
-// SHARED BETWEEN PROTOTYPE AND LIVE
+// MODE: Live Mode
 // KEEP CONTRACT SHAPE IN SYNC
-// USED FOR LOCAL DEMO / UI ITERATION
 function resolveRouteParam(value: string | string[]): string {
   return Array.isArray(value) ? value[0] : value;
 }
@@ -188,40 +225,15 @@ function normalizeListQueryRecord(
   return normalizeListQueryParams(query);
 }
 
-function toStandardListEnvelope<Row>(result: StandardListResult<Row>) {
-  return {
-    rows: result.rows,
-    nextCursor: result.nextCursor,
-    totalApprox: result.totalApprox,
-    appliedFilters: result.appliedFilters,
-    appliedSorts: result.appliedSorts,
-    pagination: {
-      page: result.page,
-      limit: result.limit,
-      total: result.totalApprox,
-      hasMore: result.hasMore,
-      nextCursor: result.nextCursor,
-    },
-  };
+function toStandardListEnvelope<Row>(
+  result: StandardListResult<Row>,
+  options: { search?: string | null } = {},
+) {
+  return buildStandardListEnvelope(result, options);
 }
 
 function toEmptyListEnvelope(query: StandardListQuery) {
-  const page = Math.max(1, Number(query.page || 1));
-  const limit = Math.max(1, Math.min(Number(query.limit || 25), 250));
-  return {
-    rows: [],
-    nextCursor: null,
-    totalApprox: 0,
-    appliedFilters: query.filterGroup || null,
-    appliedSorts: query.sort || [],
-    pagination: {
-      page,
-      limit,
-      total: 0,
-      hasMore: false,
-      nextCursor: null,
-    },
-  };
+  return buildEmptyStandardListEnvelope(query);
 }
 
 type JsonObject = Record<string, unknown>;
@@ -304,6 +316,7 @@ function applyInMemoryStandardList<Row extends JsonObject>(input: {
     rows,
     nextCursor: hasMore ? `offset:${nextOffset}` : null,
     totalApprox: filtered.length,
+    appliedSearch: normalizedSearch || null,
     appliedFilters: input.query.filterGroup || null,
     appliedSorts,
     page,
@@ -361,6 +374,13 @@ function requireCalendarAggregationService(runtime: CoreRuntime) {
   return runtime.calendarAggregationService;
 }
 
+function requireAiEngineService(runtime: CoreRuntime) {
+  if (!runtime.aiEngineService) {
+    throw createHttpError(503, "AI engine module is unavailable.");
+  }
+  return runtime.aiEngineService;
+}
+
 function requireCommunicationService(runtime: CoreRuntime) {
   if (!runtime.communicationService) {
     throw createHttpError(503, "Communication module is unavailable.");
@@ -373,6 +393,27 @@ function requireFileStorageService(runtime: CoreRuntime) {
     throw createHttpError(503, "File storage module is unavailable.");
   }
   return runtime.fileStorageService;
+}
+
+function requireSystemModulesService(runtime: CoreRuntime) {
+  if (!runtime.systemModulesService) {
+    throw createHttpError(503, "Shared system module is unavailable.");
+  }
+  return runtime.systemModulesService;
+}
+
+function requireWorkflowDefinitionService(runtime: CoreRuntime) {
+  if (!runtime.workflowDefinitionService) {
+    throw createHttpError(503, "Workflow definition module is unavailable.");
+  }
+  return runtime.workflowDefinitionService;
+}
+
+function requireWorkflowExecutionService(runtime: CoreRuntime) {
+  if (!runtime.workflowExecutionService) {
+    throw createHttpError(503, "Workflow execution module is unavailable.");
+  }
+  return runtime.workflowExecutionService;
 }
 
 function resolveEffectiveRole(scope: {
@@ -393,6 +434,15 @@ function toFacilityActorFromAuth(auth: NonNullable<Express.Request["auth"]>) {
     userId: auth.user.id,
     displayName: auth.user.fullName || auth.user.email,
     email: auth.user.email,
+    role: resolveEffectiveRole(auth.scope),
+  };
+}
+
+function toWorkflowActorFromAuth(auth: NonNullable<Express.Request["auth"]>) {
+  return {
+    userId: auth.user.id,
+    email: auth.user.email,
+    displayName: auth.user.fullName || auth.user.email,
     role: resolveEffectiveRole(auth.scope),
   };
 }
@@ -429,6 +479,18 @@ function resolveHeaderAsCsv(
   return typeof raw === "string" ? raw : undefined;
 }
 
+function resolveBearerToken(authHeader: string | undefined): string | undefined {
+  if (!authHeader) {
+    return undefined;
+  }
+  const normalized = authHeader.trim();
+  if (!normalized.toLowerCase().startsWith("bearer ")) {
+    return undefined;
+  }
+  const token = normalized.slice("bearer ".length).trim();
+  return token.length > 0 ? token : undefined;
+}
+
 async function toMaintenanceActorFromAuth(
   runtime: CoreRuntime,
   req: Express.Request,
@@ -442,18 +504,28 @@ async function toMaintenanceActorFromAuth(
   vendorIds?: string[];
 }> {
   const auth = req.auth!;
-  const memberships = await runtime.repositories.authRepository.listAccessibleOrganizations({
-    userId: auth.user.id,
-  });
-  const membership =
-    memberships.find(
-      (entry) =>
-        entry.organization_id === auth.scope.organizationId &&
-        entry.status === "active",
-    ) ||
-    memberships.find(
-      (entry) => entry.organization_id === auth.scope.organizationId,
-    );
+  let membership:
+    | {
+        team?: string | null;
+        department?: string | null;
+      }
+    | undefined;
+  try {
+    const memberships = await runtime.repositories.authRepository.listAccessibleOrganizations({
+      userId: auth.user.id,
+    });
+    membership =
+      memberships.find(
+        (entry) =>
+          entry.organization_id === auth.scope.organizationId &&
+          entry.status === "active",
+      ) ||
+      memberships.find(
+        (entry) => entry.organization_id === auth.scope.organizationId,
+      );
+  } catch {
+    membership = undefined;
+  }
 
   const vendorIds = Array.from(
     new Set([
@@ -1091,17 +1163,11 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
   const modeResolution = resolvePlatformModeFromEnv(
     process.env as Record<string, string | undefined>,
   );
-  const platformMode =
-    options.platformMode ||
-    (modeResolution.source === "default"
-      ? PLATFORM_MODES.LIVE
-      : modeResolution.mode);
-  const platformModeSource = options.platformModeSource || modeResolution.source;
+  void options;
+  const platformMode = PLATFORM_MODES.LIVE;
+  const platformModeSource = modeResolution.source;
   const router = Router();
-  // PROTOTYPE MODE ONLY
-  // CONTRACT-COMPATIBLE fallback for local UI iteration while preserving Live route shape.
-  const prototypeApi =
-    platformMode === PLATFORM_MODES.PROTOTYPE ? createPrototypeModeApi() : null;
+  const prototypeApi: any = null;
 
   if (prototypeApi) {
     // PROTOTYPE MODE ONLY
@@ -1265,26 +1331,11 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
       },
     ];
 
-    if (input.mode === PLATFORM_MODES.PROTOTYPE) {
-      docs.push({
-        id: "doc-workspace-prototype",
-        title: "Prototype Mode Demo Notes",
-        category: "notes",
-        updatedAt: new Date(now - 15 * 60 * 1000).toISOString(),
-        updatedAtLabel: "15 minutes ago",
-        owner: "Product",
-        summary: "Linked walkthrough notes for seeded first-success demo records.",
-        tags: ["prototype", "demo"],
-      });
-    }
-
     return docs;
   }
 
   router.get("/health", (_req, res) => {
     const queueRuntime = runtime.eventQueue.getRuntimeState();
-    // MODE: Prototype Mode | Live Mode
-    // DO NOT MIX PROTOTYPE STATUS WITH LIVE RUNTIME STATUS
     res.json({
       status: "ok",
       mode: platformMode,
@@ -1567,7 +1618,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
           return;
         }
 
-        const scope = req.auth!.scope;
+        const scope = req.orgContext || req.auth!.scope;
         const user = req.auth!.user;
         const result = await runtime.authService.createInvite(
           {
@@ -1753,7 +1804,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
           req.query.limit as string | string[] | undefined,
         );
         const limit = limitValue ? Number.parseInt(limitValue, 10) : undefined;
-        const scope = req.auth!.scope;
+        const scope = req.orgContext || req.auth!.scope;
         const tokens = await organizationMembershipService.listInviteTokens({
           tenantId: scope.tenantId,
           organizationId: scope.organizationId,
@@ -1793,7 +1844,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
         }
 
         const organizationMembershipService = requireOrganizationMembershipService(runtime);
-        const scope = req.auth!.scope;
+        const scope = req.orgContext || req.auth!.scope;
         const result = await organizationMembershipService.createInviteToken({
           tenantId: scope.tenantId,
           organizationId: scope.organizationId,
@@ -1826,7 +1877,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
           });
           return;
         }
-        const scope = req.auth!.scope;
+        const scope = req.orgContext || req.auth!.scope;
         const organizationMembershipService = requireOrganizationMembershipService(runtime);
         const revoked = await organizationMembershipService.revokeInviteToken({
           tenantId: scope.tenantId,
@@ -1856,7 +1907,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
           });
           return;
         }
-        const scope = req.auth!.scope;
+        const scope = req.orgContext || req.auth!.scope;
         const organizationMembershipService = requireOrganizationMembershipService(runtime);
         const joinRequests = await organizationMembershipService.listJoinRequests({
           tenantId: scope.tenantId,
@@ -1887,7 +1938,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
           });
           return;
         }
-        const scope = req.auth!.scope;
+        const scope = req.orgContext || req.auth!.scope;
         const organizationMembershipService = requireOrganizationMembershipService(runtime);
         const decision = await organizationMembershipService.decideJoinRequest({
           tenantId: scope.tenantId,
@@ -1922,7 +1973,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
           return;
         }
 
-        const scope = req.auth!.scope;
+        const scope = req.orgContext || req.auth!.scope;
         const logs = await runtime.authService.listRecentEmailLogs({
           tenantId: scope.tenantId,
           organizationId: scope.organizationId,
@@ -1946,7 +1997,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
         });
         return;
       }
-      const scope = req.auth!.scope;
+      const scope = req.orgContext || req.auth!.scope;
       const user = req.auth!.user;
       const profile: WorkspaceProfileView = {
         id: user.id,
@@ -1978,7 +2029,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
         return;
       }
 
-      const scope = req.auth!.scope;
+      const scope = req.orgContext || req.auth!.scope;
       const currentUser = req.auth!.user;
       const updatedUser = await runtime.repositories.authRepository.updateUserProfileScoped({
         userId: currentUser.id,
@@ -2019,7 +2070,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
         return;
       }
 
-      const scope = req.auth!.scope;
+      const scope = req.orgContext || req.auth!.scope;
       const user = req.auth!.user;
 
       const [apps, credentials, workspaceContext, membersResult] = await Promise.all([
@@ -2105,7 +2156,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
           return;
         }
 
-        const scope = req.auth!.scope;
+        const scope = req.orgContext || req.auth!.scope;
         const result = await runtime.repositories.authRepository.listWorkspaceMembersWithQuery({
           tenantId: scope.tenantId,
           organizationId: scope.organizationId,
@@ -2161,7 +2212,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
         return;
       }
 
-      const scope = req.auth!.scope;
+      const scope = req.orgContext || req.auth!.scope;
       const actor = await toMaintenanceActorFromAuth(runtime, req);
       const service = requireCommunicationService(runtime);
       const { channelType, archived, team, ...listQuery } = query;
@@ -2221,7 +2272,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
         return;
       }
 
-      const scope = req.auth!.scope;
+      const scope = req.orgContext || req.auth!.scope;
       const actor = await toMaintenanceActorFromAuth(runtime, req);
       const service = requireCommunicationService(runtime);
       const channel = await service.createChannel({
@@ -2266,7 +2317,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
         return;
       }
 
-      const scope = req.auth!.scope;
+      const scope = req.orgContext || req.auth!.scope;
       const actor = await toMaintenanceActorFromAuth(runtime, req);
       const service = requireCommunicationService(runtime);
       const { from, to, ...listQuery } = query;
@@ -2323,7 +2374,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
         return;
       }
 
-      const scope = req.auth!.scope;
+      const scope = req.orgContext || req.auth!.scope;
       const actor = await toMaintenanceActorFromAuth(runtime, req);
       const service = requireCommunicationService(runtime);
       const result = await service.createMessage({
@@ -2360,7 +2411,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
         return;
       }
 
-      const scope = req.auth!.scope;
+      const scope = req.orgContext || req.auth!.scope;
       const actor = await toMaintenanceActorFromAuth(runtime, req);
       const service = requireCommunicationService(runtime);
       await service.markChannelRead({
@@ -2399,7 +2450,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
           return;
         }
 
-        const scope = req.auth!.scope;
+        const scope = req.orgContext || req.auth!.scope;
         const actor = await toMaintenanceActorFromAuth(runtime, req);
         const service = requireCommunicationService(runtime);
         const { from, to, ...listQuery } = query;
@@ -2459,7 +2510,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
           return;
         }
 
-        const scope = req.auth!.scope;
+        const scope = req.orgContext || req.auth!.scope;
         const actor = await toMaintenanceActorFromAuth(runtime, req);
         const service = requireCommunicationService(runtime);
         const session = await service.createMeetingSession({
@@ -2512,7 +2563,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
           return;
         }
 
-        const scope = req.auth!.scope;
+        const scope = req.orgContext || req.auth!.scope;
         const actor = await toMaintenanceActorFromAuth(runtime, req);
         const service = requireCommunicationService(runtime);
         const { status, sourceType, ...listQuery } = query;
@@ -2577,7 +2628,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
           return;
         }
 
-        const scope = req.auth!.scope;
+        const scope = req.orgContext || req.auth!.scope;
         const actor = await toMaintenanceActorFromAuth(runtime, req);
         const service = requireCommunicationService(runtime);
         const summary = await service.requestAiSummary({
@@ -2631,7 +2682,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
         return;
       }
 
-      const scope = req.auth!.scope;
+      const scope = req.orgContext || req.auth!.scope;
       const actor = await toMaintenanceActorFromAuth(runtime, req);
       const service = requireFileStorageService(runtime);
       const { spaceType, team, includeArchived, ensureDefaults, ...listQuery } = query;
@@ -2686,7 +2737,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
         return;
       }
 
-      const scope = req.auth!.scope;
+      const scope = req.orgContext || req.auth!.scope;
       const actor = await toMaintenanceActorFromAuth(runtime, req);
       const service = requireFileStorageService(runtime);
       const space = await service.createSpace({
@@ -2735,7 +2786,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
         return;
       }
 
-      const scope = req.auth!.scope;
+      const scope = req.orgContext || req.auth!.scope;
       const actor = await toMaintenanceActorFromAuth(runtime, req);
       const service = requireFileStorageService(runtime);
       const { spaceId, parentId, kind, includeDeleted, ...listQuery } = query;
@@ -2811,7 +2862,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
         return;
       }
 
-      const scope = req.auth!.scope;
+      const scope = req.orgContext || req.auth!.scope;
       const actor = await toMaintenanceActorFromAuth(runtime, req);
       const service = requireFileStorageService(runtime);
       const item = await service.createItem({
@@ -2867,7 +2918,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
         return;
       }
 
-      const scope = req.auth!.scope;
+      const scope = req.orgContext || req.auth!.scope;
       const actor = await toMaintenanceActorFromAuth(runtime, req);
       const service = requireFileStorageService(runtime);
       const item = await service.updateItem({
@@ -2922,7 +2973,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
         return;
       }
 
-      const scope = req.auth!.scope;
+      const scope = req.orgContext || req.auth!.scope;
       const actor = await toMaintenanceActorFromAuth(runtime, req);
       const service = requireFileStorageService(runtime);
       const result = await service.deleteItem({
@@ -2965,7 +3016,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
           return;
         }
 
-        const scope = req.auth!.scope;
+        const scope = req.orgContext || req.auth!.scope;
         const actor = await toMaintenanceActorFromAuth(runtime, req);
         const service = requireFileStorageService(runtime);
         const { includeRevoked, ...listQuery } = query;
@@ -3024,7 +3075,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
           return;
         }
 
-        const scope = req.auth!.scope;
+        const scope = req.orgContext || req.auth!.scope;
         const actor = await toMaintenanceActorFromAuth(runtime, req);
         const service = requireFileStorageService(runtime);
         const share = await service.shareItem({
@@ -3075,7 +3126,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
           return;
         }
 
-        const scope = req.auth!.scope;
+        const scope = req.orgContext || req.auth!.scope;
         const actor = await toMaintenanceActorFromAuth(runtime, req);
         const service = requireFileStorageService(runtime);
         const share = await service.revokeShare({
@@ -3118,7 +3169,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
         return;
       }
 
-      const scope = req.auth!.scope;
+      const scope = req.orgContext || req.auth!.scope;
       const actor = await toMaintenanceActorFromAuth(runtime, req);
       const service = requireFileStorageService(runtime);
       const { spaceId, itemId, action, from, to, ...listQuery } = query;
@@ -3150,6 +3201,568 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
     }
   });
 
+  router.get(
+    "/ai-engine/providers",
+    requireRole(["owner", "admin"]),
+    async (req, res, next) => {
+    try {
+      const includeDisabled = resolveOptionalQueryParam(
+        req.query.includeDisabled as string | string[] | undefined,
+      );
+      const scope = req.orgContext || req.auth!.scope;
+      const service = requireAiEngineService(runtime);
+      const providers = await service.listProviderConfigs({
+        scope: {
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+        },
+        includeDisabled: includeDisabled === "true" || includeDisabled === "1",
+      });
+      res.json({ providers });
+    } catch (error) {
+      next(error);
+    }
+    },
+  );
+
+  router.post(
+    "/ai-engine/providers",
+    requireRole(["owner", "admin"]),
+    async (req, res, next) => {
+      try {
+        const body = aiProviderConfigSchema.parse(req.body || {});
+        const scope = req.orgContext || req.auth!.scope;
+        const actor = await toMaintenanceActorFromAuth(runtime, req);
+        const service = requireAiEngineService(runtime);
+        const provider = await service.upsertProviderConfig({
+          scope: {
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+          },
+          actor,
+          data: body,
+        });
+        res.status(201).json({ provider });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.post("/ai-engine/summarize", requireAuth, async (req, res, next) => {
+    try {
+      const body = aiSummarizeSchema.parse(req.body || {});
+      const scope = req.orgContext || req.auth!.scope;
+      const actor = await toMaintenanceActorFromAuth(runtime, req);
+      const service = requireAiEngineService(runtime);
+      const result = await service.summarize({
+        scope: {
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+        },
+        actor,
+        data: body,
+      });
+      res.json(result);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post("/ai-engine/classify", requireAuth, async (req, res, next) => {
+    try {
+      const body = aiClassifySchema.parse(req.body || {});
+      const scope = req.orgContext || req.auth!.scope;
+      const actor = await toMaintenanceActorFromAuth(runtime, req);
+      const service = requireAiEngineService(runtime);
+      const result = await service.classify({
+        scope: {
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+        },
+        actor,
+        data: body,
+      });
+      res.json(result);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post("/ai-engine/document-qa", requireAuth, async (req, res, next) => {
+    try {
+      const body = aiDocumentQaSchema.parse(req.body || {});
+      const scope = req.orgContext || req.auth!.scope;
+      const actor = await toMaintenanceActorFromAuth(runtime, req);
+      const service = requireAiEngineService(runtime);
+      const result = await service.answerDocumentQuestion({
+        scope: {
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+        },
+        actor,
+        data: body,
+      });
+      res.json(result);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post(
+    "/ai-engine/workflow-assistant",
+    requireAuth,
+    async (req, res, next) => {
+      try {
+        const body = aiWorkflowAssistantSchema.parse(req.body || {});
+        const scope = req.orgContext || req.auth!.scope;
+        const actor = await toMaintenanceActorFromAuth(runtime, req);
+        const service = requireAiEngineService(runtime);
+        const result = await service.workflowAssistant({
+          scope: {
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+          },
+          actor,
+          data: body,
+        });
+        res.json(result);
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.get("/ai-engine/agents", requireAuth, async (req, res, next) => {
+    try {
+      const query = aiAgentsQuerySchema.parse({
+        ...normalizeListQueryRecord(req.query as Record<string, unknown>),
+        status: resolveOptionalQueryParam(req.query.status as string | string[] | undefined),
+      });
+      const scope = req.orgContext || req.auth!.scope;
+      const service = requireAiEngineService(runtime);
+      const { status, ...listQuery } = query;
+      const result = await service.listAgents({
+        scope: {
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+        },
+        status,
+        query: listQuery,
+      });
+      res.json({
+        ...toStandardListEnvelope(result),
+        agents: result.rows,
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post(
+    "/ai-engine/agents",
+    requireRole(["owner", "admin"]),
+    async (req, res, next) => {
+      try {
+        const body = aiAgentCreateSchema.parse(req.body || {});
+        const scope = req.orgContext || req.auth!.scope;
+        const actor = await toMaintenanceActorFromAuth(runtime, req);
+        const service = requireAiEngineService(runtime);
+        const agent = await service.createAgent({
+          scope: {
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+          },
+          actor,
+          data: body,
+        });
+        res.status(201).json({ agent });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.patch(
+    "/ai-engine/agents/:agentId",
+    requireRole(["owner", "admin"]),
+    async (req, res, next) => {
+      try {
+        const agentId = resolveRouteParam(req.params.agentId);
+        const body = aiAgentUpdateSchema.parse(req.body || {});
+        const scope = req.orgContext || req.auth!.scope;
+        const actor = await toMaintenanceActorFromAuth(runtime, req);
+        const service = requireAiEngineService(runtime);
+        const agent = await service.updateAgent({
+          scope: {
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+          },
+          actor,
+          agentId,
+          data: body,
+        });
+        res.json({ agent });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.post(
+    "/ai-engine/agents/:agentId/run",
+    requireAuth,
+    async (req, res, next) => {
+      try {
+        const agentId = resolveRouteParam(req.params.agentId);
+        const body = aiAgentRunSchema.parse(req.body || {});
+        const scope = req.orgContext || req.auth!.scope;
+        const actor = await toMaintenanceActorFromAuth(runtime, req);
+        const service = requireAiEngineService(runtime);
+        const result = await service.runAgent({
+          scope: {
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+          },
+          actor,
+          agentId,
+          data: body,
+        });
+        res.json(result);
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.post(
+    "/ai-engine/tools/files/search",
+    requireAuth,
+    async (req, res, next) => {
+      try {
+        const body = aiToolSearchFilesSchema.parse(req.body || {});
+        const scope = req.orgContext || req.auth!.scope;
+        const actor = await toMaintenanceActorFromAuth(runtime, req);
+        const service = requireAiEngineService(runtime);
+        const rows = await service.searchFilesTool({
+          scope: {
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+          },
+          actor,
+          query: body.query,
+          limit: body.limit,
+        });
+        res.json({ files: rows });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.post(
+    "/ai-engine/tools/tickets/search",
+    requireAuth,
+    async (req, res, next) => {
+      try {
+        const body = aiToolSearchTicketsSchema.parse(req.body || {});
+        const scope = req.orgContext || req.auth!.scope;
+        const actor = await toMaintenanceActorFromAuth(runtime, req);
+        const service = requireAiEngineService(runtime);
+        const rows = await service.searchTicketsTool({
+          scope: {
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+          },
+          actor,
+          query: body.query,
+          status: body.status,
+          priority: body.priority,
+          limit: body.limit,
+        });
+        res.json({ tickets: rows });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.post(
+    "/ai-engine/tools/logs/summarize",
+    requireAuth,
+    async (req, res, next) => {
+      try {
+        const body = aiToolSummarizeLogsSchema.parse(req.body || {});
+        const scope = req.orgContext || req.auth!.scope;
+        const actor = await toMaintenanceActorFromAuth(runtime, req);
+        const service = requireAiEngineService(runtime);
+        const summary = await service.summarizeLogsTool({
+          scope: {
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+          },
+          actor,
+          runId: body.runId,
+          eventType: body.eventType,
+          limit: body.limit,
+          provider: body.provider,
+        });
+        res.json(summary);
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.get(
+    "/ai-engine/tools/organization",
+    requireAuth,
+    async (req, res, next) => {
+      try {
+        const scope = req.orgContext || req.auth!.scope;
+        const actor = await toMaintenanceActorFromAuth(runtime, req);
+        const service = requireAiEngineService(runtime);
+        const organization = await service.fetchOrganizationDataTool({
+          scope: {
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+          },
+          actor,
+        });
+        res.json({ organization });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.get(
+    "/ai-engine/learning/sources",
+    requireRole(["owner", "admin"]),
+    async (req, res, next) => {
+      try {
+        const enabledRaw = resolveOptionalQueryParam(
+          req.query.enabled as string | string[] | undefined,
+        );
+        const query = aiLearningSourcesQuerySchema.parse({
+          ...normalizeListQueryRecord(req.query as Record<string, unknown>),
+          sourceType: resolveOptionalQueryParam(req.query.sourceType as string | string[] | undefined),
+          enabled:
+            enabledRaw === undefined
+              ? undefined
+              : enabledRaw === "true" || enabledRaw === "1"
+                ? true
+                : enabledRaw === "false" || enabledRaw === "0"
+                  ? false
+                  : undefined,
+        });
+        const scope = req.orgContext || req.auth!.scope;
+        const actor = await toMaintenanceActorFromAuth(runtime, req);
+        const service = requireAiEngineService(runtime);
+        const { sourceType, enabled, ...listQuery } = query;
+        const result = await service.listLearningSources({
+          scope: {
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+          },
+          actor,
+          sourceType,
+          enabled,
+          query: listQuery,
+        });
+        res.json({
+          ...toStandardListEnvelope(result),
+          sources: result.rows,
+        });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.post(
+    "/ai-engine/learning/sources",
+    requireRole(["owner", "admin"]),
+    async (req, res, next) => {
+      try {
+        const body = aiLearningSourceCreateSchema.parse(req.body || {});
+        const scope = req.orgContext || req.auth!.scope;
+        const actor = await toMaintenanceActorFromAuth(runtime, req);
+        const service = requireAiEngineService(runtime);
+        const source = await service.createLearningSource({
+          scope: {
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+          },
+          actor,
+          data: body,
+        });
+        res.status(201).json({ source });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.patch(
+    "/ai-engine/learning/sources/:sourceId",
+    requireRole(["owner", "admin"]),
+    async (req, res, next) => {
+      try {
+        const sourceId = resolveRouteParam(req.params.sourceId);
+        const body = aiLearningSourceUpdateSchema.parse(req.body || {});
+        const scope = req.orgContext || req.auth!.scope;
+        const actor = await toMaintenanceActorFromAuth(runtime, req);
+        const service = requireAiEngineService(runtime);
+        const source = await service.updateLearningSource({
+          scope: {
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+          },
+          actor,
+          sourceId,
+          data: body,
+        });
+        res.json({ source });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.post(
+    "/ai-engine/learning/sources/:sourceId/ingest",
+    requireRole(["owner", "admin"]),
+    async (req, res, next) => {
+      try {
+        const sourceId = resolveRouteParam(req.params.sourceId);
+        const body = aiLearningIngestSchema.parse(req.body || {});
+        const scope = req.orgContext || req.auth!.scope;
+        const actor = await toMaintenanceActorFromAuth(runtime, req);
+        const service = requireAiEngineService(runtime);
+        const run = await service.runLearningIngestion({
+          scope: {
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+          },
+          actor,
+          sourceId,
+          trigger: body.trigger || "manual",
+        });
+        res.json({ run });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.post(
+    "/ai-engine/learning/retrieve",
+    requireAuth,
+    async (req, res, next) => {
+      try {
+        const body = aiLearningRetrieveSchema.parse(req.body || {});
+        const scope = req.orgContext || req.auth!.scope;
+        const actor = await toMaintenanceActorFromAuth(runtime, req);
+        const service = requireAiEngineService(runtime);
+        const retrieval = await service.retrieveLearningContext({
+          scope: {
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+          },
+          actor,
+          data: body,
+        });
+        res.json(retrieval);
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.post(
+    "/ai-engine/learning/answer",
+    requireAuth,
+    async (req, res, next) => {
+      try {
+        const body = aiLearningAnswerSchema.parse(req.body || {});
+        const scope = req.orgContext || req.auth!.scope;
+        const actor = await toMaintenanceActorFromAuth(runtime, req);
+        const service = requireAiEngineService(runtime);
+        const result = await service.answerWithLearning({
+          scope: {
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+          },
+          actor,
+          data: body,
+        });
+        res.json(result);
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.get(
+    "/ai-engine/learning/access-logs",
+    requireRole(["owner", "admin"]),
+    async (req, res, next) => {
+      try {
+        const query = aiLearningAccessLogsQuerySchema.parse({
+          ...normalizeListQueryRecord(req.query as Record<string, unknown>),
+          operation: resolveOptionalQueryParam(req.query.operation as string | string[] | undefined),
+          sourceId: resolveOptionalQueryParam(req.query.sourceId as string | string[] | undefined),
+          from: resolveOptionalQueryParam(req.query.from as string | string[] | undefined),
+          to: resolveOptionalQueryParam(req.query.to as string | string[] | undefined),
+        });
+        const { operation, sourceId, from, to, ...listQuery } = query;
+        const scope = req.orgContext || req.auth!.scope;
+        const actor = await toMaintenanceActorFromAuth(runtime, req);
+        const service = requireAiEngineService(runtime);
+        const result = await service.listLearningAccessLogs({
+          scope: {
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+          },
+          actor,
+          operation,
+          sourceId,
+          from,
+          to,
+          query: listQuery,
+        });
+        res.json({
+          ...toStandardListEnvelope(result),
+          logs: result.rows,
+        });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
   router.get("/knowledge/docs", requireAuth, async (req, res, next) => {
     try {
       const query = workspaceKnowledgeDocsQuerySchema.parse({
@@ -3165,7 +3778,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
         return;
       }
 
-      const scope = req.auth!.scope;
+      const scope = req.orgContext || req.auth!.scope;
       const user = req.auth!.user;
       const workspaceContext = await runtime.repositories.authRepository.getWorkspaceContextSummary({
         tenantId: scope.tenantId,
@@ -3212,9 +3825,16 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
         return;
       }
 
-      const scope = req.auth!.scope;
+      const scope = req.orgContext || req.auth!.scope;
+      if (!runtime.fileStorageService) {
+        res.json({
+          ...toEmptyListEnvelope(query),
+          files: [],
+        });
+        return;
+      }
       const actor = await toMaintenanceActorFromAuth(runtime, req);
-      const service = requireFileStorageService(runtime);
+      const service = runtime.fileStorageService;
       const space = await service.getOrCreateDefaultSpace({
         scope: {
           tenantId: scope.tenantId,
@@ -3277,7 +3897,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
         return;
       }
 
-      const scope = req.auth!.scope;
+      const scope = req.orgContext || req.auth!.scope;
       const actor = await toMaintenanceActorFromAuth(runtime, req);
       const service = requireCalendarAggregationService(runtime);
       const { source, status, from, to, ...listQuery } = query;
@@ -3337,7 +3957,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
         return;
       }
 
-      const scope = req.auth!.scope;
+      const scope = req.orgContext || req.auth!.scope;
       const actor = await toMaintenanceActorFromAuth(runtime, req);
       const service = requireCalendarAggregationService(runtime);
       const event = await service.createManualEvent({
@@ -3391,7 +4011,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
           return;
         }
 
-        const scope = req.auth!.scope;
+        const scope = req.orgContext || req.auth!.scope;
         const actor = await toMaintenanceActorFromAuth(runtime, req);
         const service = requireCalendarAggregationService(runtime);
         const event = await service.updateManualEvent({
@@ -3451,7 +4071,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
         return;
       }
 
-      const scope = req.auth!.scope;
+      const scope = req.orgContext || req.auth!.scope;
       const { status, category, ...listQuery } = query;
       const service = requireFacilityBookingService(runtime);
       const result = await service.listFacilities({
@@ -3491,7 +4111,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
         return;
       }
 
-      const scope = req.auth!.scope;
+      const scope = req.orgContext || req.auth!.scope;
       const service = requireFacilityBookingService(runtime);
       const facility = await service.createFacility({
         scope: {
@@ -3526,7 +4146,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
           return;
         }
 
-        const scope = req.auth!.scope;
+        const scope = req.orgContext || req.auth!.scope;
         const facilityId = resolveRouteParam(req.params.facilityId);
         const service = requireFacilityBookingService(runtime);
         const updated = await service.updateFacility({
@@ -3572,7 +4192,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
         return;
       }
 
-      const scope = req.auth!.scope;
+      const scope = req.orgContext || req.auth!.scope;
       const service = requireFacilityBookingService(runtime);
       const availability = await service.checkAvailability({
         scope: {
@@ -3609,7 +4229,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
         return;
       }
 
-      const scope = req.auth!.scope;
+      const scope = req.orgContext || req.auth!.scope;
       const service = requireFacilityBookingService(runtime);
       const { facilityId, status, from, to, ...listQuery } = query;
       const result = await service.listBookings({
@@ -3648,7 +4268,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
       }
 
       const bookingId = resolveRouteParam(req.params.bookingId);
-      const scope = req.auth!.scope;
+      const scope = req.orgContext || req.auth!.scope;
       const service = requireFacilityBookingService(runtime);
       const booking = await service.getBooking({
         scope: {
@@ -3689,7 +4309,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
         return;
       }
 
-      const scope = req.auth!.scope;
+      const scope = req.orgContext || req.auth!.scope;
       const service = requireFacilityBookingService(runtime);
       const result = await service.createBooking({
         scope: {
@@ -3725,7 +4345,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
         return;
       }
 
-      const scope = req.auth!.scope;
+      const scope = req.orgContext || req.auth!.scope;
       const service = requireFacilityBookingService(runtime);
       const existing = await service.getBooking({
         scope: {
@@ -3817,7 +4437,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
           return;
         }
 
-        const scope = req.auth!.scope;
+        const scope = req.orgContext || req.auth!.scope;
         const service = requireFacilityBookingService(runtime);
         const booking = await service.transitionBooking({
           scope: {
@@ -3878,7 +4498,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
         return;
       }
 
-      const scope = req.auth!.scope;
+      const scope = req.orgContext || req.auth!.scope;
       const actor = await toMaintenanceActorFromAuth(runtime, req);
       const service = requireMaintenanceSystemService(runtime);
       const {
@@ -3937,7 +4557,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
         return;
       }
 
-      const scope = req.auth!.scope;
+      const scope = req.orgContext || req.auth!.scope;
       const actor = await toMaintenanceActorFromAuth(runtime, req);
       const service = requireMaintenanceSystemService(runtime);
       const ticket = await service.getTicket({
@@ -3979,7 +4599,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
         return;
       }
 
-      const scope = req.auth!.scope;
+      const scope = req.orgContext || req.auth!.scope;
       const actor = await toMaintenanceActorFromAuth(runtime, req);
       const service = requireMaintenanceSystemService(runtime);
       const assignment =
@@ -4034,7 +4654,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
         return;
       }
 
-      const scope = req.auth!.scope;
+      const scope = req.orgContext || req.auth!.scope;
       const actor = await toMaintenanceActorFromAuth(runtime, req);
       const service = requireMaintenanceSystemService(runtime);
       let ticket = await service.getTicket({
@@ -4156,7 +4776,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
           return;
         }
 
-        const scope = req.auth!.scope;
+        const scope = req.orgContext || req.auth!.scope;
         const actor = await toMaintenanceActorFromAuth(runtime, req);
         const service = requireMaintenanceSystemService(runtime);
         const ticket = await service.assignTicket({
@@ -4198,7 +4818,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
         return;
       }
 
-      const scope = req.auth!.scope;
+      const scope = req.orgContext || req.auth!.scope;
       const actor = await toMaintenanceActorFromAuth(runtime, req);
       const service = requireMaintenanceSystemService(runtime);
       const result = await service.listComments({
@@ -4245,7 +4865,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
         return;
       }
 
-      const scope = req.auth!.scope;
+      const scope = req.orgContext || req.auth!.scope;
       const actor = await toMaintenanceActorFromAuth(runtime, req);
       const service = requireMaintenanceSystemService(runtime);
       const comment = await service.createComment({
@@ -4306,7 +4926,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
     async (req, res, next) => {
       try {
         const body = createWorkspaceSchema.parse(req.body);
-        const scope = req.auth!.scope;
+        const scope = req.orgContext || req.auth!.scope;
         const user = req.auth!.user;
 
         const workspace = await runtime.repositories.workspaceRepository.create({
@@ -4340,7 +4960,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
         });
         return;
       }
-      const scope = req.auth!.scope;
+      const scope = req.orgContext || req.auth!.scope;
       const apps = await listAppsForScope({
         tenantId: scope.tenantId,
         organizationId: scope.organizationId,
@@ -4371,7 +4991,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
         });
         return;
       }
-      const scope = req.auth!.scope;
+      const scope = req.orgContext || req.auth!.scope;
 
       const [integrationResult, credentials] = await Promise.all([
         runtime.repositories.integrationRepository.listWithQuery({
@@ -4474,7 +5094,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
 
   router.get("/agent/memory", requireAuth, async (req, res, next) => {
     try {
-      const scope = req.auth!.scope;
+      const scope = req.orgContext || req.auth!.scope;
       const query = agentMemoryQuerySchema.parse({
         workflowId: resolveOptionalQueryParam(
           req.query.workflowId as string | string[] | undefined,
@@ -4539,7 +5159,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
     async (req, res, next) => {
       try {
         const body = upsertAgentMemorySchema.parse(req.body || {});
-        const scope = req.auth!.scope;
+        const scope = req.orgContext || req.auth!.scope;
         const actor = req.auth!.user;
 
         let workflowId = body.workflowId;
@@ -4612,7 +5232,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
       try {
         const body = appConnectionSchema.parse(req.body || {});
         const appKey = resolveRouteParam(req.params.appKey);
-        const scope = req.auth!.scope;
+        const scope = req.orgContext || req.auth!.scope;
         const enabledAdapter = runtime.pluginLoader
           .listMetadata()
           .find((adapter) => adapter.key === appKey);
@@ -4694,7 +5314,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
       try {
         const body = appConnectionTestSchema.parse(req.body || {});
         const appKey = resolveRouteParam(req.params.appKey);
-        const scope = req.auth!.scope;
+        const scope = req.orgContext || req.auth!.scope;
         const adapterMetadata = runtime.pluginLoader
           .listMetadata()
           .find((adapter) => adapter.key === appKey);
@@ -4818,7 +5438,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
     async (req, res, next) => {
       try {
         const appKey = resolveRouteParam(req.params.appKey);
-        const scope = req.auth!.scope;
+        const scope = req.orgContext || req.auth!.scope;
         const deletedCredentials =
           await runtime.repositories.credentialRepository.deleteByProvider({
             tenantId: scope.tenantId,
@@ -4860,7 +5480,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
     async (req, res, next) => {
       try {
         const body = createIntegrationSchema.parse(req.body);
-        const scope = req.auth!.scope;
+        const scope = req.orgContext || req.auth!.scope;
         const integration = await runtime.repositories.integrationRepository.create({
           tenantId: scope.tenantId,
           organizationId: scope.organizationId,
@@ -4884,7 +5504,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
         const body = oauthStartSchema.parse(req.body);
         const adapterKey = resolveRouteParam(req.params.adapterKey);
         const adapter = runtime.pluginLoader.get(adapterKey);
-        const scope = req.auth!.scope;
+        const scope = req.orgContext || req.auth!.scope;
         const auth = await runtime.oauthService.beginAuth(adapter, {
           tenantId: scope.tenantId,
           organizationId: scope.organizationId,
@@ -4909,7 +5529,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
         const body = oauthCallbackSchema.parse(req.body);
         const adapterKey = resolveRouteParam(req.params.adapterKey);
         const adapter = runtime.pluginLoader.get(adapterKey);
-        const scope = req.auth!.scope;
+        const scope = req.orgContext || req.auth!.scope;
         await runtime.oauthService.completeAuth(adapter, {
           tenantId: scope.tenantId,
           organizationId: scope.organizationId,
@@ -4928,7 +5548,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
 
   router.get("/credentials", requireAuth, async (req, res, next) => {
     try {
-      const scope = req.auth!.scope;
+      const scope = req.orgContext || req.auth!.scope;
       const credentials = await runtime.repositories.credentialRepository.list({
         tenantId: scope.tenantId,
         organizationId: scope.organizationId,
@@ -4946,7 +5566,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
     async (req, res, next) => {
       try {
         const body = upsertCredentialSchema.parse(req.body);
-        const scope = req.auth!.scope;
+        const scope = req.orgContext || req.auth!.scope;
         const credential = await runtime.repositories.credentialRepository.upsert({
           tenantId: scope.tenantId,
           organizationId: scope.organizationId,
@@ -4974,7 +5594,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
     async (req, res, next) => {
       try {
         const providerKey = resolveRouteParam(req.params.providerKey);
-        const scope = req.auth!.scope;
+        const scope = req.orgContext || req.auth!.scope;
         const deleted = await runtime.repositories.credentialRepository.deleteByProvider({
           tenantId: scope.tenantId,
           organizationId: scope.organizationId,
@@ -4988,9 +5608,293 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
     },
   );
 
+  router.get("/workflow-engine/definitions", requireAuth, async (req, res, next) => {
+    try {
+      const scope = req.orgContext || req.auth!.scope;
+      const query = workflowsListQuerySchema.parse({
+        ...normalizeListQueryRecord(req.query as Record<string, unknown>),
+        status: resolveOptionalQueryParam(req.query.status as string | string[] | undefined),
+        triggerAdapter: resolveOptionalQueryParam(
+          req.query.triggerAdapter as string | string[] | undefined,
+        ),
+      });
+      const workflowDefinitionService = requireWorkflowDefinitionService(runtime);
+      const result = await workflowDefinitionService.listDefinitions({
+        scope: {
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+        },
+        query,
+      });
+      res.json({
+        ...toStandardListEnvelope(result),
+        workflows: result.rows,
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get(
+    "/workflow-engine/definitions/:workflowId",
+    requireAuth,
+    async (req, res, next) => {
+      try {
+        const workflowId = resolveRouteParam(req.params.workflowId);
+        const scope = req.orgContext || req.auth!.scope;
+        const workflowDefinitionService = requireWorkflowDefinitionService(runtime);
+        const workflow = await workflowDefinitionService.getDefinition({
+          scope: {
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+          },
+          workflowId,
+        });
+        if (!workflow) {
+          res.status(404).json({ error: "Not found." });
+          return;
+        }
+        res.json({ workflow });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.post(
+    "/workflow-engine/definitions/validate",
+    requireRole(["owner", "admin"]),
+    async (req, res, next) => {
+      try {
+        const body = workflowEngineDefinitionValidateSchema.parse(req.body || {});
+        const scope = req.orgContext || req.auth!.scope;
+        const workflowDefinitionService = requireWorkflowDefinitionService(runtime);
+        const validation = workflowDefinitionService.validateDefinition({
+          scope: {
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+          },
+          data: body as unknown as EngineWorkflowDefinitionValidationInput,
+        });
+        res.status(200).json({
+          valid: validation.valid,
+          errors: validation.errors,
+          normalizedDefinition: validation.normalizedDefinition,
+        });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.post(
+    "/workflow-engine/definitions",
+    requireRole(["owner", "admin"]),
+    async (req, res, next) => {
+      try {
+        const body = workflowEngineDefinitionCreateSchema.parse(req.body || {});
+        const scope = req.orgContext || req.auth!.scope;
+        const workflowDefinitionService = requireWorkflowDefinitionService(runtime);
+        const created = await workflowDefinitionService.createDefinition({
+          scope: {
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+          },
+          actor: toWorkflowActorFromAuth(req.auth!),
+          data: body as unknown as EngineWorkflowDefinitionUpsertInput,
+        });
+        res.status(201).json({
+          workflow: created.workflow,
+          webhookToken: created.generatedWebhookToken || null,
+        });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.patch(
+    "/workflow-engine/definitions/:workflowId",
+    requireRole(["owner", "admin"]),
+    async (req, res, next) => {
+      try {
+        const workflowId = resolveRouteParam(req.params.workflowId);
+        const body = workflowEngineDefinitionUpdateSchema.parse(req.body || {});
+        const scope = req.orgContext || req.auth!.scope;
+        const workflowDefinitionService = requireWorkflowDefinitionService(runtime);
+        const updated = await workflowDefinitionService.updateDefinition({
+          scope: {
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+          },
+          actor: toWorkflowActorFromAuth(req.auth!),
+          workflowId,
+          data: body as unknown as EngineWorkflowDefinitionUpsertInput,
+        });
+        res.status(200).json({
+          workflow: updated.workflow,
+          webhookToken: updated.generatedWebhookToken || null,
+        });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.patch(
+    "/workflow-engine/definitions/:workflowId/status",
+    requireRole(["owner", "admin"]),
+    async (req, res, next) => {
+      try {
+        const workflowId = resolveRouteParam(req.params.workflowId);
+        const body = workflowEngineDefinitionStatusSchema.parse(req.body || {});
+        const scope = req.orgContext || req.auth!.scope;
+        const workflowDefinitionService = requireWorkflowDefinitionService(runtime);
+        const workflow = await workflowDefinitionService.updateStatus({
+          scope: {
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+          },
+          actor: toWorkflowActorFromAuth(req.auth!),
+          workflowId,
+          status: body.status,
+        });
+        res.status(200).json({ workflow });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.post(
+    "/workflow-engine/definitions/:workflowId/queue",
+    requireRole(["owner", "admin"]),
+    async (req, res, next) => {
+      try {
+        const workflowId = resolveRouteParam(req.params.workflowId);
+        const body = workflowEngineQueueRunSchema.parse(req.body || {});
+        const scope = req.orgContext || req.auth!.scope;
+        const workflowExecutionService = requireWorkflowExecutionService(runtime);
+        const queued = await workflowExecutionService.queueManualRun({
+          scope: {
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+          },
+          actor: toWorkflowActorFromAuth(req.auth!),
+          workflowId,
+          data: body,
+        });
+        res.status(202).json(queued);
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.get("/workflow-engine/runs", requireAuth, async (req, res, next) => {
+    try {
+      const query = runsListQuerySchema.parse({
+        ...normalizeListQueryRecord(req.query as Record<string, unknown>),
+        workflowId: resolveOptionalQueryParam(
+          req.query.workflowId as string | string[] | undefined,
+        ),
+        status: resolveOptionalQueryParam(req.query.status as string | string[] | undefined),
+        from: resolveOptionalQueryParam(req.query.from as string | string[] | undefined),
+        to: resolveOptionalQueryParam(req.query.to as string | string[] | undefined),
+      });
+      const scope = req.orgContext || req.auth!.scope;
+      const workflowExecutionService = requireWorkflowExecutionService(runtime);
+      const result = await workflowExecutionService.listRuns({
+        scope: {
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+        },
+        query,
+      });
+      res.json({
+        ...toStandardListEnvelope(result),
+        runs: result.rows,
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get("/workflow-engine/runs/:runId", requireAuth, async (req, res, next) => {
+    try {
+      const runId = resolveRouteParam(req.params.runId);
+      const scope = req.orgContext || req.auth!.scope;
+      const workflowExecutionService = requireWorkflowExecutionService(runtime);
+      const detail = await workflowExecutionService.getRunDetail({
+        scope: {
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+        },
+        runId,
+      });
+      res.json(detail);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post("/workflow-engine/webhooks/:workflowId", async (req, res, next) => {
+    try {
+      const workflowId = resolveRouteParam(req.params.workflowId);
+      const body = workflowEngineWebhookTriggerSchema.parse(req.body || {});
+      const tokenFromHeader = req.header("x-workflow-webhook-token") || undefined;
+      const tokenFromBearer = resolveBearerToken(req.header("authorization") || undefined);
+      const tokenFromQuery = resolveOptionalQueryParam(
+        req.query.token as string | string[] | undefined,
+      );
+      const webhookToken = tokenFromHeader || tokenFromBearer || tokenFromQuery;
+      if (!webhookToken) {
+        res.status(401).json({ error: "Webhook token is required." });
+        return;
+      }
+
+      const workflowExecutionService = requireWorkflowExecutionService(runtime);
+      const result = await workflowExecutionService.queueWebhookRun({
+        workflowId,
+        payload: body.payload || {},
+        webhookToken,
+        idempotencyKey:
+          body.idempotencyKey ||
+          req.header("x-idempotency-key") ||
+          req.header("idempotency-key") ||
+          undefined,
+        correlationId:
+          body.correlationId ||
+          req.header("x-correlation-id") ||
+          req.header("x-request-id") ||
+          undefined,
+        sourceIp: req.ip || null,
+        userAgent: req.header("user-agent") || null,
+      });
+
+      if (!result.accepted) {
+        res.status(202).json(result);
+        return;
+      }
+
+      res.status(202).json(result);
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.get("/workflows", requireAuth, async (req, res, next) => {
     try {
-      const scope = req.auth!.scope;
+      const scope = req.orgContext || req.auth!.scope;
       const query = workflowsListQuerySchema.parse({
         ...normalizeListQueryRecord(req.query as Record<string, unknown>),
         status: resolveOptionalQueryParam(req.query.status as string | string[] | undefined),
@@ -5034,7 +5938,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
 
   router.get("/quotas", requireAuth, async (req, res, next) => {
     try {
-      const scope = req.auth!.scope;
+      const scope = req.orgContext || req.auth!.scope;
       const limits = getScaleLimitsFromEnv();
       const [workflowCount, activeWorkflowRuns, pendingRetryJobs, scheduledWaits, workspaceBacklog] =
         await Promise.all([
@@ -5089,7 +5993,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
 
   router.get("/usage", requireAuth, async (req, res, next) => {
     try {
-      const scope = req.auth!.scope;
+      const scope = req.orgContext || req.auth!.scope;
       const query = analyticsQuerySchema.parse({
         from: resolveOptionalQueryParam(req.query.from as string | string[] | undefined),
         to: resolveOptionalQueryParam(req.query.to as string | string[] | undefined),
@@ -5201,7 +6105,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
           });
           return;
         }
-        const scope = req.auth!.scope;
+        const scope = req.orgContext || req.auth!.scope;
         const alertService = requireAlertService(runtime);
         const alertRepository = requireAlertRepository(runtime);
 
@@ -5256,7 +6160,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
           });
           return;
         }
-        const scope = req.auth!.scope;
+        const scope = req.orgContext || req.auth!.scope;
         const alertRepository = requireAlertRepository(runtime);
 
         const result = await alertRepository.listDeliveryLogs({
@@ -5287,7 +6191,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
           res.status(200).json({ config });
           return;
         }
-        const scope = req.auth!.scope;
+        const scope = req.orgContext || req.auth!.scope;
         const actor = req.auth!.user;
         const alertService = requireAlertService(runtime);
         const config = await alertService.updateConfig({
@@ -5341,7 +6245,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
           res.status(202).json(result);
           return;
         }
-        const scope = req.auth!.scope;
+        const scope = req.orgContext || req.auth!.scope;
         const actor = req.auth!.user;
         const alertService = requireAlertService(runtime);
         const result = await alertService.sendTestAlert({
@@ -5383,7 +6287,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
     async (req, res, next) => {
       try {
         const body = validateWorkflowSchema.parse(req.body);
-        const scope = req.auth!.scope;
+        const scope = req.orgContext || req.auth!.scope;
         const normalizedDefinition = {
           ...body.definition,
           workspaceId: scope.workspaceId,
@@ -5406,7 +6310,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
     async (req, res, next) => {
       try {
         const body = createWorkflowSchema.parse(req.body);
-        const scope = req.auth!.scope;
+        const scope = req.orgContext || req.auth!.scope;
         const limits = getScaleLimitsFromEnv();
         const workflowCount =
           await runtime.repositories.workflowRepository.countByWorkspace({
@@ -5455,7 +6359,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
     try {
       const workflowId = resolveRouteParam(req.params.workflowId);
       const body = workflowTestRunSchema.parse(req.body || {});
-      const scope = req.auth!.scope;
+      const scope = req.orgContext || req.auth!.scope;
       const workflow = await runtime.repositories.workflowRepository.findByIdScoped({
         workflowId,
         tenantId: scope.tenantId,
@@ -5530,7 +6434,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
         });
         return;
       }
-      const scope = req.auth!.scope;
+      const scope = req.orgContext || req.auth!.scope;
 
       const result = await runtime.repositories.runRepository.listRunsWithQuery({
         tenantId: scope.tenantId,
@@ -5562,7 +6466,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
         });
         return;
       }
-      const scope = req.auth!.scope;
+      const scope = req.orgContext || req.auth!.scope;
       const run = await runtime.repositories.runRepository.findRunByIdScoped({
         runId,
         tenantId: scope.tenantId,
@@ -5596,7 +6500,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
       try {
         const runId = resolveRouteParam(req.params.runId);
         const body = operatorNoteSchema.parse(req.body || {});
-        const scope = req.auth!.scope;
+        const scope = req.orgContext || req.auth!.scope;
         const user = req.auth!.user;
 
         const cancellation = await runtime.repositories.runRepository.cancelRunScoped({
@@ -5673,7 +6577,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
       try {
         const runId = resolveRouteParam(req.params.runId);
         const body = runReplaySchema.parse(req.body || {});
-        const scope = req.auth!.scope;
+        const scope = req.orgContext || req.auth!.scope;
         const user = req.auth!.user;
 
         const sourceRun = await runtime.repositories.runRepository.findRunByIdScoped({
@@ -5789,7 +6693,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
       try {
         const runId = resolveRouteParam(req.params.runId);
         const body = operatorNoteSchema.parse(req.body || {});
-        const scope = req.auth!.scope;
+        const scope = req.orgContext || req.auth!.scope;
         const user = req.auth!.user;
 
         const run = await runtime.repositories.runRepository.findRunByIdScoped({
@@ -5889,6 +6793,621 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
     },
   );
 
+  router.get("/system/notifications", requireAuth, async (req, res, next) => {
+    try {
+      const query = systemNotificationsQuerySchema.parse({
+        ...normalizeListQueryRecord(req.query as Record<string, unknown>),
+        status: resolveOptionalQueryParam(req.query.status as string | string[] | undefined),
+        channel: resolveOptionalQueryParam(req.query.channel as string | string[] | undefined),
+        moduleKey: resolveOptionalQueryParam(req.query.moduleKey as string | string[] | undefined),
+        unreadOnly: resolveOptionalQueryParam(
+          req.query.unreadOnly as string | string[] | undefined,
+        ),
+        from: resolveOptionalQueryParam(req.query.from as string | string[] | undefined),
+        to: resolveOptionalQueryParam(req.query.to as string | string[] | undefined),
+      });
+      const scope = req.orgContext || req.auth!.scope;
+      const actor = {
+        userId: req.auth!.user.id,
+        role: scope.orgRole,
+        displayName: req.auth!.user.fullName,
+        email: req.auth!.user.email,
+
+
+      };
+      const service = requireSystemModulesService(runtime);
+      const result = await service.listNotifications({
+        scope: {
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+        },
+        actor,
+        status: query.status,
+        channel: query.channel,
+        moduleKey: query.moduleKey,
+        unreadOnly: query.unreadOnly,
+        from: query.from,
+        to: query.to,
+        query,
+      });
+      res.json({
+        ...toStandardListEnvelope(result),
+        notifications: result.rows,
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post(
+    "/system/notifications",
+    requireRole(["owner", "admin"]),
+    async (req, res, next) => {
+      try {
+        const body = systemNotificationCreateSchema.parse(req.body || {});
+        const scope = req.orgContext || req.auth!.scope;
+        const actor = {
+          userId: req.auth!.user.id,
+          role: scope.orgRole,
+          displayName: req.auth!.user.fullName,
+          email: req.auth!.user.email,
+  
+  
+        };
+        const service = requireSystemModulesService(runtime);
+        const notification = await service.createNotification({
+          scope: {
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+          },
+          actor,
+          data: {
+            moduleKey: body.moduleKey,
+            eventType: body.eventType,
+            channel: body.channel,
+            priority: body.priority,
+            targetUserId: body.targetUserId,
+            targetTeam: body.targetTeam,
+            targetDepartment: body.targetDepartment,
+            title: body.title,
+            body: body.body,
+            payload: body.payload,
+            dedupeKey: body.dedupeKey,
+            maxAttempts: body.maxAttempts,
+          },
+        });
+        res.status(201).json({ notification });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.post(
+    "/system/notifications/:notificationId/read",
+    requireAuth,
+    async (req, res, next) => {
+      try {
+        const scope = req.orgContext || req.auth!.scope;
+        const service = requireSystemModulesService(runtime);
+        const marked = await service.markNotificationRead({
+          scope: {
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+          },
+          actor: {
+            userId: req.auth!.user.id,
+            role: scope.orgRole,
+            displayName: req.auth!.user.fullName,
+            email: req.auth!.user.email,
+    
+    
+          },
+          notificationId: resolveRouteParam(req.params.notificationId),
+        });
+        res.json({ marked });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.post("/system/notifications/read-all", requireAuth, async (req, res, next) => {
+    try {
+      const scope = req.orgContext || req.auth!.scope;
+      const service = requireSystemModulesService(runtime);
+      const updated = await service.markAllNotificationsRead({
+        scope: {
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+        },
+        actor: {
+          userId: req.auth!.user.id,
+          role: scope.orgRole,
+          displayName: req.auth!.user.fullName,
+          email: req.auth!.user.email,
+  
+  
+        },
+      });
+      res.json({ updated });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get("/system/activity", requireAuth, async (req, res, next) => {
+    try {
+      const query = systemActivityQuerySchema.parse({
+        ...normalizeListQueryRecord(req.query as Record<string, unknown>),
+        moduleKey: resolveOptionalQueryParam(req.query.moduleKey as string | string[] | undefined),
+        action: resolveOptionalQueryParam(req.query.action as string | string[] | undefined),
+        entityType: resolveOptionalQueryParam(req.query.entityType as string | string[] | undefined),
+        entityId: resolveOptionalQueryParam(req.query.entityId as string | string[] | undefined),
+        actorUserId: resolveOptionalQueryParam(
+          req.query.actorUserId as string | string[] | undefined,
+        ),
+        from: resolveOptionalQueryParam(req.query.from as string | string[] | undefined),
+        to: resolveOptionalQueryParam(req.query.to as string | string[] | undefined),
+      });
+      const scope = req.orgContext || req.auth!.scope;
+      const service = requireSystemModulesService(runtime);
+      const result = await service.listActivity({
+        scope: {
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+        },
+        actor: {
+          userId: req.auth!.user.id,
+          role: scope.orgRole,
+          displayName: req.auth!.user.fullName,
+          email: req.auth!.user.email,
+  
+  
+        },
+        moduleKey: query.moduleKey,
+        action: query.action,
+        entityType: query.entityType,
+        entityId: query.entityId,
+        actorUserId: query.actorUserId,
+        from: query.from,
+        to: query.to,
+        query,
+      });
+      res.json({
+        ...toStandardListEnvelope(result),
+        activity: result.rows,
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post(
+    "/system/activity",
+    requireRole(["owner", "admin"]),
+    async (req, res, next) => {
+      try {
+        const body = systemActivityCreateSchema.parse(req.body || {});
+        const scope = req.orgContext || req.auth!.scope;
+        const service = requireSystemModulesService(runtime);
+        const activity = await service.appendActivity({
+          scope: {
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+          },
+          actor: {
+            userId: req.auth!.user.id,
+            role: scope.orgRole,
+            displayName: req.auth!.user.fullName,
+            email: req.auth!.user.email,
+    
+    
+          },
+          data: {
+            moduleKey: body.moduleKey,
+            action: body.action,
+            entityType: body.entityType,
+            entityId: body.entityId,
+            summary: body.summary,
+            visibility: body.visibility,
+            audienceTeam: body.audienceTeam,
+            audienceDepartment: body.audienceDepartment,
+            metadata: body.metadata,
+          },
+        });
+        res.status(201).json({ activity });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.get(
+    "/system/audit-logs",
+    requireRole(["owner", "admin"]),
+    async (req, res, next) => {
+      try {
+        const query = auditLogsQuerySchema.parse({
+          ...normalizeListQueryRecord(req.query as Record<string, unknown>),
+          actorUserId: resolveOptionalQueryParam(
+            req.query.actorUserId as string | string[] | undefined,
+          ),
+          action: resolveOptionalQueryParam(req.query.action as string | string[] | undefined),
+          targetType: resolveOptionalQueryParam(
+            req.query.targetType as string | string[] | undefined,
+          ),
+          targetId: resolveOptionalQueryParam(req.query.targetId as string | string[] | undefined),
+          from: resolveOptionalQueryParam(req.query.from as string | string[] | undefined),
+          to: resolveOptionalQueryParam(req.query.to as string | string[] | undefined),
+        });
+        const scope = req.orgContext || req.auth!.scope;
+        const service = requireSystemModulesService(runtime);
+        const result = await service.listAuditLogs({
+          scope: {
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+          },
+          actor: {
+            userId: req.auth!.user.id,
+            role: scope.orgRole,
+            displayName: req.auth!.user.fullName,
+            email: req.auth!.user.email,
+    
+    
+          },
+          actorUserId: query.actorUserId,
+          action: query.action,
+          entityType: query.targetType,
+          entityId: query.targetId,
+          from: query.from,
+          to: query.to,
+          query,
+        });
+        res.json({
+          ...toStandardListEnvelope(result),
+          logs: result.rows,
+        });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.get(
+    "/system/audit-logs/:id",
+    requireRole(["owner", "admin"]),
+    async (req, res, next) => {
+      try {
+        const scope = req.orgContext || req.auth!.scope;
+        const service = requireSystemModulesService(runtime);
+        const log = await service.findAuditLogById({
+          scope: {
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+          },
+          actor: {
+            userId: req.auth!.user.id,
+            role: scope.orgRole,
+            displayName: req.auth!.user.fullName,
+            email: req.auth!.user.email,
+    
+    
+          },
+          auditLogId: resolveRouteParam(req.params.id),
+        });
+        if (!log) {
+          res.status(404).json({ error: "Not found." });
+          return;
+        }
+        res.json({ log });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.post(
+    "/system/audit/role-change",
+    requireRole(["owner", "admin"]),
+    async (req, res, next) => {
+      try {
+        const body = systemRoleChangeAuditSchema.parse(req.body || {});
+        const scope = req.orgContext || req.auth!.scope;
+        const service = requireSystemModulesService(runtime);
+        await service.recordRoleChange({
+          scope: {
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+          },
+          actor: {
+            userId: req.auth!.user.id,
+            role: scope.orgRole,
+          },
+          targetUserId: body.targetUserId,
+          membershipId: body.membershipId,
+          previousRole: body.previousRole,
+          nextRole: body.nextRole,
+          reason: body.reason,
+          metadata: body.metadata,
+        });
+        res.status(202).json({ recorded: true });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.post(
+    "/system/audit/membership-change",
+    requireRole(["owner", "admin"]),
+    async (req, res, next) => {
+      try {
+        const body = systemMembershipChangeAuditSchema.parse(req.body || {});
+        const scope = req.orgContext || req.auth!.scope;
+        const service = requireSystemModulesService(runtime);
+        await service.recordMembershipChange({
+          scope: {
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+          },
+          actor: {
+            userId: req.auth!.user.id,
+            role: scope.orgRole,
+          },
+          membershipId: body.membershipId,
+          targetUserId: body.targetUserId,
+          changeType: body.changeType,
+          role: body.role,
+          team: body.team,
+          department: body.department,
+          metadata: body.metadata,
+        });
+        res.status(202).json({ recorded: true });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.post(
+    "/system/audit/token-usage",
+    requireRole(["owner", "admin"]),
+    async (req, res, next) => {
+      try {
+        const body = systemTokenUsageAuditSchema.parse(req.body || {});
+        const scope = req.orgContext || req.auth!.scope;
+        const service = requireSystemModulesService(runtime);
+        await service.recordTokenUsage({
+          scope: {
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+          },
+          actor: {
+            userId: req.auth!.user.id,
+            role: scope.orgRole,
+          },
+          tokenType: body.tokenType,
+          tokenId: body.tokenId,
+          subjectUserId: body.subjectUserId,
+          outcome: body.outcome,
+          metadata: body.metadata,
+        });
+        res.status(202).json({ recorded: true });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.post(
+    "/system/audit/ai-data-access",
+    requireRole(["owner", "admin"]),
+    async (req, res, next) => {
+      try {
+        const body = systemAiDataAccessAuditSchema.parse(req.body || {});
+        const scope = req.orgContext || req.auth!.scope;
+        const service = requireSystemModulesService(runtime);
+        await service.recordAiDataAccess({
+          scope: {
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+          },
+          actor: {
+            userId: req.auth!.user.id,
+            role: scope.orgRole,
+          },
+          operation: body.operation,
+          sourceIds: body.sourceIds,
+          chunkIds: body.chunkIds,
+          sensitive: body.sensitive,
+          metadata: body.metadata,
+        });
+        res.status(202).json({ recorded: true });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.get("/system/approvals", requireAuth, async (req, res, next) => {
+    try {
+      const query = systemApprovalsQuerySchema.parse({
+        ...normalizeListQueryRecord(req.query as Record<string, unknown>),
+        moduleKey: resolveOptionalQueryParam(req.query.moduleKey as string | string[] | undefined),
+        requestType: resolveOptionalQueryParam(
+          req.query.requestType as string | string[] | undefined,
+        ),
+        resourceType: resolveOptionalQueryParam(
+          req.query.resourceType as string | string[] | undefined,
+        ),
+        resourceId: resolveOptionalQueryParam(req.query.resourceId as string | string[] | undefined),
+        status: resolveOptionalQueryParam(req.query.status as string | string[] | undefined),
+        requestedByUserId: resolveOptionalQueryParam(
+          req.query.requestedByUserId as string | string[] | undefined,
+        ),
+        assignedApproverUserId: resolveOptionalQueryParam(
+          req.query.assignedApproverUserId as string | string[] | undefined,
+        ),
+        from: resolveOptionalQueryParam(req.query.from as string | string[] | undefined),
+        to: resolveOptionalQueryParam(req.query.to as string | string[] | undefined),
+      });
+      const scope = req.orgContext || req.auth!.scope;
+      const service = requireSystemModulesService(runtime);
+      const result = await service.listApprovals({
+        scope: {
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+        },
+        actor: {
+          userId: req.auth!.user.id,
+          role: scope.orgRole,
+          displayName: req.auth!.user.fullName,
+          email: req.auth!.user.email,
+  
+  
+        },
+        moduleKey: query.moduleKey,
+        requestType: query.requestType,
+        resourceType: query.resourceType,
+        resourceId: query.resourceId,
+        status: query.status,
+        requestedByUserId: query.requestedByUserId,
+        assignedApproverUserId: query.assignedApproverUserId,
+        from: query.from,
+        to: query.to,
+        query,
+      });
+      res.json({
+        ...toStandardListEnvelope(result),
+        approvals: result.rows,
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post("/system/approvals", requireAuth, async (req, res, next) => {
+    try {
+      const body = systemApprovalCreateSchema.parse(req.body || {});
+      const scope = req.orgContext || req.auth!.scope;
+      const service = requireSystemModulesService(runtime);
+      const approval = await service.createApprovalRequest({
+        scope: {
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+        },
+        actor: {
+          userId: req.auth!.user.id,
+          role: scope.orgRole,
+          displayName: req.auth!.user.fullName,
+          email: req.auth!.user.email,
+  
+  
+        },
+        data: {
+          moduleKey: body.moduleKey,
+          requestType: body.requestType,
+          resourceType: body.resourceType,
+          resourceId: body.resourceId,
+          title: body.title,
+          reason: body.reason,
+          priority: body.priority,
+          requiredRole: body.requiredRole,
+          assignedApproverUserId: body.assignedApproverUserId,
+          expiresAt: body.expiresAt,
+          idempotencyKey: body.idempotencyKey,
+          metadata: body.metadata,
+        },
+      });
+      res.status(201).json({ approval });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get("/system/approvals/:approvalId", requireAuth, async (req, res, next) => {
+    try {
+      const scope = req.orgContext || req.auth!.scope;
+      const service = requireSystemModulesService(runtime);
+      const approval = await service.findApprovalById({
+        scope: {
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+        },
+        actor: {
+          userId: req.auth!.user.id,
+          role: scope.orgRole,
+          displayName: req.auth!.user.fullName,
+          email: req.auth!.user.email,
+  
+  
+        },
+        approvalId: resolveRouteParam(req.params.approvalId),
+      });
+      if (!approval) {
+        res.status(404).json({ error: "Not found." });
+        return;
+      }
+      res.json({ approval });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post(
+    "/system/approvals/:approvalId/decision",
+    requireAuth,
+    async (req, res, next) => {
+      try {
+        const body = systemApprovalDecisionSchema.parse(req.body || {});
+        const scope = req.orgContext || req.auth!.scope;
+        const service = requireSystemModulesService(runtime);
+        const decision = await service.decideApproval({
+          scope: {
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            workspaceId: scope.workspaceId,
+          },
+          actor: {
+            userId: req.auth!.user.id,
+            role: scope.orgRole,
+            displayName: req.auth!.user.fullName,
+            email: req.auth!.user.email,
+    
+    
+          },
+          approvalId: resolveRouteParam(req.params.approvalId),
+          data: {
+            decision: body.decision,
+            note: body.note,
+          },
+        });
+        res.json({
+          approval: decision.approval,
+          changed: decision.changed,
+        });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
   router.get(
     "/approvals",
     requireRole(["owner", "admin"]),
@@ -5919,7 +7438,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
           });
           return;
         }
-        const scope = req.auth!.scope;
+        const scope = req.orgContext || req.auth!.scope;
 
         const result = await runtime.repositories.runRepository.listAgentToolApprovalsWithQuery({
           tenantId: scope.tenantId,
@@ -5969,7 +7488,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
           res.json({ approval });
           return;
         }
-        const scope = req.auth!.scope;
+        const scope = req.orgContext || req.auth!.scope;
         const approval =
           await runtime.repositories.runRepository.findAgentToolApprovalByIdScoped({
             approvalId,
@@ -6011,7 +7530,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
           res.status(outcome.changed ? 200 : 202).json(outcome);
           return;
         }
-        const scope = req.auth!.scope;
+        const scope = req.orgContext || req.auth!.scope;
         const user = req.auth!.user;
         const decision =
           await runtime.repositories.runRepository.decideAgentToolApprovalScoped({
@@ -6201,7 +7720,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
           res.status(outcome.changed ? 200 : 202).json(outcome);
           return;
         }
-        const scope = req.auth!.scope;
+        const scope = req.orgContext || req.auth!.scope;
         const user = req.auth!.user;
         const decision =
           await runtime.repositories.runRepository.decideAgentToolApprovalScoped({
@@ -6336,7 +7855,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
       try {
         const waitId = resolveRouteParam(req.params.waitId);
         const body = waitRescheduleSchema.parse(req.body || {});
-        const scope = req.auth!.scope;
+        const scope = req.orgContext || req.auth!.scope;
         const user = req.auth!.user;
 
         const existing = await runtime.repositories.runRepository.findScheduledWaitByIdScoped({
@@ -6418,7 +7937,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
       try {
         const waitId = resolveRouteParam(req.params.waitId);
         const body = operatorNoteSchema.parse(req.body || {});
-        const scope = req.auth!.scope;
+        const scope = req.orgContext || req.auth!.scope;
         const user = req.auth!.user;
 
         const existing = await runtime.repositories.runRepository.findScheduledWaitByIdScoped({
@@ -6500,7 +8019,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
       try {
         const waitId = resolveRouteParam(req.params.waitId);
         const body = operatorNoteSchema.parse(req.body || {});
-        const scope = req.auth!.scope;
+        const scope = req.orgContext || req.auth!.scope;
         const user = req.auth!.user;
 
         const existing = await runtime.repositories.runRepository.findScheduledWaitByIdScoped({
@@ -6593,7 +8112,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
         res.json({ retries: prototypeApi.retries() });
         return;
       }
-      const scope = req.auth!.scope;
+      const scope = req.orgContext || req.auth!.scope;
       const retries = await runtime.repositories.runRepository.listRetryJobs({
         tenantId: scope.tenantId,
         organizationId: scope.organizationId,
@@ -6616,7 +8135,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
         });
         return;
       }
-      const scope = req.auth!.scope;
+      const scope = req.orgContext || req.auth!.scope;
       const delays = await runtime.repositories.runRepository.listScheduledWaits({
         tenantId: scope.tenantId,
         organizationId: scope.organizationId,
@@ -6646,7 +8165,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
         });
         return;
       }
-      const scope = req.auth!.scope;
+      const scope = req.orgContext || req.auth!.scope;
       const logs = await runtime.repositories.runRepository.listLogs({
         tenantId: scope.tenantId,
         organizationId: scope.organizationId,
@@ -6696,7 +8215,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
           });
           return;
         }
-        const scope = req.auth!.scope;
+        const scope = req.orgContext || req.auth!.scope;
 
         if (query.organizationId && query.organizationId !== scope.organizationId) {
           throw createHttpError(403, "Unauthorized.");
@@ -6757,7 +8276,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
           });
           return;
         }
-        const scope = req.auth!.scope;
+        const scope = req.orgContext || req.auth!.scope;
         const entry = await runtime.repositories.runRepository.findAuditLogByIdScoped({
           auditLogId,
           tenantId: scope.tenantId,
@@ -6780,7 +8299,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
 
   router.get("/analytics/overview", requireAuth, async (req, res, next) => {
     try {
-      const scope = req.auth!.scope;
+      const scope = req.orgContext || req.auth!.scope;
       const query = analyticsQuerySchema.parse({
         from: resolveOptionalQueryParam(req.query.from as string | string[] | undefined),
         to: resolveOptionalQueryParam(req.query.to as string | string[] | undefined),
@@ -6836,7 +8355,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
 
   router.get("/analytics/workflows", requireAuth, async (req, res, next) => {
     try {
-      const scope = req.auth!.scope;
+      const scope = req.orgContext || req.auth!.scope;
       const query = analyticsQuerySchema.parse({
         from: resolveOptionalQueryParam(req.query.from as string | string[] | undefined),
         to: resolveOptionalQueryParam(req.query.to as string | string[] | undefined),
@@ -6875,7 +8394,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
 
   router.get("/analytics/adapters", requireAuth, async (req, res, next) => {
     try {
-      const scope = req.auth!.scope;
+      const scope = req.orgContext || req.auth!.scope;
       const query = analyticsQuerySchema.parse({
         from: resolveOptionalQueryParam(req.query.from as string | string[] | undefined),
         to: resolveOptionalQueryParam(req.query.to as string | string[] | undefined),
@@ -6920,7 +8439,7 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
         const body = webhookSchema.parse(req.body);
         const adapterKey = resolveRouteParam(req.params.adapterKey);
         const triggerKey = resolveRouteParam(req.params.triggerKey);
-        const scope = req.auth!.scope;
+        const scope = req.orgContext || req.auth!.scope;
 
         const adapter = runtime.pluginLoader.get(adapterKey);
         const credentials = await runtime.credentialResolver.resolveForAdapter({
@@ -6943,8 +8462,12 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
             credentials,
           },
         );
+        const requestIdempotencyKey =
+          req.header("x-idempotency-key") ||
+          req.header("idempotency-key") ||
+          undefined;
 
-        for (const event of triggerResult.events) {
+        for (const [index, event] of triggerResult.events.entries()) {
           await runtime.workflowEngine.queueIncomingEvent({
             tenantId: scope.tenantId,
             organizationId: scope.organizationId,
@@ -6957,6 +8480,9 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
               req.header("x-correlation-id") ||
               req.header("x-request-id") ||
               undefined,
+            idempotencyKey: requestIdempotencyKey
+              ? `${requestIdempotencyKey}:${index}`
+              : undefined,
           });
         }
 
@@ -6971,3 +8497,4 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
 
   return router;
 }
+

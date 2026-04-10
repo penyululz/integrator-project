@@ -30,6 +30,10 @@ import { IdentityEmailService } from "./auth/identity-email-service";
 import { OrganizationMembershipService } from "./auth/organization-membership-service";
 import { AuthRepository } from "./repositories/auth-repository";
 import { validateWorkflowDefinition } from "./workflow/schema";
+import {
+  WorkflowDefinitionService,
+  WorkflowExecutionService,
+} from "./workflow-engine";
 import { getCoreEnv, resolveCoreEnv, type CoreEnvInput } from "./db/env";
 import { parseEnabledAdapterSetFromEnv } from "./engine/plugin-loader";
 import { AlertDeliveryService } from "./alerts/alert-delivery-service";
@@ -57,6 +61,14 @@ import {
   FileStorageService,
 } from "./file-storage";
 import {
+  AiEngineRepository,
+  AiEngineService,
+} from "./ai-engine";
+import {
+  SystemModulesRepository,
+  SystemModulesService,
+} from "./system";
+import {
   createObservabilityRuntime,
   type ObservabilityRuntime,
 } from "./observability/runtime";
@@ -72,7 +84,10 @@ import {
 } from "./runtime/module-registration";
 import type { Pool } from "pg";
 import type { RedisClientType } from "redis";
-import type { EventQueueOptions } from "./engine/event-queue";
+import type {
+  EventQueueOptions,
+  EventQueueRuntimeState,
+} from "./engine/event-queue";
 import type { PluginDiscoveryOptions } from "./engine/plugin-loader";
 
 export type CoreRuntime = {
@@ -80,6 +95,8 @@ export type CoreRuntime = {
   pluginLoader: PluginLoader;
   eventQueue: EventQueue;
   workflowEngine: WorkflowEngine;
+  workflowDefinitionService?: WorkflowDefinitionService;
+  workflowExecutionService?: WorkflowExecutionService;
   observability: ObservabilityRuntime;
   alertDeliveryService?: AlertDeliveryService;
   retentionCleanupService?: RetentionCleanupService;
@@ -93,8 +110,11 @@ export type CoreRuntime = {
   facilityBookingService?: FacilityBookingService;
   maintenanceSystemService?: MaintenanceSystemService;
   calendarAggregationService?: CalendarAggregationService;
+  aiEngineService?: AiEngineService;
   communicationService?: CommunicationService;
   fileStorageService?: FileStorageService;
+  systemModulesService?: SystemModulesService;
+  health?: CoreRuntimeHealth;
   repositories: {
     workspaceRepository: WorkspaceRepository;
     integrationRepository: IntegrationRepository;
@@ -109,11 +129,50 @@ export type CoreRuntime = {
     facilityBookingRepository?: FacilityBookingRepository;
     maintenanceSystemRepository?: MaintenanceSystemRepository;
     calendarAggregationRepository?: CalendarAggregationRepository;
+    aiEngineRepository?: AiEngineRepository;
     communicationRepository?: CommunicationRepository;
     fileStorageRepository?: FileStorageRepository;
+    systemModulesRepository?: SystemModulesRepository;
     collaborationRepository?: CollaborationRepository;
   };
   close: () => Promise<void>;
+};
+
+export type CoreHealthCheckStatus = "ok" | "degraded" | "down";
+
+export type CoreHealthCheckDetail = {
+  status: CoreHealthCheckStatus;
+  latencyMs: number;
+  error?: string;
+};
+
+export type CoreRuntimeLiveness = {
+  status: "ok";
+  timestamp: string;
+  uptimeSeconds: number;
+  pid: number;
+};
+
+export type CoreRuntimeReadiness = {
+  status: CoreHealthCheckStatus;
+  timestamp: string;
+  checks: {
+    database: CoreHealthCheckDetail;
+    redis: CoreHealthCheckDetail;
+    queue: CoreHealthCheckDetail & {
+      backlog: number | null;
+      state: EventQueueRuntimeState;
+    };
+  };
+  modules: {
+    enabled: string[];
+    disabled: string[];
+  };
+};
+
+export type CoreRuntimeHealth = {
+  checkLiveness: () => CoreRuntimeLiveness;
+  checkReadiness: () => Promise<CoreRuntimeReadiness>;
 };
 
 export { validateWorkflowDefinition };
@@ -162,6 +221,34 @@ export {
   FileStorageService,
   FileStorageError,
 } from "./file-storage";
+export {
+  SystemModulesRepository,
+  SystemModulesService,
+  SystemModuleError,
+  isSystemModuleError,
+  defaultSystemActivityListQuery,
+  defaultSystemApprovalListQuery,
+  defaultSystemAuditLogListQuery,
+  defaultSystemNotificationListQuery,
+} from "./system";
+export {
+  AiEngineRepository,
+  AiEngineService,
+  AiEngineError,
+  isAiEngineError,
+  AiProviderRegistry,
+} from "./ai-engine";
+export {
+  WorkflowDefinitionService,
+  WorkflowExecutionService,
+  WorkflowEngineError,
+  compileWorkflowGraphToSteps,
+  applyWorkflowWebhookSecret,
+  createWorkflowWebhookSecret,
+  hashWorkflowWebhookToken,
+  readWorkflowWebhookHeaderName,
+  readWorkflowWebhookSecretHash,
+} from "./workflow-engine";
 export {
   saveMemory,
   getMemory,
@@ -296,6 +383,108 @@ export type {
   FileStorageVisibilityPolicy,
 } from "./file-storage";
 export type {
+  SystemActivityCreateInput,
+  SystemActivityListInput,
+  SystemActivityListResult,
+  SystemActivityRecord,
+  SystemActivityVisibility,
+  SystemActor,
+  SystemApprovalCreateInput,
+  SystemApprovalDecisionInput,
+  SystemApprovalListInput,
+  SystemApprovalListResult,
+  SystemApprovalPriority,
+  SystemApprovalRecord,
+  SystemApprovalStatus,
+  SystemAuditLogListInput,
+  SystemAuditLogListResult,
+  SystemAuditLogRecord,
+  SystemAuditLogWriteInput,
+  SystemNotificationChannel,
+  SystemNotificationCreateInput,
+  SystemNotificationListInput,
+  SystemNotificationListResult,
+  SystemNotificationPriority,
+  SystemNotificationRecord,
+  SystemNotificationStatus,
+  SystemScope,
+} from "./system";
+export type {
+  AiAgentCreateInput,
+  AiAgentListInput,
+  AiAgentListResult,
+  AiAgentRecord,
+  AiAgentRunInput,
+  AiAgentRunRecord,
+  AiAgentRunResult,
+  AiAgentRunStatus,
+  AiAgentStatus,
+  AiAgentToolCallInput,
+  AiAgentToolTrace,
+  AiAgentUpdateInput,
+  AiClassificationInput,
+  AiClassificationResult,
+  AiDocumentQaCitation,
+  AiDocumentQaInput,
+  AiDocumentQaResult,
+  AiDocumentReference,
+  AiEngineActor,
+  AiEngineFileSearchRecord,
+  AiEngineLogSummaryResult,
+  AiEngineOrganizationSnapshot,
+  AiEngineScope,
+  AiEngineTicketSearchRecord,
+  AiEngineToolId,
+  AiLearningAccessLogListInput,
+  AiLearningAccessLogListResult,
+  AiLearningAccessLogOperation,
+  AiLearningAccessLogRecord,
+  AiLearningAnswerInput,
+  AiLearningAnswerResult,
+  AiLearningChunkRecord,
+  AiLearningIngestionRunRecord,
+  AiLearningIngestionRunStatus,
+  AiLearningIngestionTrigger,
+  AiLearningRetrieveInput,
+  AiLearningRetrieveResult,
+  AiLearningScheduleMode,
+  AiLearningSourceAccessLevel,
+  AiLearningSourceConfig,
+  AiLearningSourceCreateInput,
+  AiLearningSourceListInput,
+  AiLearningSourceListResult,
+  AiLearningSourceRecord,
+  AiLearningSourceType,
+  AiLearningSourceUpdateInput,
+  AiProviderConfigInput,
+  AiProviderConfigRecord,
+  AiProviderRequestOverride,
+  AiProviderType,
+  AiSummarizationInput,
+  AiSummarizationResult,
+  AiWorkflowAssistantInput,
+  AiWorkflowAssistantResult,
+  ResolvedAiProviderConfig,
+} from "./ai-engine";
+export type {
+  WorkflowActor,
+  WorkflowDefinitionStatus,
+  WorkflowDefinitionUpsertInput,
+  WorkflowDefinitionValidationInput,
+  WorkflowDefinitionValidationResult,
+  WorkflowEngineScope,
+  WorkflowGraph,
+  WorkflowGraphEdge,
+  WorkflowGraphNode,
+  WorkflowGraphNodeKind,
+  WorkflowQueueRunInput,
+  WorkflowQueueRunResult,
+  WorkflowRunDetailResult,
+  WorkflowRunsQuery,
+  WorkflowRunsResult,
+  WorkflowWebhookQueueResult,
+} from "./workflow-engine";
+export type {
   AlertConfigInput,
   AlertConfigPublicView,
   AlertDeliveryLogItem,
@@ -426,8 +615,10 @@ export type CoreRuntimeOptions = {
     facilityBooking?: boolean;
     maintenanceSystem?: boolean;
     calendarAggregation?: boolean;
+    aiEngine?: boolean;
     communication?: boolean;
     fileStorage?: boolean;
+    systemShared?: boolean;
   };
 };
 
@@ -485,9 +676,11 @@ export async function createCoreRuntime(
     legacyFeatureFlags: {
       alerts: options.features?.alerts,
       retention: options.features?.retention,
+      systemShared: options.features?.systemShared,
       facilityBooking: options.features?.facilityBooking,
       maintenanceSystem: options.features?.maintenanceSystem,
       calendarAggregation: options.features?.calendarAggregation,
+      aiEngine: options.features?.aiEngine,
       communication: options.features?.communication,
       fileStorage: options.features?.fileStorage,
     },
@@ -510,6 +703,9 @@ export async function createCoreRuntime(
   const identityRepository = isCoreModuleEnabled(modules, "identity-auth")
     ? new IdentityRepository(pool)
     : undefined;
+  const systemModulesRepository = isCoreModuleEnabled(modules, "system-shared")
+    ? new SystemModulesRepository(pool)
+    : undefined;
   const alertRepository = isCoreModuleEnabled(modules, "alerts")
     ? new AlertRepository(pool)
     : undefined;
@@ -524,6 +720,9 @@ export async function createCoreRuntime(
     : undefined;
   const calendarAggregationRepository = isCoreModuleEnabled(modules, "calendar-aggregation")
     ? new CalendarAggregationRepository(pool)
+    : undefined;
+  const aiEngineRepository = isCoreModuleEnabled(modules, "ai-engine")
+    ? new AiEngineRepository(pool)
     : undefined;
   const communicationRepository = isCoreModuleEnabled(modules, "communication")
     ? new CommunicationRepository(pool)
@@ -580,6 +779,14 @@ export async function createCoreRuntime(
     {
       alertDeliveryService,
     },
+  );
+  const workflowDefinitionService = new WorkflowDefinitionService(
+    workflowRepository,
+  );
+  const workflowExecutionService = new WorkflowExecutionService(
+    workflowEngine,
+    workflowRepository,
+    runRepository,
   );
   const oauthService = new OAuthService(credentialRepository);
   const identityEmailService = identityRepository
@@ -649,6 +856,16 @@ export async function createCoreRuntime(
   const calendarAggregationService = calendarAggregationRepository
     ? new CalendarAggregationService(calendarAggregationRepository)
     : undefined;
+  const aiEngineService = aiEngineRepository
+    ? new AiEngineService(aiEngineRepository, runRepository, {
+        env: envInput,
+        logger: {
+          warn: (message, details) => {
+            console.warn(`[ai-engine] ${message}`, details || {});
+          },
+        },
+      })
+    : undefined;
   const communicationService = communicationRepository
     ? new CommunicationService(communicationRepository, {
         logger: {
@@ -667,12 +884,123 @@ export async function createCoreRuntime(
         },
       })
     : undefined;
+  const systemModulesService = systemModulesRepository
+    ? new SystemModulesService(systemModulesRepository)
+    : undefined;
+  const health: CoreRuntimeHealth = {
+    checkLiveness: () => ({
+      status: "ok",
+      timestamp: new Date().toISOString(),
+      uptimeSeconds: Math.max(0, Math.round(process.uptime())),
+      pid: process.pid,
+    }),
+    checkReadiness: async () => {
+      const nowIso = new Date().toISOString();
+
+      const databaseStartedAt = Date.now();
+      let databaseStatus: CoreHealthCheckDetail = {
+        status: "ok",
+        latencyMs: 0,
+      };
+      try {
+        await pool.query("SELECT 1");
+        databaseStatus = {
+          status: "ok",
+          latencyMs: Math.max(0, Date.now() - databaseStartedAt),
+        };
+      } catch (error) {
+        databaseStatus = {
+          status: "down",
+          latencyMs: Math.max(0, Date.now() - databaseStartedAt),
+          error: error instanceof Error ? error.message : "Database check failed.",
+        };
+      }
+
+      const redisStartedAt = Date.now();
+      let redisStatus: CoreHealthCheckDetail = {
+        status: "ok",
+        latencyMs: 0,
+      };
+      try {
+        await redis.ping();
+        redisStatus = {
+          status: "ok",
+          latencyMs: Math.max(0, Date.now() - redisStartedAt),
+        };
+      } catch (error) {
+        redisStatus = {
+          status: "down",
+          latencyMs: Math.max(0, Date.now() - redisStartedAt),
+          error: error instanceof Error ? error.message : "Redis check failed.",
+        };
+      }
+
+      const queueStartedAt = Date.now();
+      const queueState = eventQueue.getRuntimeState();
+      let queueBacklog: number | null = null;
+      let queueStatus: CoreHealthCheckDetail = {
+        status: queueState.usingFallback ? "degraded" : "ok",
+        latencyMs: 0,
+        error: queueState.usingFallback
+          ? queueState.fallbackReason || "Queue fallback is active."
+          : undefined,
+      };
+      try {
+        queueBacklog = await eventQueue.getTotalBacklog();
+        queueStatus = {
+          status: queueState.usingFallback ? "degraded" : "ok",
+          latencyMs: Math.max(0, Date.now() - queueStartedAt),
+          error: queueState.usingFallback
+            ? queueState.fallbackReason || "Queue fallback is active."
+            : undefined,
+        };
+      } catch (error) {
+        queueStatus = {
+          status: "degraded",
+          latencyMs: Math.max(0, Date.now() - queueStartedAt),
+          error:
+            error instanceof Error
+              ? error.message
+              : "Queue backlog check failed.",
+        };
+      }
+
+      const status: CoreHealthCheckStatus =
+        databaseStatus.status === "down" || redisStatus.status === "down"
+          ? "down"
+          : queueStatus.status === "degraded" ||
+              databaseStatus.status === "degraded" ||
+              redisStatus.status === "degraded"
+            ? "degraded"
+            : "ok";
+
+      return {
+        status,
+        timestamp: nowIso,
+        checks: {
+          database: databaseStatus,
+          redis: redisStatus,
+          queue: {
+            ...queueStatus,
+            backlog: queueBacklog,
+            state: queueState,
+          },
+        },
+        modules: {
+          enabled: modules.enabled,
+          disabled: modules.disabled,
+        },
+      };
+    },
+  };
 
   return {
     modules,
     pluginLoader,
     eventQueue,
     workflowEngine,
+    workflowDefinitionService,
+    workflowExecutionService,
     observability,
     alertDeliveryService,
     retentionCleanupService,
@@ -686,8 +1014,11 @@ export async function createCoreRuntime(
     facilityBookingService,
     maintenanceSystemService,
     calendarAggregationService,
+    aiEngineService,
     communicationService,
     fileStorageService,
+    systemModulesService,
+    health,
     repositories: {
       workspaceRepository,
       integrationRepository,
@@ -702,8 +1033,10 @@ export async function createCoreRuntime(
       facilityBookingRepository,
       maintenanceSystemRepository,
       calendarAggregationRepository,
+      aiEngineRepository,
       communicationRepository,
       fileStorageRepository,
+      systemModulesRepository,
       collaborationRepository,
     },
     close: async () => {

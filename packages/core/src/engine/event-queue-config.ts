@@ -42,6 +42,10 @@ export function resolveEventQueueBootstrapConfig(
     ),
     queueDriver,
     redisUrl: env.REDIS_URL,
+    dedupeTtlMs: readOptionalInteger(
+      env.INTEGRATOR_QUEUE_DEDUPE_TTL_MS,
+      300_000,
+    ),
     bullmqPrefix: readOptionalString(env.INTEGRATOR_BULLMQ_PREFIX, "integrator"),
     bullmqWorkerConcurrency: readOptionalInteger(
       env.INTEGRATOR_BULLMQ_WORKER_CONCURRENCY,

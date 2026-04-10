@@ -6,7 +6,7 @@ describe("CoreBackgroundWorker", () => {
     const workflowEngine = {
       processNextScheduledDelay: vi.fn().mockResolvedValue(true),
       processNextRetry: vi.fn().mockResolvedValue(false),
-      processNextEvent: vi.fn().mockResolvedValue(undefined),
+      processNextEvent: vi.fn().mockResolvedValue(false),
     };
     const alertDeliveryService = {
       processNextDispatch: vi.fn().mockResolvedValue(false),
@@ -20,6 +20,8 @@ describe("CoreBackgroundWorker", () => {
       workflowEngine: workflowEngine as never,
       alertDeliveryService: alertDeliveryService as never,
       retentionCleanupService: retentionCleanupService as never,
+    }, {
+      maxMaintenanceBurst: 1,
     });
 
     const handled = await worker.runOnce();
@@ -34,7 +36,7 @@ describe("CoreBackgroundWorker", () => {
     const workflowEngine = {
       processNextScheduledDelay: vi.fn().mockResolvedValue(false),
       processNextRetry: vi.fn().mockResolvedValue(false),
-      processNextEvent: vi.fn().mockResolvedValue(undefined),
+      processNextEvent: vi.fn().mockResolvedValue(false),
     };
     const alertDeliveryService = {
       processNextDispatch: vi.fn().mockResolvedValue(false),
@@ -64,5 +66,44 @@ describe("CoreBackgroundWorker", () => {
     expect(retentionCleanupService.runIfDue).toHaveBeenCalledTimes(1);
     expect(workflowEngine.processNextEvent).toHaveBeenCalledWith(3);
   });
-});
 
+  it("returns true when an event was consumed from the queue", async () => {
+    const workflowEngine = {
+      processNextScheduledDelay: vi.fn().mockResolvedValue(false),
+      processNextRetry: vi.fn().mockResolvedValue(false),
+      processNextEvent: vi.fn().mockResolvedValue(true),
+    };
+
+    const worker = new CoreBackgroundWorker({
+      workflowEngine: workflowEngine as never,
+    });
+
+    const handled = await worker.runOnce();
+    expect(handled).toBe(true);
+    expect(workflowEngine.processNextEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it("backs off maintenance polls when queues are empty", async () => {
+    const workflowEngine = {
+      processNextScheduledDelay: vi.fn().mockResolvedValue(false),
+      processNextRetry: vi.fn().mockResolvedValue(false),
+      processNextEvent: vi.fn().mockResolvedValue(false),
+    };
+
+    const worker = new CoreBackgroundWorker(
+      {
+        workflowEngine: workflowEngine as never,
+      },
+      {
+        maintenancePollIntervalMs: 1_000,
+      },
+    );
+
+    await worker.runOnce();
+    await worker.runOnce();
+
+    expect(workflowEngine.processNextScheduledDelay).toHaveBeenCalledTimes(1);
+    expect(workflowEngine.processNextRetry).toHaveBeenCalledTimes(1);
+    expect(workflowEngine.processNextEvent).toHaveBeenCalledTimes(2);
+  });
+});

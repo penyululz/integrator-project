@@ -7,7 +7,7 @@ Use this checklist when moving the engine into a new project.
 - [ ] backend-only modules copied (`apps/api`, `packages/core`, `packages/shared`, adapters)
 - [ ] frontend-specific assumptions removed
 - [ ] runtime entrypoints separated (API process, worker process)
-- [ ] portability layers are preserved (engine core / integration layer / adapters / optional modules)
+- [ ] runtime layers are preserved (`engine` / `backend` / `server`)
 
 ## Configuration
 
@@ -35,11 +35,16 @@ Use this checklist when moving the engine into a new project.
 
 - [ ] retry/dead-letter behavior validated
 - [ ] durable wait scheduling validated
+- [ ] workflow definition/execution layer separation preserved (`workflowDefinitionService` vs `workflowExecutionService`)
 - [ ] approval continuation behavior validated
 - [ ] audit and alert surfaces validated
+- [ ] shared system module validated (`notifications`, `activity`, `audit`, `approvals`) when `system-shared` is enabled
+- [ ] audit coverage validated for role changes, membership changes, token usage, and AI data access
 - [ ] facility booking conflict/idempotency behavior validated (if `facility-booking` is enabled)
 - [ ] maintenance lifecycle/assignment/visibility behavior validated (if `maintenance-system` is enabled)
 - [ ] calendar aggregation source filtering and visibility behavior validated (if `calendar-aggregation` is enabled)
+- [ ] AI provider/agent/tool behavior validated (if `ai-engine` is enabled)
+- [ ] AI learning ingestion/retrieval scope guards validated (tenant/org/workspace + file access + RBAC)
 - [ ] communication channels/messages/meeting/summary behavior validated (if `communication` is enabled)
 - [ ] file space/item/share/activity behavior validated (if `file-storage` is enabled)
 

@@ -1,14 +1,12 @@
 import { initializeRootEnv } from "./init-env";
 
-type RuntimeMode = "Prototype Mode" | "Live Mode";
+type RuntimeMode = "Live Mode";
 
 function parseRuntimeModeArg(argv: string[]): RuntimeMode {
   const modeArg = argv.find((value) => value.startsWith("--mode="));
   const rawMode = modeArg?.split("=")[1]?.trim().toLowerCase();
-  if (rawMode === "live" || rawMode === "live mode") {
-    return "Live Mode";
-  }
-  return "Prototype Mode";
+  void rawMode;
+  return "Live Mode";
 }
 
 function runCli(): void {

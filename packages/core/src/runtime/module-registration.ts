@@ -16,9 +16,11 @@ export type LegacyFeatureFlags = {
   alerts?: boolean;
   retention?: boolean;
   identityAuth?: boolean;
+  systemShared?: boolean;
   facilityBooking?: boolean;
   maintenanceSystem?: boolean;
   calendarAggregation?: boolean;
+  aiEngine?: boolean;
   communication?: boolean;
   fileStorage?: boolean;
   collaboration?: boolean;
@@ -38,10 +40,18 @@ const MODULE_ALIAS_MAP: Record<string, CoreModuleKey> = {
   workflow: "workflow-orchestration",
   workflows: "workflow-orchestration",
   orchestration: "workflow-orchestration",
+  "workflow-engine": "workflow-orchestration",
   "workflow-orchestration": "workflow-orchestration",
   identity: "identity-auth",
   auth: "identity-auth",
   "identity-auth": "identity-auth",
+  system: "system-shared",
+  shared: "system-shared",
+  notifications: "system-shared",
+  approvals: "system-shared",
+  audit: "system-shared",
+  activity: "system-shared",
+  "system-shared": "system-shared",
   alert: "alerts",
   alerts: "alerts",
   alerting: "alerts",
@@ -53,6 +63,9 @@ const MODULE_ALIAS_MAP: Record<string, CoreModuleKey> = {
   "maintenance-system": "maintenance-system",
   calendar: "calendar-aggregation",
   "calendar-aggregation": "calendar-aggregation",
+  ai: "ai-engine",
+  llm: "ai-engine",
+  "ai-engine": "ai-engine",
   communication: "communication",
   chat: "communication",
   file: "file-storage",
@@ -125,6 +138,9 @@ export function resolveCoreModuleRegistration(input: {
   if (input.legacyFeatureFlags?.identityAuth === false) {
     effectiveExclude.add("identity-auth");
   }
+  if (input.legacyFeatureFlags?.systemShared === false) {
+    effectiveExclude.add("system-shared");
+  }
   if (input.legacyFeatureFlags?.facilityBooking === false) {
     effectiveExclude.add("facility-booking");
   }
@@ -133,6 +149,9 @@ export function resolveCoreModuleRegistration(input: {
   }
   if (input.legacyFeatureFlags?.calendarAggregation === false) {
     effectiveExclude.add("calendar-aggregation");
+  }
+  if (input.legacyFeatureFlags?.aiEngine === false) {
+    effectiveExclude.add("ai-engine");
   }
   if (input.legacyFeatureFlags?.communication === false) {
     effectiveExclude.add("communication");

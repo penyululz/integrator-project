@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import type { CoreEnv } from "../db/env";
-import { PLATFORM_MODES } from "@integration/shared";
 import {
   AuthRepository,
   type LoginAccountRecord,
@@ -125,6 +124,23 @@ function parsePositiveInt(
   return Math.max(min, Math.min(max, parsed));
 }
 
+function parseBooleanFlag(value: string | undefined, fallback: boolean): boolean {
+  if (value === undefined) {
+    return fallback;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) {
+    return fallback;
+  }
+  if (["1", "true", "yes", "on"].includes(normalized)) {
+    return true;
+  }
+  if (["0", "false", "no", "off"].includes(normalized)) {
+    return false;
+  }
+  return fallback;
+}
+
 function normalizeEmail(email: string): string {
   return email.trim().toLowerCase();
 }
@@ -200,8 +216,7 @@ export class AuthService {
   }
 
   isDevLoginEnabled(): boolean {
-    // PROTOTYPE MODE ONLY: development login shortcut.
-    return this.env.INTEGRATOR_MODE !== PLATFORM_MODES.LIVE;
+    return parseBooleanFlag(process.env.AUTH_DEV_LOGIN_ENABLED, false);
   }
 
   async login(input: LoginInput, context: RequestContext = {}): Promise<LoginResponse> {

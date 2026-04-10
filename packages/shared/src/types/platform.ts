@@ -1,5 +1,5 @@
-// MODE: Prototype Mode | Live Mode
-// SHARED BETWEEN PROTOTYPE AND LIVE
+// MODE: Live Mode
+// RUNTIME MODE SOURCE OF TRUTH
 // KEEP CONTRACT SHAPE IN SYNC
 // API: Fastify + Zod
 // DATA: PostgreSQL
@@ -8,13 +8,11 @@
 // CI/CD: GitHub Actions
 
 export const PLATFORM_MODES = {
-  PROTOTYPE: "Prototype Mode",
   LIVE: "Live Mode",
 } as const;
 
 export type PlatformMode = (typeof PLATFORM_MODES)[keyof typeof PLATFORM_MODES];
 
-// SHARED BETWEEN PROTOTYPE AND LIVE
 // Source-of-truth env key for runtime mode selection.
 export const ENGINE_MODE_ENV_KEY = "ENGINE_MODE" as const;
 export const PLATFORM_MODE_ENV_KEY = "INTEGRATOR_MODE" as const;
@@ -43,13 +41,20 @@ export function parsePlatformMode(value: string | null | undefined): PlatformMod
 
   const normalized = normalizeModeToken(value);
   if (
-    normalized === normalizeModeToken(PLATFORM_MODES.PROTOTYPE) ||
-    normalized === "prototype"
+    normalized === normalizeModeToken(PLATFORM_MODES.LIVE) ||
+    normalized === "live" ||
+    normalized === "live mode" ||
+    normalized === "live-mode"
   ) {
-    return PLATFORM_MODES.PROTOTYPE;
+    return PLATFORM_MODES.LIVE;
   }
 
-  if (normalized === normalizeModeToken(PLATFORM_MODES.LIVE) || normalized === "live") {
+  // Legacy compatibility: prototype aliases are treated as Live Mode.
+  if (
+    normalized === "prototype" ||
+    normalized === "prototype mode" ||
+    normalized === "prototype-mode"
+  ) {
     return PLATFORM_MODES.LIVE;
   }
 
@@ -79,31 +84,20 @@ export function resolvePlatformModeFromEnv(
 
   const appEnv = env[LEGACY_APP_ENV_KEY];
   if (appEnv && appEnv.trim().length > 0) {
-    const normalizedAppEnv = normalizeModeToken(appEnv);
     return {
-      mode:
-        normalizedAppEnv === "production" || normalizedAppEnv === "test"
-          ? PLATFORM_MODES.LIVE
-          : PLATFORM_MODES.PROTOTYPE,
+      mode: PLATFORM_MODES.LIVE,
       source: "APP_ENV",
       rawValue: appEnv,
     };
   }
 
   return {
-    mode: PLATFORM_MODES.PROTOTYPE,
+    mode: PLATFORM_MODES.LIVE,
     source: "default",
     rawValue: null,
   };
 }
 
 export function isLiveMode(mode: PlatformMode): boolean {
-  // LIVE MODE ONLY
   return mode === PLATFORM_MODES.LIVE;
-}
-
-export function isPrototypeMode(mode: PlatformMode): boolean {
-  // PROTOTYPE MODE ONLY
-  // USED FOR LOCAL DEMO / ENGINE ITERATION
-  return mode === PLATFORM_MODES.PROTOTYPE;
 }

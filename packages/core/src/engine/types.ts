@@ -9,6 +9,7 @@ export type IncomingEvent = {
   payload: Record<string, unknown>;
   receivedAt: string;
   correlationId?: string;
+  idempotencyKey?: string;
   targetWorkflowId?: string;
   deferredCount?: number;
   deferredReason?: string;

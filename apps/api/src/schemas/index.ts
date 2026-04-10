@@ -98,6 +98,158 @@ export const auditLogsQuerySchema = z
   .strict()
   .superRefine(validateDateRange);
 
+export const systemNotificationsQuerySchema = standardListQuerySchema
+  .extend({
+    status: z.enum(["queued", "sent", "failed", "cancelled"]).optional(),
+    channel: z.enum(["in_app", "email", "webhook"]).optional(),
+    moduleKey: z.string().trim().min(1).max(120).optional(),
+    unreadOnly: z.coerce.boolean().optional(),
+    from: isoDateTimeSchema.optional(),
+    to: isoDateTimeSchema.optional(),
+  })
+  .strict()
+  .superRefine(validateDateRange);
+
+export const systemNotificationCreateSchema = z
+  .object({
+    moduleKey: z.string().trim().min(1).max(120).optional(),
+    eventType: z.string().trim().min(1).max(160),
+    channel: z.enum(["in_app", "email", "webhook"]).optional(),
+    priority: z.enum(["low", "normal", "high", "critical"]).optional(),
+    targetUserId: z.string().uuid().optional(),
+    targetTeam: z.string().trim().min(1).max(160).optional(),
+    targetDepartment: z.string().trim().min(1).max(160).optional(),
+    title: z.string().trim().min(1).max(240),
+    body: z.string().trim().min(1).max(10_000),
+    payload: z.record(z.unknown()).optional(),
+    dedupeKey: z.string().trim().min(1).max(240).optional(),
+    maxAttempts: z.coerce.number().int().min(1).max(20).optional(),
+  })
+  .strict();
+
+export const systemActivityQuerySchema = standardListQuerySchema
+  .extend({
+    moduleKey: z.string().trim().min(1).max(120).optional(),
+    action: z.string().trim().min(1).max(160).optional(),
+    entityType: z.string().trim().min(1).max(120).optional(),
+    entityId: z.string().trim().min(1).max(240).optional(),
+    actorUserId: z.string().uuid().optional(),
+    from: isoDateTimeSchema.optional(),
+    to: isoDateTimeSchema.optional(),
+  })
+  .strict()
+  .superRefine(validateDateRange);
+
+export const systemActivityCreateSchema = z
+  .object({
+    moduleKey: z.string().trim().min(1).max(120),
+    action: z.string().trim().min(1).max(160),
+    entityType: z.string().trim().min(1).max(120).optional(),
+    entityId: z.string().trim().min(1).max(240).optional(),
+    summary: z.string().trim().min(1).max(500).optional(),
+    visibility: z.enum(["organization", "team", "private"]).optional(),
+    audienceTeam: z.string().trim().min(1).max(160).optional(),
+    audienceDepartment: z.string().trim().min(1).max(160).optional(),
+    metadata: z.record(z.unknown()).optional(),
+  })
+  .strict();
+
+export const systemApprovalsQuerySchema = standardListQuerySchema
+  .extend({
+    moduleKey: z.string().trim().min(1).max(120).optional(),
+    requestType: z.string().trim().min(1).max(120).optional(),
+    resourceType: z.string().trim().min(1).max(120).optional(),
+    resourceId: z.string().trim().min(1).max(240).optional(),
+    status: z.enum(["pending", "approved", "rejected", "cancelled", "expired"]).optional(),
+    requestedByUserId: z.string().uuid().optional(),
+    assignedApproverUserId: z.string().uuid().optional(),
+    from: isoDateTimeSchema.optional(),
+    to: isoDateTimeSchema.optional(),
+  })
+  .strict()
+  .superRefine(validateDateRange);
+
+export const systemApprovalCreateSchema = z
+  .object({
+    moduleKey: z.string().trim().min(1).max(120),
+    requestType: z.string().trim().min(1).max(120),
+    resourceType: z.string().trim().min(1).max(120),
+    resourceId: z.string().trim().min(1).max(240),
+    title: z.string().trim().min(1).max(240),
+    reason: z.string().trim().min(1).max(2_000).optional(),
+    priority: z.enum(["low", "normal", "high", "critical"]).optional(),
+    requiredRole: z.enum(["owner", "admin", "member"]).optional(),
+    assignedApproverUserId: z.string().uuid().optional(),
+    expiresAt: isoDateTimeSchema.optional(),
+    idempotencyKey: z.string().trim().min(1).max(240).optional(),
+    metadata: z.record(z.unknown()).optional(),
+  })
+  .strict();
+
+export const systemApprovalDecisionSchema = z
+  .object({
+    decision: z.enum(["approved", "rejected", "cancelled"]),
+    note: z.string().trim().min(1).max(500).optional(),
+  })
+  .strict();
+
+export const systemRoleChangeAuditSchema = z
+  .object({
+    targetUserId: z.string().uuid().optional(),
+    membershipId: z.string().uuid().optional(),
+    previousRole: z.enum(["owner", "admin", "member"]).optional(),
+    nextRole: z.enum(["owner", "admin", "member"]),
+    reason: z.string().trim().min(1).max(500).optional(),
+    metadata: z.record(z.unknown()).optional(),
+  })
+  .strict();
+
+export const systemMembershipChangeAuditSchema = z
+  .object({
+    membershipId: z.string().uuid().optional(),
+    targetUserId: z.string().uuid().optional(),
+    changeType: z.enum([
+      "created",
+      "updated",
+      "removed",
+      "activated",
+      "disabled",
+      "invited",
+      "joined",
+    ]),
+    role: z.enum(["owner", "admin", "member"]).optional(),
+    team: z.string().trim().min(1).max(160).optional(),
+    department: z.string().trim().min(1).max(160).optional(),
+    metadata: z.record(z.unknown()).optional(),
+  })
+  .strict();
+
+export const systemTokenUsageAuditSchema = z
+  .object({
+    tokenType: z.enum([
+      "otp",
+      "verification",
+      "password_reset",
+      "invite",
+      "organization_invite",
+    ]),
+    tokenId: z.string().uuid().optional(),
+    subjectUserId: z.string().uuid().optional(),
+    outcome: z.enum(["consumed", "rejected", "expired", "revoked"]),
+    metadata: z.record(z.unknown()).optional(),
+  })
+  .strict();
+
+export const systemAiDataAccessAuditSchema = z
+  .object({
+    operation: z.enum(["retrieve", "answer", "ingestion", "tool_call"]),
+    sourceIds: z.array(z.string().uuid()).optional(),
+    chunkIds: z.array(z.string().uuid()).optional(),
+    sensitive: z.boolean().optional(),
+    metadata: z.record(z.unknown()).optional(),
+  })
+  .strict();
+
 export const agentApprovalsQuerySchema = z
   .object({
     runId: z.string().uuid().optional(),
@@ -524,6 +676,355 @@ export const communicationAiSummaryRequestSchema = z
         message: `${sourceType} summary requests require sourceRefId.`,
       });
     }
+    if (!value.from || !value.to) {
+      return;
+    }
+    const fromTs = Date.parse(value.from);
+    const toTs = Date.parse(value.to);
+    if (Number.isFinite(fromTs) && Number.isFinite(toTs) && fromTs > toTs) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["from"],
+        message: "`from` must be less than or equal to `to`.",
+      });
+    }
+  });
+
+const aiProviderTypeSchema = z.enum([
+  "ollama",
+  "openai_compatible",
+  "custom",
+  "heuristic",
+]);
+
+const aiToolIdSchema = z.enum([
+  "files.search",
+  "tickets.search",
+  "logs.summarize",
+  "organization.fetch",
+]);
+
+export const aiProviderConfigSchema = z
+  .object({
+    providerKey: z.string().trim().min(1).max(120),
+    providerType: aiProviderTypeSchema,
+    endpoint: z.string().trim().url().optional(),
+    model: z.string().trim().min(1).max(160).optional(),
+    authEnvKey: z.string().trim().min(1).max(120).optional(),
+    headers: z.record(z.string()).optional(),
+    timeoutMs: z.coerce.number().int().min(500).max(120_000).optional(),
+    isDefault: z.boolean().optional(),
+    enabled: z.boolean().optional(),
+    metadata: z.record(z.unknown()).optional(),
+  })
+  .strict();
+
+export const aiProviderOverrideSchema = z
+  .object({
+    providerKey: z.string().trim().min(1).max(120).optional(),
+    providerType: aiProviderTypeSchema.optional(),
+    endpoint: z.string().trim().url().optional(),
+    model: z.string().trim().min(1).max(160).optional(),
+    apiKey: z.string().trim().min(1).max(4000).optional(),
+    authEnvKey: z.string().trim().min(1).max(120).optional(),
+    headers: z.record(z.string()).optional(),
+    timeoutMs: z.coerce.number().int().min(500).max(120_000).optional(),
+  })
+  .strict();
+
+export const aiSummarizeSchema = z
+  .object({
+    text: z.string().trim().min(1).max(200_000),
+    maxSentences: z.coerce.number().int().min(1).max(10).optional(),
+    tone: z.enum(["neutral", "executive", "casual"]).optional(),
+    provider: aiProviderOverrideSchema.optional(),
+  })
+  .strict();
+
+export const aiClassifySchema = z
+  .object({
+    text: z.string().trim().min(1).max(200_000),
+    labels: z.array(z.string().trim().min(1).max(120)).min(1).max(50),
+    provider: aiProviderOverrideSchema.optional(),
+  })
+  .strict();
+
+const aiDocumentReferenceSchema = z
+  .object({
+    id: z.string().trim().min(1).max(160).optional(),
+    title: z.string().trim().min(1).max(240).optional(),
+    content: z.string().trim().min(1).max(500_000),
+    metadata: z.record(z.unknown()).optional(),
+  })
+  .strict();
+
+export const aiDocumentQaSchema = z
+  .object({
+    question: z.string().trim().min(1).max(20_000),
+    documents: z.array(aiDocumentReferenceSchema).min(1).max(100),
+    provider: aiProviderOverrideSchema.optional(),
+  })
+  .strict();
+
+export const aiWorkflowAssistantSchema = z
+  .object({
+    prompt: z.string().trim().min(1).max(50_000),
+    workflowContext: z.record(z.unknown()).optional(),
+    runContext: z.record(z.unknown()).optional(),
+    memory: z.record(z.unknown()).optional(),
+    provider: aiProviderOverrideSchema.optional(),
+  })
+  .strict();
+
+export const aiAgentsQuerySchema = standardListQuerySchema
+  .extend({
+    status: z.enum(["active", "disabled"]).optional(),
+  })
+  .strict();
+
+export const aiAgentCreateSchema = z
+  .object({
+    agentKey: z.string().trim().min(1).max(120),
+    name: z.string().trim().min(1).max(200),
+    description: z.string().trim().max(2000).optional(),
+    status: z.enum(["active", "disabled"]).optional(),
+    providerKey: z.string().trim().min(1).max(120).optional(),
+    providerOverride: aiProviderOverrideSchema.optional(),
+    model: z.string().trim().min(1).max(160).optional(),
+    systemPrompt: z.string().trim().max(100_000).optional(),
+    toolAllowlist: z.array(aiToolIdSchema).max(10).optional(),
+    maxIterations: z.coerce.number().int().min(1).max(12).optional(),
+    config: z.record(z.unknown()).optional(),
+    metadata: z.record(z.unknown()).optional(),
+  })
+  .strict();
+
+export const aiAgentUpdateSchema = z
+  .object({
+    name: z.string().trim().min(1).max(200).optional(),
+    description: z.union([z.string().trim().max(2000), z.null()]).optional(),
+    status: z.enum(["active", "disabled"]).optional(),
+    providerKey: z.union([z.string().trim().min(1).max(120), z.null()]).optional(),
+    providerOverride: aiProviderOverrideSchema.optional(),
+    model: z.union([z.string().trim().min(1).max(160), z.null()]).optional(),
+    systemPrompt: z.union([z.string().trim().max(100_000), z.null()]).optional(),
+    toolAllowlist: z.array(aiToolIdSchema).max(10).optional(),
+    maxIterations: z.coerce.number().int().min(1).max(12).optional(),
+    config: z.record(z.unknown()).optional(),
+    metadata: z.record(z.unknown()).optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (
+      value.name === undefined &&
+      value.description === undefined &&
+      value.status === undefined &&
+      value.providerKey === undefined &&
+      value.providerOverride === undefined &&
+      value.model === undefined &&
+      value.systemPrompt === undefined &&
+      value.toolAllowlist === undefined &&
+      value.maxIterations === undefined &&
+      value.config === undefined &&
+      value.metadata === undefined
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "At least one mutable field is required.",
+      });
+    }
+  });
+
+export const aiAgentRunSchema = z
+  .object({
+    prompt: z.string().trim().min(1).max(100_000),
+    requestedTools: z.array(aiToolIdSchema).max(12).optional(),
+    toolInputs: z.record(z.record(z.unknown())).optional(),
+    maxIterations: z.coerce.number().int().min(1).max(12).optional(),
+    provider: aiProviderOverrideSchema.optional(),
+  })
+  .strict();
+
+export const aiToolSearchFilesSchema = z
+  .object({
+    query: z.string().trim().min(1).max(2000).optional(),
+    limit: z.coerce.number().int().min(1).max(100).optional(),
+  })
+  .strict();
+
+export const aiToolSearchTicketsSchema = z
+  .object({
+    query: z.string().trim().min(1).max(2000).optional(),
+    status: z.enum(["open", "in_progress", "resolved", "closed"]).optional(),
+    priority: z.enum(["low", "medium", "high"]).optional(),
+    limit: z.coerce.number().int().min(1).max(100).optional(),
+  })
+  .strict();
+
+export const aiToolSummarizeLogsSchema = z
+  .object({
+    runId: z.string().uuid().optional(),
+    eventType: z.string().trim().min(1).max(160).optional(),
+    limit: z.coerce.number().int().min(1).max(400).optional(),
+    provider: aiProviderOverrideSchema.optional(),
+  })
+  .strict();
+
+const aiLearningSourceTypeSchema = z.enum([
+  "file_storage",
+  "run_logs",
+  "manual_text",
+]);
+
+const aiLearningAccessLevelSchema = z.enum(["member", "admin"]);
+const aiLearningScheduleModeSchema = z.enum(["manual", "interval"]);
+
+const aiLearningSourceConfigSchema = z
+  .object({
+    fileStorage: z
+      .object({
+        spaceId: z.string().uuid().optional(),
+        itemIds: z.array(z.string().uuid()).max(300).optional(),
+        includeMetadataFields: z.array(z.string().trim().min(1).max(80)).max(32).optional(),
+      })
+      .strict()
+      .optional(),
+    runLogs: z
+      .object({
+        eventType: z.string().trim().min(1).max(160).optional(),
+        runId: z.string().uuid().optional(),
+      })
+      .strict()
+      .optional(),
+    manualText: z
+      .object({
+        documents: z
+          .array(
+            z
+              .object({
+                ref: z.string().trim().min(1).max(160).optional(),
+                title: z.string().trim().min(1).max(240).optional(),
+                content: z.string().trim().min(1).max(200_000),
+                metadata: z.record(z.unknown()).optional(),
+              })
+              .strict(),
+          )
+          .max(500)
+          .optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
+
+export const aiLearningSourcesQuerySchema = standardListQuerySchema
+  .extend({
+    sourceType: aiLearningSourceTypeSchema.optional(),
+    enabled: z.boolean().optional(),
+  })
+  .strict();
+
+export const aiLearningSourceCreateSchema = z
+  .object({
+    sourceKey: z.string().trim().min(1).max(120),
+    sourceType: aiLearningSourceTypeSchema,
+    title: z.string().trim().min(1).max(240),
+    description: z.string().trim().max(2000).optional(),
+    accessLevel: aiLearningAccessLevelSchema.optional(),
+    scheduleMode: aiLearningScheduleModeSchema.optional(),
+    intervalMinutes: z.coerce.number().int().min(5).max(10_080).optional(),
+    enabled: z.boolean().optional(),
+    maxItemsPerRun: z.coerce.number().int().min(1).max(1000).optional(),
+    maxCharsPerChunk: z.coerce.number().int().min(200).max(4000).optional(),
+    maxChunksPerDocument: z.coerce.number().int().min(1).max(64).optional(),
+    config: aiLearningSourceConfigSchema.optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.scheduleMode === "interval" && value.intervalMinutes === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["intervalMinutes"],
+        message: "intervalMinutes is required when scheduleMode is interval.",
+      });
+    }
+    if (value.sourceType === "run_logs" && value.accessLevel === "member") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["accessLevel"],
+        message: "run_logs sources cannot be member-access.",
+      });
+    }
+  });
+
+export const aiLearningSourceUpdateSchema = z
+  .object({
+    title: z.string().trim().min(1).max(240).optional(),
+    description: z.union([z.string().trim().max(2000), z.null()]).optional(),
+    accessLevel: aiLearningAccessLevelSchema.optional(),
+    scheduleMode: aiLearningScheduleModeSchema.optional(),
+    intervalMinutes: z.union([z.coerce.number().int().min(5).max(10_080), z.null()]).optional(),
+    enabled: z.boolean().optional(),
+    maxItemsPerRun: z.coerce.number().int().min(1).max(1000).optional(),
+    maxCharsPerChunk: z.coerce.number().int().min(200).max(4000).optional(),
+    maxChunksPerDocument: z.coerce.number().int().min(1).max(64).optional(),
+    config: aiLearningSourceConfigSchema.optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (
+      value.title === undefined &&
+      value.description === undefined &&
+      value.accessLevel === undefined &&
+      value.scheduleMode === undefined &&
+      value.intervalMinutes === undefined &&
+      value.enabled === undefined &&
+      value.maxItemsPerRun === undefined &&
+      value.maxCharsPerChunk === undefined &&
+      value.maxChunksPerDocument === undefined &&
+      value.config === undefined
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "At least one mutable field is required.",
+      });
+    }
+  });
+
+export const aiLearningIngestSchema = z
+  .object({
+    trigger: z.enum(["manual", "scheduled"]).optional(),
+  })
+  .strict();
+
+export const aiLearningRetrieveSchema = z
+  .object({
+    query: z.string().trim().min(1).max(5000),
+    sourceIds: z.array(z.string().uuid()).max(100).optional(),
+    topK: z.coerce.number().int().min(1).max(20).optional(),
+    candidateLimit: z.coerce.number().int().min(20).max(600).optional(),
+  })
+  .strict();
+
+export const aiLearningAnswerSchema = z
+  .object({
+    query: z.string().trim().min(1).max(5000),
+    sourceIds: z.array(z.string().uuid()).max(100).optional(),
+    topK: z.coerce.number().int().min(1).max(20).optional(),
+    candidateLimit: z.coerce.number().int().min(20).max(600).optional(),
+    provider: aiProviderOverrideSchema.optional(),
+  })
+  .strict();
+
+export const aiLearningAccessLogsQuerySchema = standardListQuerySchema
+  .extend({
+    operation: z.enum(["retrieve", "answer", "ingestion"]).optional(),
+    sourceId: z.string().uuid().optional(),
+    from: isoDateTimeSchema.optional(),
+    to: isoDateTimeSchema.optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
     if (!value.from || !value.to) {
       return;
     }
@@ -1381,6 +1882,42 @@ const workflowBuilderNodeMetadataSchema = z
   })
   .catchall(z.unknown());
 
+const workflowGraphNodeSchema = z
+  .object({
+    id: z.string().trim().min(1).max(160),
+    kind: z.enum(["trigger", "action", "delay", "branch", "result"]),
+    label: z.string().trim().min(1).max(200).optional(),
+    adapter: z.string().trim().min(1).max(120).optional(),
+    action: z.string().trim().min(1).max(160).optional(),
+    config: z.record(z.unknown()).optional(),
+    input: z.record(workflowMappedValueSchema).optional(),
+    condition: workflowConditionBlockSchema.optional(),
+    retryPolicy: workflowRetryPolicySchema.optional(),
+    onError: z.enum(["stop", "continue", "retry"]).optional(),
+    delayMs: z.number().int().min(0).max(86_400_000).optional(),
+    delaySeconds: z.number().int().min(0).max(86_400).optional(),
+    metadata: z.record(z.unknown()).optional(),
+  })
+  .strict();
+
+const workflowGraphEdgeSchema = z
+  .object({
+    id: z.string().trim().min(1).max(160),
+    source: z.string().trim().min(1).max(160),
+    target: z.string().trim().min(1).max(160),
+    branch: z.enum(["then", "else"]).optional(),
+    order: z.number().int().min(0).max(100_000).optional(),
+    metadata: z.record(z.unknown()).optional(),
+  })
+  .strict();
+
+export const workflowGraphSchema = z
+  .object({
+    nodes: z.array(workflowGraphNodeSchema).min(1).max(1_000),
+    edges: z.array(workflowGraphEdgeSchema).max(2_000),
+  })
+  .strict();
+
 const workflowBuilderMetadataSchema = z
   .object({
     source: z.enum(["builder", "template", "api", "import"]).optional(),
@@ -1388,6 +1925,7 @@ const workflowBuilderMetadataSchema = z
     inspectorVersion: z.string().trim().min(1).max(80).optional(),
     createdFromTemplateId: z.string().trim().min(1).max(120).optional(),
     nodeLayout: z.array(workflowBuilderNodeMetadataSchema).max(500).optional(),
+    graph: workflowGraphSchema.optional(),
   })
   .catchall(z.unknown());
 
@@ -1407,6 +1945,7 @@ export const workflowDefinitionSchema = z.object({
   steps: z.array(workflowStepSchema).min(1),
   enabled: z.boolean().default(true),
   metadata: workflowBuilderMetadataSchema.optional(),
+  graph: workflowGraphSchema.optional(),
 });
 
 export const createWorkflowSchema = z.object({
@@ -1414,6 +1953,137 @@ export const createWorkflowSchema = z.object({
   description: z.string().optional(),
   definition: workflowDefinitionSchema,
 });
+
+const workflowDefinitionPatchSchema = z
+  .object({
+    id: z.string().trim().min(1).max(160).optional(),
+    name: z.string().trim().min(1).max(200).optional(),
+    workspaceId: z.string().trim().min(1).optional(),
+    organizationId: z.string().trim().min(1).optional(),
+    trigger: z
+      .object({
+        adapter: z.string().trim().min(1).max(120),
+        trigger: z.string().trim().min(1).max(160),
+        config: z.record(z.unknown()).default({}),
+      })
+      .strict()
+      .optional(),
+    context: z.record(z.unknown()).optional(),
+    steps: z.array(workflowStepSchema).min(1).optional(),
+    enabled: z.boolean().optional(),
+    metadata: workflowBuilderMetadataSchema.optional(),
+    graph: workflowGraphSchema.optional(),
+  })
+  .strict();
+
+export const workflowEngineDefinitionCreateSchema = z
+  .object({
+    name: z.string().trim().min(1).max(200).optional(),
+    description: z.union([z.string().trim().max(2_000), z.null()]).optional(),
+    definition: workflowDefinitionPatchSchema.optional(),
+    graph: workflowGraphSchema.optional(),
+    trigger: workflowDefinitionPatchSchema.shape.trigger.optional(),
+    context: z.record(z.unknown()).optional(),
+    enabled: z.boolean().optional(),
+    metadata: z.record(z.unknown()).optional(),
+    status: z.enum(["active", "paused", "archived"]).optional(),
+    rotateWebhookSecret: z.boolean().optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (!value.definition && !value.graph) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["definition"],
+        message: "definition or graph is required.",
+      });
+    }
+    const definitionName = value.definition?.name;
+    if (!value.name && !definitionName) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["name"],
+        message: "name is required (or definition.name).",
+      });
+    }
+  });
+
+export const workflowEngineDefinitionUpdateSchema = z
+  .object({
+    name: z.string().trim().min(1).max(200).optional(),
+    description: z.union([z.string().trim().max(2_000), z.null()]).optional(),
+    definition: workflowDefinitionPatchSchema.optional(),
+    graph: workflowGraphSchema.optional(),
+    trigger: workflowDefinitionPatchSchema.shape.trigger.optional(),
+    context: z.record(z.unknown()).optional(),
+    enabled: z.boolean().optional(),
+    metadata: z.record(z.unknown()).optional(),
+    status: z.enum(["active", "paused", "archived"]).optional(),
+    rotateWebhookSecret: z.boolean().optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (
+      value.name === undefined &&
+      value.description === undefined &&
+      value.definition === undefined &&
+      value.graph === undefined &&
+      value.trigger === undefined &&
+      value.context === undefined &&
+      value.enabled === undefined &&
+      value.metadata === undefined &&
+      value.status === undefined &&
+      value.rotateWebhookSecret === undefined
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "At least one field must be provided.",
+      });
+    }
+  });
+
+export const workflowEngineDefinitionValidateSchema = z
+  .object({
+    name: z.string().trim().min(1).max(200).optional(),
+    definition: workflowDefinitionPatchSchema.optional(),
+    graph: workflowGraphSchema.optional(),
+    trigger: workflowDefinitionPatchSchema.shape.trigger.optional(),
+    context: z.record(z.unknown()).optional(),
+    enabled: z.boolean().optional(),
+    metadata: z.record(z.unknown()).optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (!value.definition && !value.graph) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["definition"],
+        message: "definition or graph is required.",
+      });
+    }
+  });
+
+export const workflowEngineDefinitionStatusSchema = z
+  .object({
+    status: z.enum(["active", "paused", "archived"]),
+  })
+  .strict();
+
+export const workflowEngineQueueRunSchema = z
+  .object({
+    payload: z.record(z.unknown()).optional(),
+    correlationId: z.string().trim().min(1).max(120).optional(),
+    idempotencyKey: z.string().trim().min(1).max(240).optional(),
+  })
+  .strict();
+
+export const workflowEngineWebhookTriggerSchema = z
+  .object({
+    payload: z.record(z.unknown()).default({}),
+    correlationId: z.string().trim().min(1).max(120).optional(),
+    idempotencyKey: z.string().trim().min(1).max(240).optional(),
+  })
+  .strict();
 
 export const workflowTestRunSchema = z
   .object({

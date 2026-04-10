@@ -30,6 +30,9 @@ Designed for >50,000 concurrent users by scaling stateless API and worker replic
 - retry scheduling and exhaustion rate
 - communication write/read throughput and message lag (if `communication` is enabled)
 - file storage item/list latency, share lookup latency, and blob metadata write throughput (if `file-storage` is enabled)
+- shared system module throughput: notification queue depth/read lag, activity write throughput, audit query latency, approval backlog (if `system-shared` is enabled)
+- AI provider latency/error rate and agent run throughput/fallback rate (if `ai-engine` is enabled)
+- AI learning ingestion lag, indexed chunk growth, and retrieval candidate scan latency (if `ai-engine` learning is enabled)
 - DB connection utilization
 - Redis connectivity and reconnection events
 

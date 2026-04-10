@@ -51,10 +51,16 @@ type ResolvedWorkspaceAlertConfig = {
   lastTestedAt: string | null;
 };
 
+type AlertConfigCacheEntry = {
+  value: ResolvedWorkspaceAlertConfig | null;
+  expiresAtMs: number;
+};
+
 const DEFAULT_COOLDOWN_SECONDS = 300;
 const DEFAULT_ALERT_MAX_ATTEMPTS = 5;
 const SIGNAL_EVALUATION_INTERVAL_MS = 60_000;
 const ALERT_PROCESSING_LEASE_MS = 60_000;
+const ALERT_CONFIG_CACHE_TTL_MS = 5_000;
 
 const SIGNAL_EVENT_TYPE_BY_KEY: Record<string, AlertEventType> = {
   failure_rate: "signal.failure_rate",
@@ -120,6 +126,10 @@ function clampCooldownSeconds(input: number): number {
   return Math.max(30, Math.min(Math.trunc(input), 86_400));
 }
 
+function clampCacheTtlMs(input: number): number {
+  return Math.max(500, Math.min(Math.trunc(input), 300_000));
+}
+
 function sanitizeEventTypes(input: string[]): string[] {
   const known = new Set(ALERT_EVENT_TYPES);
   const normalized = input
@@ -173,6 +183,7 @@ export class AlertDeliveryService {
   private readonly channels: AlertDeliveryChannel[];
   private readonly signalThresholds: AlertThresholds;
   private lastSignalEvaluationAt = 0;
+  private readonly configCache = new Map<string, AlertConfigCacheEntry>();
 
   constructor(
     private readonly repository: AlertRepository,
@@ -183,6 +194,7 @@ export class AlertDeliveryService {
       channels?: AlertDeliveryChannel[];
       thresholds?: AlertThresholds;
       signalEvaluationIntervalMs?: number;
+      configCacheTtlMs?: number;
     } = {},
   ) {
     this.channels =
@@ -195,9 +207,13 @@ export class AlertDeliveryService {
     this.signalThresholds = options.thresholds || getDefaultAlertThresholds();
     this.signalEvaluationIntervalMs =
       options.signalEvaluationIntervalMs || SIGNAL_EVALUATION_INTERVAL_MS;
+    this.configCacheTtlMs = clampCacheTtlMs(
+      options.configCacheTtlMs || ALERT_CONFIG_CACHE_TTL_MS,
+    );
   }
 
   private readonly signalEvaluationIntervalMs: number;
+  private readonly configCacheTtlMs: number;
 
   async getConfig(scope: AlertScope): Promise<AlertConfigPublicView> {
     const resolved = await this.resolveWorkspaceConfig(scope);
@@ -273,6 +289,7 @@ export class AlertDeliveryService {
       ),
       actorUserId: input.actorUserId,
     });
+    this.configCache.delete(this.scopeCacheKey(input.scope));
 
     const updated = await this.resolveWorkspaceConfig(input.scope);
     return updated ? this.toPublicConfigView(updated) : buildDefaultConfigView();
@@ -790,12 +807,26 @@ export class AlertDeliveryService {
   private async resolveWorkspaceConfig(
     scope: AlertScope,
   ): Promise<ResolvedWorkspaceAlertConfig | null> {
+    const cacheKey = this.scopeCacheKey(scope);
+    const nowMs = Date.now();
+    const cached = this.configCache.get(cacheKey);
+    if (cached && cached.expiresAtMs > nowMs) {
+      return cached.value;
+    }
+    if (cached) {
+      this.configCache.delete(cacheKey);
+    }
+
     const record = await this.repository.getConfigScoped({
       tenantId: scope.tenantId,
       organizationId: scope.organizationId,
       workspaceId: scope.workspaceId,
     });
     if (!record) {
+      this.configCache.set(cacheKey, {
+        value: null,
+        expiresAtMs: nowMs + this.configCacheTtlMs,
+      });
       return null;
     }
 
@@ -813,7 +844,7 @@ export class AlertDeliveryService {
       ? channelsJson.webhook
       : {};
 
-    return {
+    const resolved: ResolvedWorkspaceAlertConfig = {
       scope,
       enabled: Boolean(record.enabled),
       eventTypes: sanitizeEventTypes(record.event_types || []),
@@ -846,6 +877,11 @@ export class AlertDeliveryService {
       lastDeliveryAt: record.last_delivery_at || null,
       lastTestedAt: record.last_tested_at || null,
     };
+    this.configCache.set(cacheKey, {
+      value: resolved,
+      expiresAtMs: nowMs + this.configCacheTtlMs,
+    });
+    return resolved;
   }
 
   private toPublicConfigView(config: ResolvedWorkspaceAlertConfig): AlertConfigPublicView {
@@ -888,6 +924,10 @@ export class AlertDeliveryService {
       channels: config.channels,
       destinationSecrets: config.destinationSecrets,
     };
+  }
+
+  private scopeCacheKey(scope: AlertScope): string {
+    return `${scope.tenantId}:${scope.organizationId}:${scope.workspaceId}`;
   }
 
   private normalizeDeliveryError(error: unknown): {

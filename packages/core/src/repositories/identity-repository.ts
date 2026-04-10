@@ -29,10 +29,15 @@ export type AuthSessionRecord = {
 type OtpCodeRow = {
   id: string;
   user_id: string | null;
+  workspace_id: string | null;
   code_hash: string;
   failed_attempts: number;
   max_attempts: number;
   expires_at: string;
+};
+
+type Queryable = {
+  query: Pool["query"];
 };
 
 export type InviteTokenRecord = {
@@ -271,6 +276,7 @@ export class IdentityRepository {
         `SELECT
            id::text,
            user_id::text,
+           workspace_id::text,
            code_hash,
            failed_attempts,
            max_attempts,
@@ -305,6 +311,25 @@ export class IdentityRepository {
            WHERE id = $1::uuid`,
           [row.id, nextAttempts, exhausted],
         );
+        await this.appendAuditLog(
+          {
+            tenantId: input.tenantId,
+            organizationId: input.organizationId,
+            workspaceId: row.workspace_id || undefined,
+            actorUserId: row.user_id || undefined,
+            action: "identity.token.used",
+            entityType: "otp_code",
+            entityId: row.id,
+            metadata: {
+              tokenType: "otp",
+              purpose: input.purpose,
+              outcome: exhausted ? "expired" : "rejected",
+              failedAttempts: nextAttempts,
+              maxAttempts: row.max_attempts,
+            },
+          },
+          client,
+        );
         await client.query("COMMIT");
         return {
           valid: false,
@@ -326,6 +351,23 @@ export class IdentityRepository {
         return { valid: false };
       }
 
+      await this.appendAuditLog(
+        {
+          tenantId: input.tenantId,
+          organizationId: input.organizationId,
+          workspaceId: row.workspace_id || undefined,
+          actorUserId: row.user_id || undefined,
+          action: "identity.token.used",
+          entityType: "otp_code",
+          entityId: row.id,
+          metadata: {
+            tokenType: "otp",
+            purpose: input.purpose,
+            outcome: "consumed",
+          },
+        },
+        client,
+      );
       await client.query("COMMIT");
       return {
         valid: true,
@@ -422,6 +464,23 @@ export class IdentityRepository {
         return null;
       }
       if (token.consumed_at || Date.parse(token.expires_at) <= Date.now()) {
+        await this.appendAuditLog(
+          {
+            tenantId: token.tenant_id,
+            organizationId: token.organization_id,
+            workspaceId: token.workspace_id || undefined,
+            actorUserId: token.user_id,
+            action: "identity.token.used",
+            entityType: "verification_token",
+            entityId: token.id,
+            metadata: {
+              tokenType: "verification",
+              outcome:
+                Date.parse(token.expires_at) <= Date.now() ? "expired" : "rejected",
+            },
+          },
+          client,
+        );
         await client.query("COMMIT");
         return null;
       }
@@ -432,6 +491,23 @@ export class IdentityRepository {
              updated_at = NOW()
          WHERE id = $1::uuid`,
         [token.id],
+      );
+      await this.appendAuditLog(
+        {
+          tenantId: token.tenant_id,
+          organizationId: token.organization_id,
+          workspaceId: token.workspace_id || undefined,
+          actorUserId: token.user_id,
+          action: "identity.token.used",
+          entityType: "verification_token",
+          entityId: token.id,
+          metadata: {
+            tokenType: "verification",
+            outcome: "consumed",
+            email: token.email,
+          },
+        },
+        client,
       );
       await client.query("COMMIT");
       return {
@@ -532,6 +608,23 @@ export class IdentityRepository {
         return null;
       }
       if (token.consumed_at || Date.parse(token.expires_at) <= Date.now()) {
+        await this.appendAuditLog(
+          {
+            tenantId: token.tenant_id,
+            organizationId: token.organization_id,
+            workspaceId: token.workspace_id || undefined,
+            actorUserId: token.user_id,
+            action: "identity.token.used",
+            entityType: "password_reset_token",
+            entityId: token.id,
+            metadata: {
+              tokenType: "password_reset",
+              outcome:
+                Date.parse(token.expires_at) <= Date.now() ? "expired" : "rejected",
+            },
+          },
+          client,
+        );
         await client.query("COMMIT");
         return null;
       }
@@ -542,6 +635,23 @@ export class IdentityRepository {
              updated_at = NOW()
          WHERE id = $1::uuid`,
         [token.id],
+      );
+      await this.appendAuditLog(
+        {
+          tenantId: token.tenant_id,
+          organizationId: token.organization_id,
+          workspaceId: token.workspace_id || undefined,
+          actorUserId: token.user_id,
+          action: "identity.token.used",
+          entityType: "password_reset_token",
+          entityId: token.id,
+          metadata: {
+            tokenType: "password_reset",
+            outcome: "consumed",
+            email: token.email,
+          },
+        },
+        client,
       );
       await client.query("COMMIT");
       return {
@@ -668,6 +778,23 @@ export class IdentityRepository {
             [invite.id],
           );
         }
+        await this.appendAuditLog(
+          {
+            tenantId: invite.tenant_id,
+            organizationId: invite.organization_id,
+            workspaceId: invite.workspace_id || undefined,
+            actorUserId: input.acceptedByUserId,
+            action: "identity.token.used",
+            entityType: "invite_token",
+            entityId: invite.id,
+            metadata: {
+              tokenType: "invite",
+              outcome: expired ? "expired" : "rejected",
+              email: invite.email,
+            },
+          },
+          client,
+        );
         await client.query("COMMIT");
         return null;
       }
@@ -695,6 +822,23 @@ export class IdentityRepository {
         [invite.id, input.acceptedByUserId],
       );
 
+      await this.appendAuditLog(
+        {
+          tenantId: invite.tenant_id,
+          organizationId: invite.organization_id,
+          workspaceId: invite.workspace_id || undefined,
+          actorUserId: input.acceptedByUserId,
+          action: "identity.token.used",
+          entityType: "invite_token",
+          entityId: invite.id,
+          metadata: {
+            tokenType: "invite",
+            outcome: "consumed",
+            email: invite.email,
+          },
+        },
+        client,
+      );
       await client.query("COMMIT");
       return consumed.rows[0] || null;
     } catch (error) {
@@ -1012,6 +1156,40 @@ export class IdentityRepository {
            updated_at = NOW()
        WHERE id = $1::uuid`,
       [input.userId],
+    );
+  }
+
+  private async appendAuditLog(input: {
+    tenantId: string;
+    organizationId?: string;
+    workspaceId?: string;
+    actorUserId?: string;
+    action: string;
+    entityType?: string;
+    entityId?: string;
+    metadata?: Record<string, unknown>;
+  }, queryable: Queryable = this.pool): Promise<void> {
+    await queryable.query(
+      `INSERT INTO audit_logs (
+         tenant_id,
+         organization_id,
+         workspace_id,
+         actor_user_id,
+         action,
+         entity_type,
+         entity_id,
+         metadata_json
+       ) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6, $7::uuid, $8::jsonb)`,
+      [
+        input.tenantId,
+        input.organizationId || null,
+        input.workspaceId || null,
+        input.actorUserId || null,
+        input.action,
+        input.entityType || null,
+        input.entityId || null,
+        JSON.stringify(input.metadata || {}),
+      ],
     );
   }
 }

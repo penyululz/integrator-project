@@ -125,9 +125,9 @@ Lifecycle writes append audit actions such as:
 
 Hook failures are isolated and logged so booking writes remain successful.
 
-## API Integration Layer
+## API Server Layer
 
-`apps/api/src/routes/index.ts` exposes integration routes:
+`apps/api/src/routes/index.ts` exposes server-layer routes:
 
 - `GET /facilities`
 - `POST /facilities`
@@ -161,4 +161,3 @@ When an AI agent extends this module:
 - preserve idempotency handling
 - add new channels by hook implementation, not by embedding transport logic in service
 - add policy rules in service layer, not in API controllers
-

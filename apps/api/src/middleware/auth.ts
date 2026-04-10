@@ -5,8 +5,7 @@ import type {
   SessionScope,
   SessionUser,
 } from "@integration/core";
-import { PLATFORM_MODES, type PlatformMode } from "@integration/shared";
-import { getPrototypeAuthContext } from "../routes/prototype-mode";
+import type { PlatformMode } from "@integration/shared";
 
 // API: Fastify + Zod
 // SHARED BETWEEN PROTOTYPE AND LIVE
@@ -85,12 +84,12 @@ export function withAuth(runtime: CoreRuntime) {
 }
 
 type AuthMiddlewareOptions = {
-  // MODE: Prototype Mode | Live Mode
+  // MODE: Live Mode
   platformMode?: PlatformMode;
 };
 
 export function withAuthMode(runtime: CoreRuntime, options: AuthMiddlewareOptions = {}) {
-  const isPrototypeMode = options.platformMode === PLATFORM_MODES.PROTOTYPE;
+  void options;
 
   return async function attachAuth(
     req: Request,
@@ -99,16 +98,6 @@ export function withAuthMode(runtime: CoreRuntime, options: AuthMiddlewareOption
   ): Promise<void> {
     try {
       const token = extractBearerToken(req);
-      if (isPrototypeMode) {
-        // PROTOTYPE MODE ONLY
-        // LIVE ROUTE SHAPE PRESERVED
-        // USED FOR LOCAL DEMO / UI ITERATION
-        req.auth = getPrototypeAuthContext(token || "prototype-api-token");
-        next();
-        return;
-      }
-
-      // LIVE MODE ONLY
       if (!token) {
         next();
         return;

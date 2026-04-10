@@ -217,6 +217,11 @@ export class PlatformMetrics {
     "Total queue jobs processed.",
     ["queue"],
   );
+  readonly queueJobsDedupedTotal = this.counter(
+    "queue_jobs_deduped_total",
+    "Total queue jobs deduplicated by idempotency key.",
+    ["queue"],
+  );
   readonly queueJobsFailedTotal = this.counter(
     "queue_jobs_failed_total",
     "Total queue jobs failed to process.",
@@ -287,6 +292,26 @@ export class PlatformMetrics {
     "Total failed retention cleanup domain runs.",
     ["domain"],
   );
+  readonly apiRequestsTotal = this.counter(
+    "api_requests_total",
+    "Total API requests observed.",
+    ["method", "route", "status_code"],
+  );
+  readonly apiRateLimitExceededTotal = this.counter(
+    "api_rate_limit_exceeded_total",
+    "Total API requests rejected by rate limiting.",
+    ["scope"],
+  );
+  readonly healthChecksTotal = this.counter(
+    "health_checks_total",
+    "Total health checks served by check type and status.",
+    ["type", "status"],
+  );
+  readonly cacheOperationsTotal = this.counter(
+    "cache_operations_total",
+    "Total cache operations by cache name and result.",
+    ["cache", "operation", "result"],
+  );
 
   readonly workflowRunDurationSeconds = this.histogram(
     "workflow_run_duration_seconds",
@@ -329,6 +354,12 @@ export class PlatformMetrics {
     "Retention cleanup domain duration in seconds.",
     ["domain", "status"],
     [0.001, 0.01, 0.05, 0.1, 0.3, 0.5, 1, 3, 5, 10, 30, 60],
+  );
+  readonly apiRequestDurationSeconds = this.histogram(
+    "api_request_duration_seconds",
+    "API request duration in seconds.",
+    ["method", "route", "status_class"],
+    [0.001, 0.005, 0.01, 0.05, 0.1, 0.3, 0.5, 1, 2, 5, 10, 30],
   );
 
   get contentType(): string {

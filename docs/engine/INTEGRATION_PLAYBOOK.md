@@ -50,13 +50,14 @@ Use runtime module controls when the target does not need all features:
 createCoreRuntime({
   role: "api",
   modules: {
-    include: ["runtime-foundation", "workflow-orchestration", "identity-auth"],
+    include: ["runtime-foundation", "workflow-orchestration", "identity-auth", "system-shared"],
     exclude: [
       "alerts",
       "retention",
       "facility-booking",
       "maintenance-system",
       "calendar-aggregation",
+      "ai-engine",
       "communication",
       "file-storage",
       "collaboration",
@@ -67,8 +68,8 @@ createCoreRuntime({
 
 Or via environment:
 
-- `ENGINE_MODULES=runtime-foundation,workflow-orchestration,identity-auth`
-- `ENGINE_DISABLE_MODULES=alerts,retention,facility-booking,maintenance-system,calendar-aggregation,communication,file-storage,collaboration`
+- `ENGINE_MODULES=runtime-foundation,workflow-orchestration,identity-auth,system-shared`
+- `ENGINE_DISABLE_MODULES=alerts,retention,facility-booking,maintenance-system,calendar-aggregation,ai-engine,communication,file-storage,collaboration,system-shared`
 
 ## Infrastructure Requirements
 

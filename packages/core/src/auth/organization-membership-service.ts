@@ -525,6 +525,22 @@ export class OrganizationMembershipService {
           organizationId: organization.id,
           workspaceId: workspace.id,
           actorUserId: user.id,
+          action: "org.role.changed",
+          entityType: "organization_membership",
+          entityId: membership.id,
+          metadata: {
+            role: "owner",
+            source: "organization_create",
+          },
+        },
+        tx,
+      );
+      await this.organizationRepository.appendAuditLog(
+        {
+          tenantId: organization.tenant_id,
+          organizationId: organization.id,
+          workspaceId: workspace.id,
+          actorUserId: user.id,
           action: "org.invite_token.created",
           entityType: "invite_token",
           entityId: token.id,
@@ -938,13 +954,49 @@ export class OrganizationMembershipService {
         },
         tx,
       );
+      await this.organizationRepository.appendAuditLog(
+        {
+          tenantId: organization.tenant_id,
+          organizationId: organization.id,
+          workspaceId: workspace.id,
+          actorUserId: identity.user.id,
+          action: "org.role.changed",
+          entityType: "organization_membership",
+          entityId: membershipRecord.id,
+          metadata: {
+            role: assignmentRole,
+            team: assignmentTeam,
+            department: assignmentDepartment,
+            source: "join_assignment",
+          },
+        },
+        tx,
+      );
     });
 
     if (tokenEligible && inviteTokenRaw) {
-      await this.organizationRepository.consumeInviteToken({
+      const consumed = await this.organizationRepository.consumeInviteToken({
         tokenHash: hashToken(inviteTokenRaw),
         acceptedByUserId: identity.user.id,
       });
+      if (consumed) {
+        await this.organizationRepository.appendAuditLog({
+          tenantId: organization.tenant_id,
+          organizationId: organization.id,
+          workspaceId: workspace.id,
+          actorUserId: identity.user.id,
+          action: "identity.token.used",
+          entityType: "invite_token",
+          entityId: consumed.id,
+          metadata: {
+            tokenType: consumed.token_type,
+            outcome: "consumed",
+            status: consumed.status,
+            usageCount: consumed.usage_count,
+            usageLimit: consumed.usage_limit,
+          },
+        });
+      }
     }
 
     await this.sendEmailSafely({
@@ -1267,6 +1319,21 @@ export class OrganizationMembershipService {
         workspaceId: workspace.id,
         actorUserId: input.actorUserId,
         action: "org.membership.created",
+        entityType: "organization_membership",
+        entityId: identity.user.id,
+        metadata: {
+          source: "join_request_approved",
+          role: decided.assigned_role || "member",
+          team: decided.assigned_team,
+          department: decided.assigned_department,
+        },
+      });
+      await this.organizationRepository.appendAuditLog({
+        tenantId: input.tenantId,
+        organizationId: input.organizationId,
+        workspaceId: workspace.id,
+        actorUserId: input.actorUserId,
+        action: "org.role.changed",
         entityType: "organization_membership",
         entityId: identity.user.id,
         metadata: {

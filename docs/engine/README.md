@@ -9,12 +9,15 @@ Use this directory as the canonical backend-engine guide.
 - [Scaling and Operations](./SCALING_AND_OPERATIONS.md)
 - [Portability Checklist](./PORTABILITY_CHECKLIST.md)
 - [Identity and Auth](./IDENTITY_AUTH.md)
+- [Workflow Engine](./WORKFLOW_ENGINE.md)
 - [Onboarding and Membership Model](./ONBOARDING_MEMBERSHIP_MODEL.md)
 - [Facility and Booking Engine](./FACILITY_BOOKING_ENGINE.md)
 - [Maintenance System Engine](./MAINTENANCE_SYSTEM_ENGINE.md)
 - [Calendar Aggregation Engine](./CALENDAR_AGGREGATION_ENGINE.md)
+- [AI Engine](./AI_ENGINE.md)
 - [Communication Engine](./COMMUNICATION_ENGINE.md)
 - [File Storage Engine](./FILE_STORAGE_ENGINE.md)
+- [Shared System Modules](./SHARED_SYSTEM_MODULES.md)
 
 If you are integrating this engine into a new repository, start with:
 

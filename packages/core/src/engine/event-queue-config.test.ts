@@ -9,6 +9,7 @@ describe("event-queue bootstrap config", () => {
       queueKey: "integration:events",
       queueDriver: "bullmq",
       redisUrl: undefined,
+      dedupeTtlMs: 300000,
       bullmqPrefix: "integrator",
       bullmqWorkerConcurrency: 1,
       bullmqRemoveOnCompleteCount: 1000,
@@ -33,6 +34,7 @@ describe("event-queue bootstrap config", () => {
     const config = resolveEventQueueBootstrapConfig({
       REDIS_URL: "redis://localhost:6379",
       INTEGRATOR_EVENT_QUEUE_KEY: "integration:events:v2",
+      INTEGRATOR_QUEUE_DEDUPE_TTL_MS: "120000",
       INTEGRATOR_BULLMQ_PREFIX: "integrator-runtime",
       INTEGRATOR_BULLMQ_WORKER_CONCURRENCY: "4",
       INTEGRATOR_BULLMQ_REMOVE_ON_COMPLETE_COUNT: "250",
@@ -41,6 +43,7 @@ describe("event-queue bootstrap config", () => {
     });
 
     expect(config.queueKey).toBe("integration:events:v2");
+    expect(config.dedupeTtlMs).toBe(120000);
     expect(config.bullmqPrefix).toBe("integrator-runtime");
     expect(config.bullmqWorkerConcurrency).toBe(4);
     expect(config.bullmqRemoveOnCompleteCount).toBe(250);

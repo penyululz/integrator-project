@@ -8,16 +8,14 @@ It is intentionally frontend-free and optimized for server-side reuse in other p
 
 - `packages/core`: engine core + module registration + runtime composition
 - `packages/shared`: shared contracts and schemas
-- `apps/api`: integration-layer host for API + worker entrypoints
+- `apps/api`: server-layer host for API + worker entrypoints
 - `packages/adapters/*`: manifest-driven connectors
 
-## Portability Layers
+## Runtime Layers
 
-- engine core: `packages/core/src/*`
-- shared foundations: `packages/shared/src/*`
-- integration layer: `apps/api/src/*`
-- project-specific adapters: `packages/adapters/*`
-- optional modules: identity-auth, alerts, retention, facility-booking, maintenance-system, calendar-aggregation, communication, file-storage, collaboration
+- engine: orchestration + AI execution kernels in `packages/core/src/*`
+- backend: domain modules and repositories in `packages/core/src/*`
+- server: API/worker host runtime in `apps/api/src/*`
 
 ## Engine Characteristics
 
@@ -63,6 +61,8 @@ npm run dev:local
 - [Portable Engine Guide](./docs/engine/PORTABLE_ENGINE_GUIDE.md)
 - [Scaling and Operations](./docs/engine/SCALING_AND_OPERATIONS.md)
 - [Portability Checklist](./docs/engine/PORTABILITY_CHECKLIST.md)
+- [Workflow Engine](./docs/engine/WORKFLOW_ENGINE.md)
+- [AI Engine](./docs/engine/AI_ENGINE.md)
 - [API Readme](./apps/api/README.md)
 - [Core Readme](./packages/core/README.md)
 - [Adapters Readme](./packages/adapters/README.md)

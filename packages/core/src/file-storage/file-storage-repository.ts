@@ -13,6 +13,7 @@ import {
   type SqlColumnMap,
 } from "../repositories/list-query";
 import { FileStorageError } from "./errors";
+import { applyBlobProtectionPolicy } from "./blob-protection-policy";
 import type {
   FileStorageActivityAction,
   FileStorageActivityListResult,
@@ -352,6 +353,12 @@ function normalizeBlobInput(
   }
   const storageKey = toRequiredNonEmptyString(blob.storageKey, "blob.storageKey");
   const sizeBytes = Math.max(0, Math.floor(blob.sizeBytes || 0));
+  const protection = applyBlobProtectionPolicy({
+    contentType: toNullableString(blob.contentType),
+    sizeBytes,
+    encryption: toNullableString(blob.encryption),
+    metadata: toObject(blob.metadata),
+  });
   return {
     storageProvider: toNullableString(blob.storageProvider) || "internal",
     storageBucket: toNullableString(blob.storageBucket) || "default",
@@ -359,8 +366,8 @@ function normalizeBlobInput(
     contentType: toNullableString(blob.contentType),
     checksumSha256: toNullableString(blob.checksumSha256),
     sizeBytes,
-    encryption: toNullableString(blob.encryption),
-    metadata: toObject(blob.metadata),
+    encryption: protection.encryption,
+    metadata: protection.metadata,
   };
 }
 

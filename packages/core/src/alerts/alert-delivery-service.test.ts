@@ -423,6 +423,20 @@ async function configureService(
   });
 }
 
+async function waitForDispatch(
+  service: AlertDeliveryService,
+  timeoutMs = 3_000,
+): Promise<boolean> {
+  const deadline = Date.now() + Math.max(250, timeoutMs);
+  while (Date.now() < deadline) {
+    if (await service.processNextDispatch()) {
+      return true;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  return false;
+}
+
 describe("AlertDeliveryService", () => {
   it("dedupes alerts inside cooldown window", async () => {
     const { service, scope } = createService(new RecordingChannel());
@@ -482,8 +496,7 @@ describe("AlertDeliveryService", () => {
       }),
     );
 
-    await new Promise((resolve) => setTimeout(resolve, 1100));
-    expect(await service.processNextDispatch()).toBe(true);
+    expect(await waitForDispatch(service)).toBe(true);
     expect(repository.getLatestDispatch()).toEqual(
       expect.objectContaining({
         status: "sent",

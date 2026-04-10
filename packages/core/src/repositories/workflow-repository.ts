@@ -1,4 +1,4 @@
-import { Pool } from "pg";
+import { Pool, type PoolClient } from "pg";
 import type {
   StandardListResult,
   WorkflowDefinition,
@@ -95,6 +95,40 @@ function flattenPersistableSteps(
 
 export class WorkflowRepository {
   constructor(private readonly pool: Pool) {}
+
+  private async replaceWorkflowSteps(input: {
+    client: PoolClient;
+    tenantId: string;
+    organizationId: string;
+    workspaceId: string;
+    workflowId: string;
+    definition: WorkflowDefinition;
+  }): Promise<void> {
+    await input.client.query(
+      `DELETE FROM workflow_steps
+       WHERE workflow_id = $1`,
+      [input.workflowId],
+    );
+
+    const persistableSteps = flattenPersistableSteps(input.definition.steps);
+    for (const [index, step] of persistableSteps.entries()) {
+      await input.client.query(
+        `INSERT INTO workflow_steps (
+          tenant_id, organization_id, workspace_id, workflow_id, step_order, adapter_key, action_key, config_json
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        [
+          input.tenantId,
+          input.organizationId,
+          input.workspaceId,
+          input.workflowId,
+          index,
+          step.adapterKey,
+          step.actionKey,
+          JSON.stringify(step.config),
+        ],
+      );
+    }
+  }
 
   async list(input: {
     tenantId: string;
@@ -225,14 +259,15 @@ export class WorkflowRepository {
     description?: string;
     definition: WorkflowDefinition;
     createdBy?: string;
+    status?: string;
   }): Promise<WorkflowRecord> {
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
       const workflow = await client.query<WorkflowRecord>(
         `INSERT INTO workflows (
-          tenant_id, organization_id, workspace_id, name, description, definition_json, created_by
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+          tenant_id, organization_id, workspace_id, name, description, definition_json, status, created_by
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         RETURNING *`,
         [
           input.tenantId,
@@ -241,6 +276,7 @@ export class WorkflowRepository {
           input.name,
           input.description || null,
           JSON.stringify(input.definition),
+          input.status || "active",
           input.createdBy || null,
         ],
       );
@@ -321,6 +357,121 @@ export class WorkflowRepository {
         input.tenantId,
         input.organizationId,
         input.workspaceId,
+      ],
+    );
+    return result.rows[0] || null;
+  }
+
+  async findById(input: { workflowId: string }): Promise<WorkflowRecord | null> {
+    const result = await this.pool.query<WorkflowRecord>(
+      `SELECT *
+       FROM workflows
+       WHERE id = $1
+       LIMIT 1`,
+      [input.workflowId],
+    );
+    return result.rows[0] || null;
+  }
+
+  async updateDefinitionScoped(input: {
+    workflowId: string;
+    tenantId: string;
+    organizationId: string;
+    workspaceId: string;
+    name: string;
+    description?: string | null;
+    definition: WorkflowDefinition;
+    status?: string;
+  }): Promise<WorkflowRecord | null> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const existing = await client.query<WorkflowRecord>(
+        `SELECT *
+         FROM workflows
+         WHERE id = $1
+           AND tenant_id = $2
+           AND organization_id = $3
+           AND workspace_id = $4
+         LIMIT 1
+         FOR UPDATE`,
+        [
+          input.workflowId,
+          input.tenantId,
+          input.organizationId,
+          input.workspaceId,
+        ],
+      );
+      if (!existing.rows[0]) {
+        await client.query("ROLLBACK");
+        return null;
+      }
+
+      const updated = await client.query<WorkflowRecord>(
+        `UPDATE workflows
+         SET name = $5,
+             description = $6,
+             definition_json = $7,
+             status = COALESCE($8, status),
+             updated_at = NOW()
+         WHERE id = $1
+           AND tenant_id = $2
+           AND organization_id = $3
+           AND workspace_id = $4
+         RETURNING *`,
+        [
+          input.workflowId,
+          input.tenantId,
+          input.organizationId,
+          input.workspaceId,
+          input.name,
+          input.description || null,
+          JSON.stringify(input.definition),
+          input.status || null,
+        ],
+      );
+
+      await this.replaceWorkflowSteps({
+        client,
+        tenantId: input.tenantId,
+        organizationId: input.organizationId,
+        workspaceId: input.workspaceId,
+        workflowId: input.workflowId,
+        definition: input.definition,
+      });
+
+      await client.query("COMMIT");
+      return updated.rows[0] || null;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async updateStatusScoped(input: {
+    workflowId: string;
+    tenantId: string;
+    organizationId: string;
+    workspaceId: string;
+    status: string;
+  }): Promise<WorkflowRecord | null> {
+    const result = await this.pool.query<WorkflowRecord>(
+      `UPDATE workflows
+       SET status = $5,
+           updated_at = NOW()
+       WHERE id = $1
+         AND tenant_id = $2
+         AND organization_id = $3
+         AND workspace_id = $4
+       RETURNING *`,
+      [
+        input.workflowId,
+        input.tenantId,
+        input.organizationId,
+        input.workspaceId,
+        input.status,
       ],
     );
     return result.rows[0] || null;

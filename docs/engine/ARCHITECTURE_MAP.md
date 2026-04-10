@@ -9,13 +9,13 @@
 5. Adapters (`packages/adapters/*`)
 6. Data Stores (Postgres + Redis)
 
-## Portability Layers
+## Runtime Layers
 
-- Engine core: `packages/core/src/*`
-- Shared foundations: `packages/shared/src/*`
-- Integration layer: `apps/api/src/*`
+- Engine: orchestration + AI kernels in `packages/core/src/*`
+- Backend: domain modules and repositories in `packages/core/src/*`
+- Server: API/worker host runtime in `apps/api/src/*`
+- Shared contracts: `packages/shared/src/*`
 - Project adapters: `packages/adapters/*`
-- Optional modules: identity-auth, alerts, retention, facility-booking, maintenance-system, calendar-aggregation, communication, file-storage, collaboration
 
 ## Runtime Wiring
 
@@ -25,6 +25,8 @@
 - plugin loader + adapters
 - queue transport
 - workflow engine
+- workflow definition service
+- workflow execution service
 - auth services
 - observability runtime
 - optional alert and retention services
@@ -57,7 +59,7 @@ Module registration options:
    - event queued to Redis/BullMQ
 2. Execution:
    - worker consumes event
-   - workflow engine resolves workflow and executes steps
+   - workflow execution layer resolves workflow and executes steps through the orchestrator
 3. Resilience:
    - retry job creation for retryable failures
    - durable waits for long delays

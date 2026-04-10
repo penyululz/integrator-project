@@ -83,7 +83,7 @@ Allowed transitions:
 
 Invalid transitions return `409` with `invalid_transition`.
 
-## API Surfaces (Integration Layer)
+## API Surfaces (Server Layer)
 
 Implemented in `apps/api/src/routes/index.ts`:
 

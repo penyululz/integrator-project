@@ -2,38 +2,48 @@
 
 Use this guide when transplanting this backend into another repository.
 
-## Layered Structure
+## Runtime Layer Structure
 
-The repository is intentionally split into portability layers:
+The repository is intentionally split into three runtime layers:
 
-1. Engine core
+1. Engine layer
    - `packages/core/src/engine`
    - `packages/core/src/workflow`
-   - `packages/core/src/db`
+   - `packages/core/src/workflow-engine`
+   - `packages/core/src/ai-engine`
+
+2. Backend layer
+   - `packages/core/src/auth`
+   - `packages/core/src/system`
+   - `packages/core/src/alerts`
+   - `packages/core/src/retention`
+   - `packages/core/src/facility`
+   - `packages/core/src/maintenance`
+   - `packages/core/src/calendar`
+   - `packages/core/src/communication`
+   - `packages/core/src/file-storage`
+   - `packages/core/src/collaboration`
    - `packages/core/src/repositories`
+   - `packages/shared/src/*` (shared contracts/schemas/utils)
+   - `packages/adapters/*` (provider integrations consumed by backend services)
+
+3. Server layer
+   - `packages/core/src/runtime`
+   - `packages/core/src/db`
    - `packages/core/src/observability`
    - `packages/core/src/security`
-   - `packages/core/src/runtime`
-
-2. Shared foundations
-   - `packages/shared/src/*`
-   - contract types, mode resolution, shared sanitizers/utilities
-
-3. Integration layer (host runtime)
    - `apps/api/src/*`
-   - HTTP process bootstrap, middleware, route mounting, worker bootstrap
+   - API bootstrap, middleware, route mounting, worker bootstrap
 
-4. Project-specific adapters
-   - `packages/adapters/*`
-   - adapter manifests + implementation details for external providers
-
-5. Optional modules (can be disabled)
+Optional modules (can be disabled):
    - `identity-auth`
+   - `system-shared`
    - `alerts`
    - `retention`
    - `facility-booking`
    - `maintenance-system`
    - `calendar-aggregation`
+   - `ai-engine`
    - `communication`
    - `file-storage`
    - `collaboration`
@@ -69,6 +79,7 @@ const runtime = await createCoreRuntime({
       "runtime-foundation",
       "workflow-orchestration",
       "identity-auth",
+      "system-shared",
     ],
     exclude: [
       "alerts",
@@ -76,6 +87,7 @@ const runtime = await createCoreRuntime({
       "facility-booking",
       "maintenance-system",
       "calendar-aggregation",
+      "ai-engine",
       "communication",
       "file-storage",
       "collaboration",
@@ -86,8 +98,8 @@ const runtime = await createCoreRuntime({
 
 Environment-based module selection is also supported:
 
-- `ENGINE_MODULES=runtime-foundation,workflow-orchestration,identity-auth`
-- `ENGINE_DISABLE_MODULES=alerts,retention,facility-booking,maintenance-system,calendar-aggregation,communication,file-storage,collaboration`
+- `ENGINE_MODULES=runtime-foundation,workflow-orchestration,identity-auth,system-shared`
+- `ENGINE_DISABLE_MODULES=alerts,retention,facility-booking,maintenance-system,calendar-aggregation,ai-engine,communication,file-storage,collaboration,system-shared`
 
 ## Disable Unused Modules
 
@@ -99,7 +111,7 @@ You can disable modules in two ways:
 When disabled:
 
 - services and repositories for that module are not instantiated
-- routes depending on that module should be omitted in the host integration layer
+- routes depending on that module should be omitted in the host server layer
 
 ## Adapt Naming and Routes
 
@@ -138,8 +150,10 @@ When an AI agent adapts this engine for a target project:
    - `facility-booking` if facility reservations are not needed
    - `maintenance-system` if ticketing is handled externally
    - `calendar-aggregation` if no central event-layer feed is needed
+   - `ai-engine` if the target uses a separate inference/orchestration stack
    - `communication` if chat/session/summarization backend surfaces are not needed
    - `file-storage` if file/folder/sharing storage surfaces are not needed
+   - `system-shared` if host already has a separate notifications/activity/audit/approval foundation
    - `collaboration` if no docs/files surfaces are required
 
 4. Do not move business logic into controllers
