@@ -16,6 +16,8 @@ export type CoreEnv = {
   JWT_EXPIRES_IN: string;
 };
 
+export type CoreEnvInput = Record<string, string | undefined>;
+
 let loaded = false;
 
 function findEnvFile(startDir: string): string | null {
@@ -55,13 +57,10 @@ function loadDotEnv(): void {
   dotenv.config();
 }
 
-export function getCoreEnv(): CoreEnv {
-  loadDotEnv();
-  const DATABASE_URL = process.env.DATABASE_URL || "";
-  const REDIS_URL = process.env.REDIS_URL || "";
-  const modeResolution = resolvePlatformModeFromEnv(
-    process.env as Record<string, string | undefined>,
-  );
+export function resolveCoreEnv(env: CoreEnvInput): CoreEnv {
+  const DATABASE_URL = env.DATABASE_URL || "";
+  const REDIS_URL = env.REDIS_URL || "";
+  const modeResolution = resolvePlatformModeFromEnv(env);
 
   if (!DATABASE_URL) {
     throw new Error("DATABASE_URL is required.");
@@ -74,11 +73,11 @@ export function getCoreEnv(): CoreEnv {
   // SHARED BETWEEN PROTOTYPE AND LIVE
   // Prefer INTEGRATOR_MODE; APP_ENV remains a compatibility fallback.
   const APP_ENV =
-    process.env.APP_ENV ||
+    env.APP_ENV ||
     (modeResolution.mode === PLATFORM_MODES.LIVE ? "production" : "development");
   const INTEGRATOR_MODE = modeResolution.mode;
   const JWT_SECRET =
-    process.env.JWT_SECRET ||
+    env.JWT_SECRET ||
     (INTEGRATOR_MODE === PLATFORM_MODES.LIVE ? "" : "dev-only-jwt-secret-change-me");
   if (!JWT_SECRET) {
     throw new Error("JWT_SECRET is required in Live Mode.");
@@ -90,6 +89,13 @@ export function getCoreEnv(): CoreEnv {
     APP_ENV,
     INTEGRATOR_MODE,
     JWT_SECRET,
-    JWT_EXPIRES_IN: process.env.JWT_EXPIRES_IN || "12h",
+    JWT_EXPIRES_IN: env.JWT_EXPIRES_IN || "12h",
   };
+}
+
+export function getCoreEnv(
+  env: CoreEnvInput = process.env as Record<string, string | undefined>,
+): CoreEnv {
+  loadDotEnv();
+  return resolveCoreEnv(env);
 }

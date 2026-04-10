@@ -1,6 +1,14 @@
 import "dotenv/config";
-import { getPostgresPool, closePostgresPool } from "./db/postgres";
-import { getRedisClient, closeRedisClient } from "./db/redis";
+import {
+  getPostgresPool,
+  closePostgresPool,
+  closePostgresPoolInstance,
+} from "./db/postgres";
+import {
+  getRedisClient,
+  closeRedisClient,
+  closeRedisClientInstance,
+} from "./db/redis";
 import { WorkspaceRepository } from "./repositories/workspace-repository";
 import { IntegrationRepository } from "./repositories/integration-repository";
 import { CredentialRepository } from "./repositories/credential-repository";
@@ -18,7 +26,7 @@ import { CredentialResolver } from "./auth/credential-resolver";
 import { AuthService } from "./auth/auth-service";
 import { AuthRepository } from "./repositories/auth-repository";
 import { validateWorkflowDefinition } from "./workflow/schema";
-import { getCoreEnv } from "./db/env";
+import { getCoreEnv, resolveCoreEnv, type CoreEnvInput } from "./db/env";
 import { parseEnabledAdapterSetFromEnv } from "./engine/plugin-loader";
 import { AlertDeliveryService } from "./alerts/alert-delivery-service";
 import { RetentionCleanupService } from "./retention/cleanup-service";
@@ -29,6 +37,11 @@ import {
   type ObservabilityRuntime,
 } from "./observability/runtime";
 import path from "node:path";
+import fs from "node:fs";
+import type { Pool } from "pg";
+import type { RedisClientType } from "redis";
+import type { EventQueueOptions } from "./engine/event-queue";
+import type { PluginDiscoveryOptions } from "./engine/plugin-loader";
 
 export type CoreRuntime = {
   pluginLoader: PluginLoader;
@@ -150,32 +163,172 @@ export type {
   AppSetupFieldTarget,
   AppSetupMethod,
 } from "./integrations/catalog";
+export { CoreBackgroundWorker } from "./engine/background-worker";
+export type {
+  CoreBackgroundWorkerOptions,
+  CoreWorkerRuntime,
+} from "./engine/background-worker";
 
-export async function createCoreRuntime(): Promise<CoreRuntime> {
-  const env = getCoreEnv();
-  const pool = getPostgresPool();
-  const redis = await getRedisClient();
-  const observability = createObservabilityRuntime();
+export type CoreRuntimeRole = "api" | "worker" | "all";
 
-  const workspaceRepository = new WorkspaceRepository(pool);
-  const integrationRepository = new IntegrationRepository(pool);
-  const credentialRepository = new CredentialRepository(pool);
-  const workflowRepository = new WorkflowRepository(pool);
-  const runRepository = new RunRepository(pool);
-  const authRepository = new AuthRepository(pool);
-  const alertRepository = new AlertRepository(pool);
-  const retentionRepository = new RetentionRepository(pool);
-  const collaborationRepository = new CollaborationRepository(pool);
+export type CoreRuntimeDependencies = {
+  pool?: Pool;
+  redis?: RedisClientType;
+  observability?: ObservabilityRuntime;
+  pluginLoader?: PluginLoader;
+};
 
-  const pluginLoader = new PluginLoader();
+export type CoreRuntimeOptions = {
+  env?: CoreEnvInput;
+  role?: CoreRuntimeRole;
+  dependencies?: CoreRuntimeDependencies;
+  closeInjectedDependencies?: boolean;
+  discoverAdapters?: boolean;
+  adapterDiscovery?: Partial<PluginDiscoveryOptions>;
+  adapterInitConfig?: Record<string, Record<string, unknown>>;
+  queue?: Partial<EventQueueOptions> & {
+    queueKey?: string;
+  };
+  features?: {
+    alerts?: boolean;
+    retention?: boolean;
+  };
+};
+
+function parseOptionalNumber(input: string | undefined): number | undefined {
+  if (!input || !input.trim()) {
+    return undefined;
+  }
+  const parsed = Number(input);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function parseCsv(input: string | undefined): string[] {
+  return (input || "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
+
+export function buildAdapterInitConfigFromEnv(
+  env: CoreEnvInput = process.env as CoreEnvInput,
+): Record<string, Record<string, unknown>> {
+  return {
+    webhook: {
+      signingSecret: env.WEBHOOK_SIGNING_SECRET || "",
+    },
+    "http-api": {
+      baseUrl: env.HTTP_CONNECTOR_BASE_URL || "",
+      apiKey: env.HTTP_CONNECTOR_API_KEY || "",
+      timeoutMs: parseOptionalNumber(env.HTTP_CONNECTOR_TIMEOUT_MS),
+    },
+    scheduler: {
+      timezone: env.SCHEDULER_DEFAULT_TIMEZONE || "UTC",
+    },
+    graphql: {
+      endpoint: env.GRAPHQL_CONNECTOR_ENDPOINT || "",
+      authToken: env.GRAPHQL_CONNECTOR_AUTH_TOKEN || "",
+      timeoutMs: parseOptionalNumber(env.GRAPHQL_CONNECTOR_TIMEOUT_MS),
+    },
+    code: {
+      timeoutMs: parseOptionalNumber(env.CODE_CONNECTOR_TIMEOUT_MS),
+    },
+    database: {
+      supportedDialects:
+        parseCsv(env.DATABASE_CONNECTOR_DIALECTS).length > 0
+          ? parseCsv(env.DATABASE_CONNECTOR_DIALECTS)
+          : ["postgres", "mysql"],
+    },
+    sheets: {
+      clientId: env.GOOGLE_CLIENT_ID || "",
+      clientSecret: env.GOOGLE_CLIENT_SECRET || "",
+      redirectUri: env.GOOGLE_REDIRECT_URI || "",
+    },
+    email: {},
+    shopify: {
+      apiKey: env.SHOPIFY_CLIENT_ID || "",
+      apiSecret: env.SHOPIFY_CLIENT_SECRET || "",
+    },
+    slack: {
+      clientId: env.SLACK_CLIENT_ID || "",
+      clientSecret: env.SLACK_CLIENT_SECRET || "",
+      redirectUri: env.SLACK_REDIRECT_URI || "",
+      botToken: env.SLACK_BOT_TOKEN || "",
+    },
+    telegram: {
+      botToken: env.TELEGRAM_BOT_TOKEN || "",
+      defaultChatId: env.TELEGRAM_DEFAULT_CHAT_ID || "",
+      apiBaseUrl: env.TELEGRAM_API_BASE_URL || "",
+    },
+    whatsapp: {
+      accessToken: env.WHATSAPP_ACCESS_TOKEN || "",
+      phoneNumberId: env.WHATSAPP_PHONE_NUMBER_ID || "",
+      apiVersion: env.WHATSAPP_API_VERSION || "v20.0",
+      baseUrl: env.WHATSAPP_API_BASE_URL || "",
+    },
+    ai: {
+      apiKey: env.AI_API_KEY || env.OPENAI_API_KEY || "",
+      baseUrl: env.AI_BASE_URL || env.OPENAI_BASE_URL || "",
+      model: env.AI_MODEL || env.OPENAI_MODEL || "gpt-4o-mini",
+      timeoutMs: parseOptionalNumber(env.AI_TIMEOUT_MS),
+    },
+    youtube: {
+      apiKey: env.YOUTUBE_API_KEY || "",
+      defaultChannelId: env.YOUTUBE_DEFAULT_CHANNEL_ID || "",
+      baseUrl: env.YOUTUBE_API_BASE_URL || "",
+    },
+    reddit: {
+      baseUrl: env.REDDIT_API_BASE_URL || "",
+      userAgent: env.REDDIT_USER_AGENT || "",
+      defaultSubreddit: env.REDDIT_DEFAULT_SUBREDDIT || "",
+    },
+  };
+}
+
+export function resolveAdapterManifestBaseDir(
+  env: CoreEnvInput,
+  explicitPath?: string,
+): string {
+  const candidates = [
+    explicitPath,
+    env.ADAPTER_MANIFESTS_DIR,
+    path.resolve(process.cwd(), "packages/adapters"),
+    path.resolve(__dirname, "../../../packages/adapters"),
+  ].filter((item): item is string => Boolean(item && item.trim()));
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  return path.resolve(process.cwd(), "packages/adapters");
+}
+
+async function maybeDiscoverAdapters(
+  pluginLoader: PluginLoader,
+  env: CoreEnvInput,
+  options: CoreRuntimeOptions,
+): Promise<void> {
+  const shouldDiscover =
+    options.discoverAdapters !== undefined
+      ? options.discoverAdapters
+      : pluginLoader.list().length === 0;
+
+  if (!shouldDiscover) {
+    return;
+  }
+
   const discovered = await pluginLoader.loadFromManifests({
-    baseDir:
-      process.env.ADAPTER_MANIFESTS_DIR ||
-      path.resolve(__dirname, "../../../packages/adapters"),
-    platformVersion: "1.0.0",
-    enabledKeys: parseEnabledAdapterSetFromEnv(process.env.ENABLED_ADAPTER_KEYS),
-    disabledKeys: parseEnabledAdapterSetFromEnv(process.env.DISABLED_ADAPTER_KEYS),
-    continueOnError: true,
+    baseDir: resolveAdapterManifestBaseDir(env, options.adapterDiscovery?.baseDir),
+    platformVersion: options.adapterDiscovery?.platformVersion || "1.0.0",
+    enabledKeys:
+      options.adapterDiscovery?.enabledKeys ||
+      parseEnabledAdapterSetFromEnv(env.ENABLED_ADAPTER_KEYS),
+    disabledKeys:
+      options.adapterDiscovery?.disabledKeys ||
+      parseEnabledAdapterSetFromEnv(env.DISABLED_ADAPTER_KEYS),
+    continueOnError: options.adapterDiscovery?.continueOnError ?? true,
   });
   const loadedCount = discovered.filter((result) => result.status === "loaded").length;
   if (loadedCount === 0) {
@@ -191,109 +344,68 @@ export async function createCoreRuntime(): Promise<CoreRuntime> {
       `[plugin-loader] adapter "${skipped.key || "unknown"}" is disabled (${skipped.manifestPath}).`,
     );
   }
+}
 
-  await pluginLoader.initAll({
-    webhook: {
-      signingSecret: process.env.WEBHOOK_SIGNING_SECRET || "",
-    },
-    "http-api": {
-      baseUrl: process.env.HTTP_CONNECTOR_BASE_URL || "",
-      apiKey: process.env.HTTP_CONNECTOR_API_KEY || "",
-      timeoutMs: process.env.HTTP_CONNECTOR_TIMEOUT_MS
-        ? Number(process.env.HTTP_CONNECTOR_TIMEOUT_MS)
-        : undefined,
-    },
-    scheduler: {
-      timezone: process.env.SCHEDULER_DEFAULT_TIMEZONE || "UTC",
-    },
-    graphql: {
-      endpoint: process.env.GRAPHQL_CONNECTOR_ENDPOINT || "",
-      authToken: process.env.GRAPHQL_CONNECTOR_AUTH_TOKEN || "",
-      timeoutMs: process.env.GRAPHQL_CONNECTOR_TIMEOUT_MS
-        ? Number(process.env.GRAPHQL_CONNECTOR_TIMEOUT_MS)
-        : undefined,
-    },
-    code: {
-      timeoutMs: process.env.CODE_CONNECTOR_TIMEOUT_MS
-        ? Number(process.env.CODE_CONNECTOR_TIMEOUT_MS)
-        : undefined,
-    },
-    database: {
-      supportedDialects: (process.env.DATABASE_CONNECTOR_DIALECTS || "postgres,mysql")
-        .split(",")
-        .map((value) => value.trim())
-        .filter(Boolean),
-    },
-    sheets: {
-      clientId: process.env.GOOGLE_CLIENT_ID || "",
-      clientSecret: process.env.GOOGLE_CLIENT_SECRET || "",
-      redirectUri: process.env.GOOGLE_REDIRECT_URI || "",
-    },
-    email: {},
-    shopify: {
-      apiKey: process.env.SHOPIFY_CLIENT_ID || "",
-      apiSecret: process.env.SHOPIFY_CLIENT_SECRET || "",
-    },
-    slack: {
-      clientId: process.env.SLACK_CLIENT_ID || "",
-      clientSecret: process.env.SLACK_CLIENT_SECRET || "",
-      redirectUri: process.env.SLACK_REDIRECT_URI || "",
-      botToken: process.env.SLACK_BOT_TOKEN || "",
-    },
-    telegram: {
-      botToken: process.env.TELEGRAM_BOT_TOKEN || "",
-      defaultChatId: process.env.TELEGRAM_DEFAULT_CHAT_ID || "",
-      apiBaseUrl: process.env.TELEGRAM_API_BASE_URL || "",
-    },
-    whatsapp: {
-      accessToken: process.env.WHATSAPP_ACCESS_TOKEN || "",
-      phoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID || "",
-      apiVersion: process.env.WHATSAPP_API_VERSION || "v20.0",
-      baseUrl: process.env.WHATSAPP_API_BASE_URL || "",
-    },
-    ai: {
-      apiKey: process.env.AI_API_KEY || process.env.OPENAI_API_KEY || "",
-      baseUrl: process.env.AI_BASE_URL || process.env.OPENAI_BASE_URL || "",
-      model: process.env.AI_MODEL || process.env.OPENAI_MODEL || "gpt-4o-mini",
-      timeoutMs: process.env.AI_TIMEOUT_MS
-        ? Number(process.env.AI_TIMEOUT_MS)
-        : undefined,
-    },
-    youtube: {
-      apiKey: process.env.YOUTUBE_API_KEY || "",
-      defaultChannelId: process.env.YOUTUBE_DEFAULT_CHANNEL_ID || "",
-      baseUrl: process.env.YOUTUBE_API_BASE_URL || "",
-    },
-    reddit: {
-      baseUrl: process.env.REDDIT_API_BASE_URL || "",
-      userAgent: process.env.REDDIT_USER_AGENT || "",
-      defaultSubreddit: process.env.REDDIT_DEFAULT_SUBREDDIT || "",
-    },
-  });
+export async function createCoreRuntime(
+  options: CoreRuntimeOptions = {},
+): Promise<CoreRuntime> {
+  const envInput = options.env || (process.env as CoreEnvInput);
+  const env = options.env ? resolveCoreEnv(options.env) : getCoreEnv();
+  const role = options.role || "all";
+  const shouldCloseInjected = options.closeInjectedDependencies || false;
 
-  // QUEUE: Redis + BullMQ
-  // SHARED BETWEEN PROTOTYPE AND LIVE
-  // `INTEGRATOR_QUEUE_DRIVER=legacy` preserves Redis-list behavior for compatibility.
-  const queueConfig = resolveEventQueueBootstrapConfig(
-    process.env as Record<string, string | undefined>,
+  const dependencies = options.dependencies || {};
+  const pool = dependencies.pool || getPostgresPool();
+  const ownsPool = !dependencies.pool;
+  const redis = dependencies.redis || (await getRedisClient());
+  const ownsRedis = !dependencies.redis;
+  const observability = dependencies.observability || createObservabilityRuntime();
+
+  const workspaceRepository = new WorkspaceRepository(pool);
+  const integrationRepository = new IntegrationRepository(pool);
+  const credentialRepository = new CredentialRepository(pool);
+  const workflowRepository = new WorkflowRepository(pool);
+  const runRepository = new RunRepository(pool);
+  const authRepository = new AuthRepository(pool);
+  const alertRepository = new AlertRepository(pool);
+  const retentionRepository = new RetentionRepository(pool);
+  const collaborationRepository = new CollaborationRepository(pool);
+
+  const pluginLoader = dependencies.pluginLoader || new PluginLoader();
+  await maybeDiscoverAdapters(pluginLoader, envInput, options);
+  if (pluginLoader.list().length === 0) {
+    throw new Error("No adapters are available in plugin loader.");
+  }
+
+  await pluginLoader.initAll(
+    options.adapterInitConfig || buildAdapterInitConfigFromEnv(envInput),
   );
-  const eventQueue = new EventQueue(
-    redis,
-    queueConfig.queueKey,
-    observability,
-    queueConfig,
-  );
+
+  const queueConfig = resolveEventQueueBootstrapConfig(envInput);
+  const queueOptions: EventQueueOptions = {
+    ...queueConfig,
+    ...options.queue,
+    consumeEnabled:
+      options.queue?.consumeEnabled !== undefined
+        ? options.queue.consumeEnabled
+        : role !== "api",
+  };
+  const queueKey = options.queue?.queueKey || queueConfig.queueKey;
+  const eventQueue = new EventQueue(redis, queueKey, observability, queueOptions);
   const credentialResolver = new CredentialResolver(credentialRepository);
-  const alertDeliveryService = new AlertDeliveryService(
-    alertRepository,
-    runRepository,
-    pluginLoader,
-    observability,
-  );
-  const retentionCleanupService = new RetentionCleanupService(
-    retentionRepository,
-    observability,
-  );
+  const enableAlerts = options.features?.alerts !== false;
+  const enableRetention = options.features?.retention !== false;
+  const alertDeliveryService = enableAlerts
+    ? new AlertDeliveryService(
+        alertRepository,
+        runRepository,
+        pluginLoader,
+        observability,
+      )
+    : undefined;
+  const retentionCleanupService = enableRetention
+    ? new RetentionCleanupService(retentionRepository, observability)
+    : undefined;
   const agentToolRegistry = new AgentToolRegistry(pluginLoader);
   const mcpFoundation = new InternalMcpFoundation(agentToolRegistry);
   const workflowEngine = new WorkflowEngine(
@@ -335,8 +447,18 @@ export async function createCoreRuntime(): Promise<CoreRuntime> {
     },
     close: async () => {
       await eventQueue.close();
-      await closeRedisClient();
-      await closePostgresPool();
+
+      if (ownsRedis) {
+        await closeRedisClient();
+      } else if (shouldCloseInjected && dependencies.redis) {
+        await closeRedisClientInstance(dependencies.redis);
+      }
+
+      if (ownsPool) {
+        await closePostgresPool();
+      } else if (shouldCloseInjected && dependencies.pool) {
+        await closePostgresPoolInstance(dependencies.pool);
+      }
     },
   };
 }

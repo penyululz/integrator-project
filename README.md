@@ -1,89 +1,59 @@
-# Integrator Engine (Backend-Only)
+# Integrator Engine (Backend-Only, Portable)
 
-This repository now contains the **engine/runtime stack only**:
+This repository is a reusable backend engine for multi-tenant workflow automation platforms.
 
-- `apps/api` - Fastify API + worker entrypoint
-- `packages/core` - workflow engine, runtime services, scheduler/retry/approval logic
-- `packages/shared` - shared contracts/types/schemas
-- `packages/adapters/*` - connector/adapters
+It is intentionally frontend-free and optimized for server-side reuse in other projects.
 
-All UI/frontend code has been removed from runtime scope.
+## Repository Modules
 
-## Stack
+- `apps/api`: API + worker process entrypoints
+- `packages/core`: runtime composition, workflow engine, auth, repositories, queue/retry/wait, approvals, alerts, retention
+- `packages/shared`: shared contracts and schemas
+- `packages/adapters/*`: manifest-driven connectors
 
-- API: Fastify + Zod
-- Engine: TypeScript services in `packages/core`
+## Engine Characteristics
+
+- backend-only
+- multi-tenant
+- horizontally scalable (stateless API + scalable workers)
+- framework-agnostic core runtime seams
+- adapter/plugin based integrations
+
+## Runtime Stack
+
+- API: Fastify + Express-compatible route middleware
+- Engine: TypeScript (`@integration/core`)
 - Data: PostgreSQL
-- Queue: Redis + BullMQ (with compatibility fallback)
-- Deploy: Docker Compose (+ optional Traefik profile)
-
-## Repository Scope
-
-- `apps/web` removed
-- `integrator-platform` removed
-- UI-specific scripts/routes/docs removed or rewritten
+- Queue: Redis + BullMQ (legacy fallback supported)
 
 ## Quick Start
 
-1. Install dependencies:
-
 ```bash
 npm install
-```
-
-2. Initialize environment file:
-
-```bash
 npm run env:init
-```
-
-3. Start infrastructure:
-
-```bash
 npm run infra:up
-```
-
-4. Prepare runtime:
-
-```bash
 npm run setup:local
-```
-
-5. Run API + worker:
-
-```bash
 npm run dev:local
 ```
 
-## Core Commands
+## Important Commands
 
-- `npm run dev` - API + worker (watch mode)
-- `npm run dev:local` - API + worker
-- `npm run build` - all workspaces build
-- `npm run lint` - all workspaces typecheck
-- `npm run test` - all workspaces tests
-- `npm run migrate` - run DB migrations
-- `npm run seed` - seed local data
-- `npm run stack:up` - API + worker + postgres + redis via Compose
-- `npm run stack:up:proxy` - same with Traefik profile
+- `npm run dev:local`: run API + worker
+- `npm run build`: build all workspaces
+- `npm run lint`: typecheck all workspaces
+- `npm run test`: run all tests
+- `npm run migrate`: run migrations
+- `npm run seed`: seed local data
+- `npm run engine:export`: export portable backend bundle to `dist/engine-portable`
 
-## Docker Compose Services
+## LLM and Developer Docs
 
-- `postgres`
-- `redis`
-- `api`
-- `worker`
-- optional `traefik` profile for edge routing
-
-## Modes
-
-- `INTEGRATOR_MODE="Prototype Mode"` - local simulation-friendly mode
-- `INTEGRATOR_MODE="Live Mode"` - real runtime mode
-
-`INTEGRATOR_MODE` is the runtime source of truth.
-
-## Package Docs
-
+- [Engine Docs Hub](./docs/engine/README.md)
+- [LLM Full Documentation](./docs/engine/LLM_FULL_DOCUMENTATION.md)
+- [Architecture Map](./docs/engine/ARCHITECTURE_MAP.md)
+- [Integration Playbook](./docs/engine/INTEGRATION_PLAYBOOK.md)
+- [Scaling and Operations](./docs/engine/SCALING_AND_OPERATIONS.md)
+- [Portability Checklist](./docs/engine/PORTABILITY_CHECKLIST.md)
 - [API Readme](./apps/api/README.md)
 - [Core Readme](./packages/core/README.md)
 - [Adapters Readme](./packages/adapters/README.md)

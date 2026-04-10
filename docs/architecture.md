@@ -2,6 +2,8 @@
 
 This document describes the backend-only architecture in this repository.
 
+For LLM-first implementation guidance, use [`docs/engine/README.md`](./engine/README.md) as the entrypoint.
+
 ## Monorepo Structure
 
 ### Applications (`apps/*`)
@@ -31,10 +33,11 @@ This document describes the backend-only architecture in this repository.
 
 ```mermaid
 graph LR
-  API["API + Worker (apps/api)"] --> Core["Core Services (packages/core)"]
-  Core --> Queue["Redis Queue"]
+  API["API Process (producer role)"] --> Core["Core Runtime (packages/core)"]
+  Worker["Worker Process (consumer role)"] --> Core
+  Core --> Queue["Redis + BullMQ"]
   Core --> DB["PostgreSQL"]
-  Core --> Plugins["Adapter Plugins"]
+  Core --> Plugins["Adapter Manifests + Plugins"]
 ```
 
 ## Workflow Engine Flow
@@ -79,3 +82,9 @@ sequenceDiagram
 - RBAC-protected operator actions
 - audit logging for operator and approval actions
 - observability via runs, alerts, audit logs, and metrics
+
+## Portability Notes
+
+- `createCoreRuntime(options)` supports dependency injection for DB/Redis/observability/plugin discovery.
+- API and worker are intentionally split by queue role for horizontal scaling.
+- Use `npm run engine:export` to produce a portable engine bundle for another project.

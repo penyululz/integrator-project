@@ -21,6 +21,7 @@ export type QueueDriver = "bullmq" | "redis_legacy";
 export type EventQueueOptions = {
   queueDriver?: "bullmq" | "legacy" | "redis_legacy";
   redisUrl?: string;
+  consumeEnabled?: boolean;
   bullmqPrefix?: string;
   bullmqWorkerConcurrency?: number;
   bullmqRemoveOnCompleteCount?: number;
@@ -33,6 +34,7 @@ export type EventQueueRuntimeState = {
   bullmqQueueName: string;
   configuredDriver: QueueDriver;
   activeDriver: QueueDriver;
+  consumeEnabled: boolean;
   usingFallback: boolean;
   fallbackReason: string | null;
   bullmq: {
@@ -131,6 +133,7 @@ export class EventQueue {
   private readonly configuredDriver: QueueDriver;
   private driver: QueueDriver;
   private readonly redisUrl: string;
+  private readonly consumeEnabled: boolean;
   private readonly bullmqPrefix: string;
   private readonly bullmqWorkerConcurrency: number;
   private readonly bullmqRemoveOnCompleteCount: number;
@@ -155,6 +158,7 @@ export class EventQueue {
     );
     this.driver = this.configuredDriver;
     this.redisUrl = options.redisUrl || process.env.REDIS_URL || "";
+    this.consumeEnabled = options.consumeEnabled !== false;
     this.bullmqPrefix =
       (options.bullmqPrefix || process.env.INTEGRATOR_BULLMQ_PREFIX || "integrator").trim() ||
       "integrator";
@@ -212,24 +216,26 @@ export class EventQueue {
           },
         },
       });
-      this.bullWorker = new Worker<IncomingEvent, void, string>(
-        this.bullmqQueueName,
-        async (job) =>
-          new Promise<void>((resolve) => {
-            this.pushPendingBullEvent({
-              event: job.data,
-              acknowledge: resolve,
-            });
-          }),
-        {
-          connection,
-          prefix: this.bullmqPrefix,
-          concurrency: this.bullmqWorkerConcurrency,
-        },
-      );
-      this.bullWorker.on("error", (error) => {
-        this.switchToLegacyQueue(error);
-      });
+      if (this.consumeEnabled) {
+        this.bullWorker = new Worker<IncomingEvent, void, string>(
+          this.bullmqQueueName,
+          async (job) =>
+            new Promise<void>((resolve) => {
+              this.pushPendingBullEvent({
+                event: job.data,
+                acknowledge: resolve,
+              });
+            }),
+          {
+            connection,
+            prefix: this.bullmqPrefix,
+            concurrency: this.bullmqWorkerConcurrency,
+          },
+        );
+        this.bullWorker.on("error", (error) => {
+          this.switchToLegacyQueue(error);
+        });
+      }
     } catch (error) {
       this.switchToLegacyQueue(error);
     }
@@ -379,6 +385,12 @@ export class EventQueue {
   }
 
   async consumeBlocking(timeoutSeconds = 5): Promise<IncomingEvent | null> {
+    if (!this.consumeEnabled) {
+      throw new Error(
+        "Event queue consumeBlocking() was called with consumeEnabled=false.",
+      );
+    }
+
     if (this.driver === "bullmq") {
       try {
         const event = await this.consumeBullBlocking(timeoutSeconds);
@@ -518,6 +530,7 @@ export class EventQueue {
       bullmqQueueName: this.bullmqQueueName,
       configuredDriver: this.configuredDriver,
       activeDriver: this.driver,
+      consumeEnabled: this.consumeEnabled,
       usingFallback:
         this.configuredDriver === "bullmq" &&
         this.driver === "redis_legacy",

@@ -743,6 +743,8 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
         configuredDriver: queueRuntime.configuredDriver,
         usingFallback: queueRuntime.usingFallback,
         queueKey: queueRuntime.queueKey,
+        consumeEnabled: queueRuntime.consumeEnabled,
+        workerReady: queueRuntime.bullmq.workerReady,
       },
     });
   });

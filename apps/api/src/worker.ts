@@ -1,5 +1,5 @@
 import "dotenv/config";
-import { createCoreRuntime } from "@integration/core";
+import { CoreBackgroundWorker, createCoreRuntime } from "@integration/core";
 import { resolvePlatformModeFromEnv } from "@integration/shared";
 
 // QUEUE: Redis + BullMQ (official locked stack)
@@ -9,7 +9,9 @@ import { resolvePlatformModeFromEnv } from "@integration/shared";
 // USED FOR LOCAL DEMO / UI ITERATION (Prototype Mode queue simulation path)
 // NOTE: worker loop remains engine-driven; queue transport is BullMQ-first with Redis legacy fallback.
 async function runWorker(): Promise<void> {
-  const runtime = await createCoreRuntime();
+  const runtime = await createCoreRuntime({
+    role: "worker",
+  });
   const modeResolution = resolvePlatformModeFromEnv(
     process.env as Record<string, string | undefined>,
   );
@@ -18,49 +20,38 @@ async function runWorker(): Promise<void> {
     `[worker] MODE: ${modeResolution.mode} (source: ${modeResolution.source})`,
   );
   console.log(
-    `[worker] QUEUE: ${queueRuntime.activeDriver} (configured=${queueRuntime.configuredDriver}, key=${queueRuntime.queueKey}, prefix=${queueRuntime.bullmq.prefix}, concurrency=${queueRuntime.bullmq.workerConcurrency})`,
+    `[worker] QUEUE: ${queueRuntime.activeDriver} (configured=${queueRuntime.configuredDriver}, key=${queueRuntime.queueKey}, consumeEnabled=${queueRuntime.consumeEnabled}, prefix=${queueRuntime.bullmq.prefix}, concurrency=${queueRuntime.bullmq.workerConcurrency})`,
   );
   if (queueRuntime.usingFallback) {
     console.warn(
       `[worker] queue driver fallback active: ${queueRuntime.fallbackReason || "unknown reason"}`,
     );
   }
+  const worker = new CoreBackgroundWorker(runtime, {
+    eventConsumeTimeoutSeconds: 2,
+    idleDelayMs: 25,
+    errorDelayMs: 1_000,
+    onError: (error) => {
+      console.error("[worker] process error", error);
+    },
+  });
   console.log("Worker started.");
 
-  while (true) {
-    try {
-      const handledScheduledDelay =
-        await runtime.workflowEngine.processNextScheduledDelay();
-      if (handledScheduledDelay) {
-        continue;
-      }
-
-      const handledAlertDispatch = runtime.alertDeliveryService
-        ? await runtime.alertDeliveryService.processNextDispatch()
-        : false;
-      if (handledAlertDispatch) {
-        continue;
-      }
-
-      const handledRetry = await runtime.workflowEngine.processNextRetry();
-      if (handledRetry) {
-        continue;
-      }
-
-      if (runtime.alertDeliveryService) {
-        await runtime.alertDeliveryService.evaluateAndQueueSignalAlerts();
-      }
-
-      if (runtime.retentionCleanupService) {
-        await runtime.retentionCleanupService.runIfDue();
-      }
-
-      await runtime.workflowEngine.processNextEvent(2);
-    } catch (error) {
-      console.error("[worker] process error", error);
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-    }
+  async function shutdown(signal: string): Promise<void> {
+    console.log(`Received ${signal}, shutting down worker...`);
+    await worker.stop();
+    await runtime.close();
+    process.exit(0);
   }
+
+  process.on("SIGINT", () => {
+    void shutdown("SIGINT");
+  });
+  process.on("SIGTERM", () => {
+    void shutdown("SIGTERM");
+  });
+
+  await worker.start();
 }
 
 runWorker().catch((error) => {

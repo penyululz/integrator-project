@@ -12,7 +12,9 @@ import { createApp } from "./app";
 // USED FOR LOCAL DEMO / UI ITERATION (Prototype Mode)
 // NOTE: Fastify bootstraps API runtime and mounts legacy Express routes for compatibility.
 async function bootstrap(): Promise<void> {
-  const runtime = await createCoreRuntime();
+  const runtime = await createCoreRuntime({
+    role: "api",
+  });
   const modeResolution = resolvePlatformModeFromEnv(
     process.env as Record<string, string | undefined>,
   );
@@ -31,7 +33,7 @@ async function bootstrap(): Promise<void> {
     `[api] MODE: ${modeResolution.mode} (source: ${modeResolution.source})`,
   );
   console.log(
-    `[api] QUEUE: ${queueRuntime.activeDriver} (configured=${queueRuntime.configuredDriver}, key=${queueRuntime.queueKey})`,
+    `[api] QUEUE: ${queueRuntime.activeDriver} (configured=${queueRuntime.configuredDriver}, key=${queueRuntime.queueKey}, consumeEnabled=${queueRuntime.consumeEnabled})`,
   );
   if (queueRuntime.usingFallback) {
     console.warn(

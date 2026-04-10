@@ -1,15 +1,21 @@
-# API + Worker (Engine Runtime)
+# API + Worker Runtime (`@integration/api`)
 
-Backend runtime for the Integrator engine.
+This package is the reference host process for the portable backend engine.
+
+## Process Roles
+
+- `src/index.ts`: API process (`createCoreRuntime({ role: "api" })`)
+- `src/worker.ts`: worker process (`createCoreRuntime({ role: "worker" })`)
+
+The role split ensures API nodes are queue producers while worker nodes consume queue events.
 
 ## Responsibilities
 
-- Fastify API server (`src/index.ts`)
-- Worker process (`src/worker.ts`)
-- Auth/session + RBAC checks
-- Workflow trigger ingress and execution orchestration
-- Retry/dead-letter/wait scheduling controls
-- Approval/audit/alerts endpoints
+- auth/session and RBAC API surface
+- workflow ingress and orchestration endpoints
+- approvals, audit, alerts, retention endpoints
+- metrics and runtime health endpoints
+- background orchestration loop via `CoreBackgroundWorker`
 
 ## Runtime Dependencies
 
@@ -18,19 +24,19 @@ Backend runtime for the Integrator engine.
 - PostgreSQL
 - Redis
 
-## Local Run
+## Run
 
-From repo root:
+From repository root:
+
+```bash
+npm run dev:local
+```
+
+Or per workspace:
 
 ```bash
 npm run dev -w @integration/api
 npm run worker -w @integration/api
-```
-
-Or use root convenience command:
-
-```bash
-npm run dev:local
 ```
 
 ## Build/Test
@@ -43,10 +49,10 @@ npm run test -w @integration/api
 
 ## Environment
 
-- Root `.env` is the runtime source (`npm run env:init`)
-- Template file: `apps/api/.env.example`
+- root `.env` is canonical (`npm run env:init`)
+- template mirror: `apps/api/.env.example`
 
-Key required vars:
+Required:
 
 - `INTEGRATOR_MODE`
 - `DATABASE_URL`
@@ -58,3 +64,8 @@ Key required vars:
 
 - `GET /api/v1/health`
 - `GET /metrics`
+
+## Integration Docs
+
+- [LLM Full Documentation](../../docs/engine/LLM_FULL_DOCUMENTATION.md)
+- [Integration Playbook](../../docs/engine/INTEGRATION_PLAYBOOK.md)
