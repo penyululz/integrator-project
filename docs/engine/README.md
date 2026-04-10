@@ -7,6 +7,7 @@ Use this directory as the canonical backend-engine guide.
 - [Integration Playbook](./INTEGRATION_PLAYBOOK.md)
 - [Scaling and Operations](./SCALING_AND_OPERATIONS.md)
 - [Portability Checklist](./PORTABILITY_CHECKLIST.md)
+- [Identity and Auth](./IDENTITY_AUTH.md)
 
 If you are integrating this engine into a new repository, start with:
 

@@ -157,13 +157,16 @@ export class EmailAdapter implements Adapter {
     const subject = String(input.subject || "");
     const text = input.text ? String(input.text) : undefined;
     const html = input.html ? String(input.html) : undefined;
+    const fromOverride = input.from ? String(input.from) : "";
+    const replyTo = input.replyTo ? String(input.replyTo) : undefined;
 
     if (!to || !subject) {
       throw new Error("sendEmail requires to and subject.");
     }
 
     const result = await transport.sendMail({
-      from,
+      from: fromOverride || from,
+      replyTo,
       to,
       subject,
       text,

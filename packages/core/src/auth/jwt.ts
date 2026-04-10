@@ -102,6 +102,9 @@ function parseAndValidatePayload(payloadEncoded: string): JwtPayload {
   if (payload.workspaceSlug !== undefined && typeof payload.workspaceSlug !== "string") {
     throw new UnauthenticatedError('Invalid token claim "workspaceSlug".');
   }
+  if (payload.sessionId !== undefined && typeof payload.sessionId !== "string") {
+    throw new UnauthenticatedError('Invalid token claim "sessionId".');
+  }
 
   return {
     sub: payload.sub as string,
@@ -109,6 +112,7 @@ function parseAndValidatePayload(payloadEncoded: string): JwtPayload {
     organizationId: payload.organizationId as string,
     workspaceId: payload.workspaceId as string,
     email: payload.email as string,
+    sessionId: payload.sessionId as string | undefined,
     orgRole: assertRole(payload.orgRole, "orgRole"),
     workspaceRole: assertRole(payload.workspaceRole, "workspaceRole"),
     organizationSlug: payload.organizationSlug as string | undefined,
@@ -181,6 +185,7 @@ export function verifyAccessToken(input: {
     organizationId: payload.organizationId,
     workspaceId: payload.workspaceId,
     email: payload.email,
+    sessionId: payload.sessionId,
     orgRole: payload.orgRole,
     workspaceRole: payload.workspaceRole,
     organizationSlug: payload.organizationSlug,

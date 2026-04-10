@@ -6,6 +6,7 @@ export type AuthTokenClaims = {
   organizationId: string;
   workspaceId: string;
   email: string;
+  sessionId?: string;
   orgRole: PlatformRole;
   workspaceRole: PlatformRole;
   organizationSlug?: string;

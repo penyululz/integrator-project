@@ -17,6 +17,7 @@ import { RunRepository } from "./repositories/run-repository";
 import { AlertRepository } from "./repositories/alert-repository";
 import { RetentionRepository } from "./repositories/retention-repository";
 import { CollaborationRepository } from "./repositories/collaboration-repository";
+import { IdentityRepository } from "./repositories/identity-repository";
 import { PluginLoader } from "./engine/plugin-loader";
 import { EventQueue } from "./engine/event-queue";
 import { resolveEventQueueBootstrapConfig } from "./engine/event-queue-config";
@@ -24,6 +25,7 @@ import { WorkflowEngine } from "./engine/workflow-engine";
 import { OAuthService } from "./auth/oauth-service";
 import { CredentialResolver } from "./auth/credential-resolver";
 import { AuthService } from "./auth/auth-service";
+import { IdentityEmailService } from "./auth/identity-email-service";
 import { AuthRepository } from "./repositories/auth-repository";
 import { validateWorkflowDefinition } from "./workflow/schema";
 import { getCoreEnv, resolveCoreEnv, type CoreEnvInput } from "./db/env";
@@ -54,6 +56,7 @@ export type CoreRuntime = {
   mcpFoundation: InternalMcpFoundation;
   oauthService: OAuthService;
   authService: AuthService;
+  identityEmailService?: IdentityEmailService;
   credentialResolver: CredentialResolver;
   repositories: {
     workspaceRepository: WorkspaceRepository;
@@ -62,6 +65,7 @@ export type CoreRuntime = {
     workflowRepository: WorkflowRepository;
     runRepository: RunRepository;
     authRepository: AuthRepository;
+    identityRepository?: IdentityRepository;
     alertRepository?: AlertRepository;
     retentionRepository?: RetentionRepository;
     collaborationRepository?: CollaborationRepository;
@@ -71,6 +75,7 @@ export type CoreRuntime = {
 
 export { validateWorkflowDefinition };
 export { AuthService } from "./auth/auth-service";
+export { IdentityEmailService } from "./auth/identity-email-service";
 export { PlatformMetrics } from "./observability/metrics";
 export { StructuredLogger } from "./observability/logger";
 export {
@@ -86,6 +91,7 @@ export { AlertDeliveryService } from "./alerts/alert-delivery-service";
 export { RetentionCleanupService } from "./retention/cleanup-service";
 export { AgentToolRegistry } from "./agents/tool-registry";
 export { InternalMcpFoundation } from "./agents/mcp-foundation";
+export { IdentityRepository } from "./repositories/identity-repository";
 export {
   saveMemory,
   getMemory,
@@ -99,6 +105,10 @@ export type {
   AlertEventType,
   AlertSeverity,
 } from "./alerts/types";
+export type {
+  IdentityAccountStatus,
+  UserSecurityState,
+} from "./repositories/identity-repository";
 export type {
   RetentionCleanupConfig,
   RetentionCleanupCycleSummary,
@@ -203,6 +213,22 @@ function parseOptionalNumber(input: string | undefined): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
+function parseOptionalBoolean(
+  input: string | undefined,
+): boolean | undefined {
+  if (!input || !input.trim()) {
+    return undefined;
+  }
+  const normalized = input.trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) {
+    return true;
+  }
+  if (["0", "false", "no", "off"].includes(normalized)) {
+    return false;
+  }
+  return undefined;
+}
+
 function parseCsv(input: string | undefined): string[] {
   return (input || "")
     .split(",")
@@ -244,7 +270,14 @@ export function buildAdapterInitConfigFromEnv(
       clientSecret: env.GOOGLE_CLIENT_SECRET || "",
       redirectUri: env.GOOGLE_REDIRECT_URI || "",
     },
-    email: {},
+    email: {
+      host: env.EMAIL_SMTP_HOST || "",
+      port: parseOptionalNumber(env.EMAIL_SMTP_PORT) || 587,
+      secure: parseOptionalBoolean(env.EMAIL_SMTP_SECURE) || false,
+      user: env.EMAIL_SMTP_USER || "",
+      pass: env.EMAIL_SMTP_PASS || "",
+      from: env.PLATFORM_EMAIL_FROM || env.EMAIL_SMTP_FROM || "",
+    },
     shopify: {
       apiKey: env.SHOPIFY_CLIENT_ID || "",
       apiSecret: env.SHOPIFY_CLIENT_SECRET || "",
@@ -367,6 +400,7 @@ export async function createCoreRuntime(
   const workflowRepository = new WorkflowRepository(pool);
   const runRepository = new RunRepository(pool);
   const authRepository = new AuthRepository(pool);
+  const identityRepository = new IdentityRepository(pool);
   const alertRepository = new AlertRepository(pool);
   const retentionRepository = new RetentionRepository(pool);
   const collaborationRepository = new CollaborationRepository(pool);
@@ -420,7 +454,27 @@ export async function createCoreRuntime(
     },
   );
   const oauthService = new OAuthService(credentialRepository);
-  const authService = new AuthService(authRepository, env);
+  const identityEmailService = new IdentityEmailService(
+    pluginLoader,
+    identityRepository,
+    {
+      platformSenderEmail:
+        envInput.PLATFORM_EMAIL_FROM ||
+        envInput.EMAIL_SMTP_FROM ||
+        "no-reply@platform.local",
+      platformReplyToEmail:
+        envInput.PLATFORM_EMAIL_REPLY_TO || envInput.PLATFORM_EMAIL_FROM || undefined,
+      providerName: envInput.PLATFORM_EMAIL_PROVIDER || "email-adapter",
+    },
+  );
+  const authService = new AuthService(authRepository, env, {
+    identityRepository,
+    identityEmailService,
+    platformPublicUrl:
+      envInput.PLATFORM_PUBLIC_URL ||
+      envInput.APP_PUBLIC_URL ||
+      "http://localhost:4000",
+  });
 
   return {
     pluginLoader,
@@ -433,6 +487,7 @@ export async function createCoreRuntime(
     mcpFoundation,
     oauthService,
     authService,
+    identityEmailService,
     credentialResolver,
     repositories: {
       workspaceRepository,
@@ -441,6 +496,7 @@ export async function createCoreRuntime(
       workflowRepository,
       runRepository,
       authRepository,
+      identityRepository,
       alertRepository,
       retentionRepository,
       collaborationRepository,

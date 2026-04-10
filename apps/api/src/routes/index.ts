@@ -65,6 +65,9 @@ import {
   createWorkspaceSchema,
   createWorkflowSchema,
   devLoginSchema,
+  emailLogsQuerySchema,
+  emailVerificationConfirmSchema,
+  emailVerificationRequestSchema,
   facilitiesQuerySchema,
   facilityBookingCreateSchema,
   facilityBookingUpdateSchema,
@@ -73,7 +76,11 @@ import {
   facilityUpdateSchema,
   knowledgeDocCreateSchema,
   knowledgeDocUpdateSchema,
+  inviteAcceptSchema,
+  inviteCreateSchema,
   loginSchema,
+  loginOtpRequestSchema,
+  loginOtpVerifySchema,
   maintenanceCommentCreateSchema,
   maintenanceTicketCreateSchema,
   maintenanceTicketUpdateSchema,
@@ -81,6 +88,8 @@ import {
   oauthCallbackSchema,
   oauthStartSchema,
   operatorNoteSchema,
+  passwordResetConfirmSchema,
+  passwordResetRequestSchema,
   normalizeListQueryParams,
   runReplaySchema,
   runsListQuerySchema,
@@ -763,7 +772,185 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
         res.status(200).json(session);
         return;
       }
-      const session = await runtime.authService.login(body);
+      const session = await runtime.authService.login(body, {
+        ipAddress: req.ip,
+        userAgent: req.header("user-agent") || undefined,
+      });
+      res.status(200).json(session);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post("/auth/otp/request", async (req, res, next) => {
+    try {
+      const body = loginOtpRequestSchema.parse(req.body || {});
+      if (prototypeApi) {
+        res.status(200).json({
+          sent: true,
+          expiresInSeconds: 300,
+        });
+        return;
+      }
+      const result = await runtime.authService.requestLoginOtp(body, {
+        ipAddress: req.ip,
+        userAgent: req.header("user-agent") || undefined,
+      });
+      res.status(200).json(result);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post("/auth/otp/verify", async (req, res, next) => {
+    try {
+      const body = loginOtpVerifySchema.parse(req.body || {});
+      if (prototypeApi) {
+        const session = prototypeApi.login({
+          organizationSlug: body.organizationSlug,
+          workspaceSlug: body.workspaceSlug,
+        });
+        res.status(200).json(session);
+        return;
+      }
+      const session = await runtime.authService.loginWithOtp(body, {
+        ipAddress: req.ip,
+        userAgent: req.header("user-agent") || undefined,
+      });
+      res.status(200).json(session);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post("/auth/email-verification/request", async (req, res, next) => {
+    try {
+      const body = emailVerificationRequestSchema.parse(req.body || {});
+      if (prototypeApi) {
+        res.status(200).json({
+          sent: true,
+          expiresInSeconds: 86_400,
+        });
+        return;
+      }
+      const result = await runtime.authService.requestEmailVerification(body, {
+        ipAddress: req.ip,
+        userAgent: req.header("user-agent") || undefined,
+      });
+      res.status(200).json(result);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post("/auth/email-verification/confirm", async (req, res, next) => {
+    try {
+      const body = emailVerificationConfirmSchema.parse(req.body || {});
+      if (prototypeApi) {
+        res.status(200).json({
+          verified: true,
+        });
+        return;
+      }
+      const result = await runtime.authService.confirmEmailVerification(body);
+      res.status(200).json(result);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post("/auth/password-reset/request", async (req, res, next) => {
+    try {
+      const body = passwordResetRequestSchema.parse(req.body || {});
+      if (prototypeApi) {
+        res.status(200).json({
+          sent: true,
+          expiresInSeconds: 3_600,
+        });
+        return;
+      }
+      const result = await runtime.authService.requestPasswordReset(body, {
+        ipAddress: req.ip,
+        userAgent: req.header("user-agent") || undefined,
+      });
+      res.status(200).json(result);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post("/auth/password-reset/confirm", async (req, res, next) => {
+    try {
+      const body = passwordResetConfirmSchema.parse(req.body || {});
+      if (prototypeApi) {
+        res.status(200).json({
+          reset: true,
+        });
+        return;
+      }
+      const result = await runtime.authService.resetPassword(body);
+      res.status(200).json(result);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post(
+    "/auth/invites",
+    requireRole(["owner", "admin"]),
+    async (req, res, next) => {
+      try {
+        const body = inviteCreateSchema.parse(req.body || {});
+        if (prototypeApi) {
+          res.status(201).json({
+            invited: true,
+            expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+          });
+          return;
+        }
+
+        const scope = req.auth!.scope;
+        const user = req.auth!.user;
+        const result = await runtime.authService.createInvite(
+          {
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            organizationSlug: scope.organizationSlug,
+            workspaceId: scope.workspaceId,
+            workspaceSlug: scope.workspaceSlug,
+            invitedByUserId: user.id,
+            email: body.email,
+            role: body.role,
+            expiresInHours: body.expiresInHours,
+          },
+          {
+            ipAddress: req.ip,
+            userAgent: req.header("user-agent") || undefined,
+          },
+        );
+
+        res.status(201).json(result);
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.post("/auth/invites/accept", async (req, res, next) => {
+    try {
+      const body = inviteAcceptSchema.parse(req.body || {});
+      if (prototypeApi) {
+        const session = prototypeApi.login({
+          organizationSlug: "prototype-org",
+          workspaceSlug: "default",
+        });
+        res.status(200).json(session);
+        return;
+      }
+      const session = await runtime.authService.acceptInvite(body, {
+        ipAddress: req.ip,
+        userAgent: req.header("user-agent") || undefined,
+      });
       res.status(200).json(session);
     } catch (error) {
       next(error);
@@ -788,7 +975,10 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
       }
 
       const body = devLoginSchema.parse(req.body || {});
-      const session = await runtime.authService.issueDevLogin(body);
+      const session = await runtime.authService.issueDevLogin(body, {
+        ipAddress: req.ip,
+        userAgent: req.header("user-agent") || undefined,
+      });
       res.status(200).json(session);
     } catch (error) {
       next(error);
@@ -814,6 +1004,35 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
       next(error);
     }
   });
+
+  router.get(
+    "/auth/email-logs",
+    requireRole(["owner", "admin"]),
+    async (req, res, next) => {
+      try {
+        const query = emailLogsQuerySchema.parse(req.query || {});
+        if (prototypeApi) {
+          res.json({
+            logs: [],
+          });
+          return;
+        }
+
+        const scope = req.auth!.scope;
+        const logs = await runtime.authService.listRecentEmailLogs({
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+          limit: query.limit,
+        });
+        res.json({
+          logs,
+        });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
 
   router.get("/profile", requireAuth, async (req, res, next) => {
     try {
@@ -1104,8 +1323,15 @@ export function createApiRouter(runtime: CoreRuntime, options: ApiRouterOptions 
     }
   });
 
-  router.post("/auth/logout", requireAuth, (_req, res) => {
-    res.status(204).send();
+  router.post("/auth/logout", requireAuth, async (req, res, next) => {
+    try {
+      if (!prototypeApi && req.auth?.token) {
+        await runtime.authService.revokeSessionFromToken(req.auth.token);
+      }
+      res.status(204).send();
+    } catch (error) {
+      next(error);
+    }
   });
 
   router.get("/workspaces", requireAuth, async (req, res, next) => {

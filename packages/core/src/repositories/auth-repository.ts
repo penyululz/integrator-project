@@ -84,18 +84,18 @@ export class AuthRepository {
       `SELECT
          u.id::text AS user_id,
          u.tenant_id::text AS tenant_id,
-         u.organization_id::text AS organization_id,
+         om.organization_id::text AS organization_id,
          o.slug AS organization_slug,
          u.email,
          u.full_name,
          u.password_hash,
          om.role::text AS org_role
        FROM users u
-       INNER JOIN organizations o ON o.id = u.organization_id
        INNER JOIN organization_memberships om
          ON om.user_id = u.id
-        AND om.organization_id = o.id
         AND om.status = 'active'
+       INNER JOIN organizations o
+         ON o.id = om.organization_id
        WHERE LOWER(u.email) = LOWER($1)
          AND o.slug = $2
        LIMIT 1`,
@@ -159,7 +159,7 @@ export class AuthRepository {
       `SELECT
          u.id::text AS user_id,
          u.tenant_id::text AS tenant_id,
-         u.organization_id::text AS organization_id,
+         om.organization_id::text AS organization_id,
          o.slug AS organization_slug,
          u.email,
          u.full_name,
@@ -170,14 +170,13 @@ export class AuthRepository {
          w.name AS workspace_name,
          wm.role::text AS workspace_role
        FROM users u
-       INNER JOIN organizations o ON o.id = u.organization_id
        INNER JOIN organization_memberships om
          ON om.user_id = u.id
-        AND om.organization_id = o.id
         AND om.status = 'active'
+       INNER JOIN organizations o ON o.id = om.organization_id
        INNER JOIN workspace_memberships wm
          ON wm.user_id = u.id
-        AND wm.organization_id = o.id
+         AND wm.organization_id = o.id
         AND wm.status = 'active'
        INNER JOIN workspaces w ON w.id = wm.workspace_id
        WHERE LOWER(u.email) = LOWER($1)
@@ -209,11 +208,12 @@ export class AuthRepository {
          om.role::text AS org_role,
          wm.role::text AS workspace_role
        FROM users u
-       INNER JOIN organizations o ON o.id = u.organization_id
        INNER JOIN organization_memberships om
          ON om.user_id = u.id
-        AND om.organization_id = o.id
+        AND om.organization_id = $3::uuid
         AND om.status = 'active'
+       INNER JOIN organizations o
+         ON o.id = om.organization_id
        INNER JOIN workspaces w
          ON w.id = $4::uuid
         AND w.organization_id = o.id
@@ -224,7 +224,6 @@ export class AuthRepository {
         AND wm.status = 'active'
        WHERE u.id = $1::uuid
          AND u.tenant_id = $2::uuid
-         AND o.id = $3::uuid
        LIMIT 1`,
       [input.userId, input.tenantId, input.organizationId, input.workspaceId],
     );
@@ -407,8 +406,14 @@ export class AuthRepository {
            updated_at = NOW()
        WHERE id = $1
          AND tenant_id = $2
-         AND organization_id = $3
-       RETURNING id::text, email, full_name`,
+         AND EXISTS (
+           SELECT 1
+           FROM organization_memberships om
+           WHERE om.user_id = $1
+             AND om.organization_id = $3
+             AND om.status = 'active'
+         )
+       RETURNING id::text AS id, email, full_name`,
       [input.userId, input.tenantId, input.organizationId, input.fullName],
     );
 

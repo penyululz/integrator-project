@@ -455,6 +455,63 @@ export const loginSchema = z.object({
   workspaceSlug: z.string().min(1).optional(),
 });
 
+export const loginOtpRequestSchema = z.object({
+  email: z.string().email(),
+  organizationSlug: z.string().min(1),
+  workspaceSlug: z.string().min(1).optional(),
+});
+
+export const loginOtpVerifySchema = z.object({
+  email: z.string().email(),
+  organizationSlug: z.string().min(1),
+  workspaceSlug: z.string().min(1).optional(),
+  code: z
+    .string()
+    .trim()
+    .min(4)
+    .max(10)
+    .regex(/^[0-9]+$/),
+});
+
+export const emailVerificationRequestSchema = z.object({
+  email: z.string().email(),
+  organizationSlug: z.string().min(1),
+  workspaceSlug: z.string().min(1).optional(),
+});
+
+export const emailVerificationConfirmSchema = z.object({
+  token: z.string().min(16),
+});
+
+export const passwordResetRequestSchema = z.object({
+  email: z.string().email(),
+  organizationSlug: z.string().min(1),
+  workspaceSlug: z.string().min(1).optional(),
+});
+
+export const passwordResetConfirmSchema = z.object({
+  token: z.string().min(16),
+  newPassword: z.string().min(8).max(256),
+});
+
+export const inviteCreateSchema = z.object({
+  email: z.string().email(),
+  role: z.enum(["owner", "admin", "member"]).default("member"),
+  expiresInHours: z.coerce.number().int().min(1).max(720).optional(),
+});
+
+export const inviteAcceptSchema = z.object({
+  token: z.string().min(16),
+  password: z.string().min(8).max(256).optional(),
+  fullName: z.string().trim().min(1).max(160).optional(),
+});
+
+export const emailLogsQuerySchema = z
+  .object({
+    limit: z.coerce.number().int().min(1).max(200).optional(),
+  })
+  .strict();
+
 export const devLoginSchema = z.object({
   email: z.string().email().optional(),
   organizationSlug: z.string().min(1).optional(),
