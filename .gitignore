@@ -6,6 +6,4 @@ coverage/
 npm-debug.log*
 dist/
 *.tsbuildinfo
-apps/web/.vite/
-integrator-platform/
 reference-apps/

@@ -104,11 +104,6 @@ const ENV_SPECS: EnvSpec[] = [
     description: "BullMQ job name used for queued incoming events.",
   },
   {
-    name: "VITE_API_BASE_URL",
-    importance: "optional",
-    description: "Frontend API endpoint (used by apps/web).",
-  },
-  {
     name: "APP_ENV",
     importance: "optional",
     description: "Runtime environment selector (use production for Live Mode).",

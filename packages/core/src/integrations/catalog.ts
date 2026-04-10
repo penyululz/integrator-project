@@ -907,7 +907,7 @@ const BUILTIN_APP_DEFINITIONS: Record<string, Omit<AppConnectionDefinition, "key
 };
 
 const DEFAULT_SETUP_NOTES = [
-  "Connect this app in the web UI. Keep .env for platform runtime settings only.",
+  "Connect this app through API-managed integration setup. Keep .env for platform runtime settings only.",
 ];
 
 const DEFAULT_SETUP_GUIDE: AppSetupGuide = {

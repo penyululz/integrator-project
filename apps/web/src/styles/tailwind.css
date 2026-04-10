@@ -1,6 +1,0 @@
-/* STACK: Tailwind CSS foundation
-   SHARED BETWEEN PROTOTYPE AND LIVE
-   Keep utility layer available without changing existing product CSS semantics. */
-@tailwind base;
-@tailwind components;
-@tailwind utilities;

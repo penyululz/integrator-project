@@ -45,11 +45,9 @@ const ENV_KEY_PATTERN = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/;
 
 const DEFAULT_ENV_VALUES: Record<string, string> = {
   INTEGRATOR_MODE: '"Prototype Mode"',
-  VITE_INTEGRATOR_MODE: '"Prototype Mode"',
   APP_ENV: "development",
   DATABASE_URL: "postgres://integration:integration@localhost:5432/integration",
   REDIS_URL: "redis://localhost:6379",
-  VITE_API_BASE_URL: "http://localhost:4000/api/v1",
   INTEGRATOR_QUEUE_DRIVER: "bullmq",
   INTEGRATOR_EVENT_QUEUE_KEY: "integration-events",
 };
@@ -160,7 +158,6 @@ export function synchronizeRootEnv(
   const resolvedAppEnv = resolvedMode === "Live Mode" ? "production" : "development";
 
   upsert("INTEGRATOR_MODE", resolvedModeValue, true);
-  upsert("VITE_INTEGRATOR_MODE", resolvedModeValue, true);
   upsert("APP_ENV", resolvedAppEnv, true);
 
   const queueKeyAssignment = assignments.get("INTEGRATOR_EVENT_QUEUE_KEY");

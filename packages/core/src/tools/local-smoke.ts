@@ -81,7 +81,6 @@ function resolveOptions(): SmokeOptions {
   const apiBaseUrl =
     readArgValue("api-base-url") ||
     process.env.LOCAL_API_BASE_URL ||
-    process.env.VITE_API_BASE_URL ||
     "http://localhost:4000/api/v1";
 
   return {

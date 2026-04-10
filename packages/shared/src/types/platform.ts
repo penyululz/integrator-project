@@ -1,9 +1,6 @@
 // MODE: Prototype Mode | Live Mode
 // SHARED BETWEEN PROTOTYPE AND LIVE
 // KEEP CONTRACT SHAPE IN SYNC
-// STACK: React + TypeScript + Vite
-// STATE: TanStack Query for server state, Zustand for local UI state
-// BUILDER: React Flow / XYFlow
 // API: Fastify + Zod
 // DATA: PostgreSQL
 // QUEUE: Redis + BullMQ
@@ -20,7 +17,6 @@ export type PlatformMode = (typeof PLATFORM_MODES)[keyof typeof PLATFORM_MODES];
 // SHARED BETWEEN PROTOTYPE AND LIVE
 // Source-of-truth env key for runtime mode selection.
 export const PLATFORM_MODE_ENV_KEY = "INTEGRATOR_MODE" as const;
-export const WEB_PLATFORM_MODE_ENV_KEY = "VITE_INTEGRATOR_MODE" as const;
 export const LEGACY_APP_ENV_KEY = "APP_ENV" as const;
 
 export type PlatformModeSource =
@@ -97,6 +93,6 @@ export function isLiveMode(mode: PlatformMode): boolean {
 
 export function isPrototypeMode(mode: PlatformMode): boolean {
   // PROTOTYPE MODE ONLY
-  // USED FOR LOCAL DEMO / UI ITERATION
+  // USED FOR LOCAL DEMO / ENGINE ITERATION
   return mode === PLATFORM_MODES.PROTOTYPE;
 }

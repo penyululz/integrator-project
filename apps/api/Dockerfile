@@ -4,7 +4,6 @@ WORKDIR /workspace
 
 COPY package.json package-lock.json* tsconfig.json tsconfig.base.json ./
 COPY apps/api/package.json apps/api/package.json
-COPY apps/web/package.json apps/web/package.json
 COPY packages/shared/package.json packages/shared/package.json
 COPY packages/core/package.json packages/core/package.json
 COPY packages/adapters/webhook/package.json packages/adapters/webhook/package.json
@@ -31,4 +30,3 @@ RUN npm run build -w @integration/shared \
 EXPOSE 4000
 
 CMD ["npm", "run", "start", "-w", "@integration/api"]
-

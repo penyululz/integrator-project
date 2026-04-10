@@ -5,7 +5,7 @@
 # SAFE TO EXTEND LATER: this Compose layout is intentionally simple and VPS-friendly.
 # NOTE: Compose expects repository-root `.env` to exist (`npm run env:init`).
 
-name: integrator-platform
+name: integrator-engine
 
 x-integrator-runtime-env: &integrator-runtime-env
   # MODE: Prototype Mode | Live Mode
@@ -22,7 +22,7 @@ x-integrator-runtime-env: &integrator-runtime-env
 
 services:
   # SERVICE: Traefik edge router
-  # ROUTING: Traefik entrypoint for `web` and `api` services.
+  # ROUTING: Traefik entrypoint for API service.
   # Optional in local Prototype Mode; useful for VPS and realistic Live Mode routing.
   traefik:
     profiles: ["proxy"]
@@ -134,35 +134,10 @@ services:
     networks:
       - internal
 
-  # SERVICE: frontend app
-  # USED BY WEB
-  web:
-    build:
-      context: .
-      dockerfile: apps/web/Dockerfile
-    environment:
-      # PROTOTYPE MODE SUPPORT: direct API route without reverse proxy.
-      # LIVE MODE SUPPORT: set this to `http://localhost/api/v1` when proxy profile is enabled.
-      VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:4000/api/v1}
-    depends_on:
-      - api
-    ports:
-      - "3000:3000"
-    networks:
-      - edge
-    labels:
-      - "traefik.enable=true"
-      - "traefik.docker.network=integrator_edge"
-      - "traefik.http.routers.integrator-web.rule=Host(`${TRAEFIK_WEB_HOST:-localhost}`)"
-      - "traefik.http.routers.integrator-web.entrypoints=web"
-      - "traefik.http.routers.integrator-web.priority=10"
-      - "traefik.http.routers.integrator-web.service=integrator-web"
-      - "traefik.http.services.integrator-web.loadbalancer.server.port=3000"
-
 networks:
   # Shared assumptions:
   # - `internal`: data plane (api/worker/postgres/redis)
-  # - `edge`: routing plane (traefik/api/web)
+  # - `edge`: routing plane (traefik/api)
   internal:
     name: integrator_internal
   edge:
